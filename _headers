@@ -1,0 +1,17 @@
+/index.html
+  Cache-Control: no-store
+
+/src/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+/products/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+/brand/*
+  Cache-Control: public, max-age=86400
+
+/*.glb
+  Cache-Control: public, max-age=86400
+
+/*.xlsx
+  Cache-Control: public, max-age=0, must-revalidate
