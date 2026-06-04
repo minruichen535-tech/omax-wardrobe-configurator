@@ -175,11 +175,15 @@ export function calculateDesign(config, data) {
 export function getActiveWalls(config) {
   const hasBackWall = Boolean(config.walls?.back?.enabled);
   const shelfDepth = Math.max(0, Number(config.shelfDepth || 0));
+  const wallOffset = Math.max(0, Number(config.wallOffset) || 250);
+  const cornerSafetyGap = 30;
+  const cornerAvoidanceDepth = wallOffset + shelfDepth / 2 + cornerSafetyGap;
   return Object.entries(config.walls)
     .filter(([, wall]) => wall.enabled)
     .map(([id, wall]) => {
       const sourceLength = Math.max(1, Number(wall.length || 0));
-      const startOffset = hasBackWall && (id === "left" || id === "right") ? shelfDepth : 0;
+      const isSideWall = id === "left" || id === "right";
+      const startOffset = hasBackWall && isSideWall ? cornerAvoidanceDepth : 0;
       const length = Math.max(1, sourceLength - startOffset);
       const bayCount = Math.max(recommendBayCount(length), Number(wall.bayCount || recommendBayCount(length)));
       const lockedWidths = getLockedBayWidths(config.placements, id, bayCount);
