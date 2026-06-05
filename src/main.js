@@ -425,17 +425,22 @@ function PlacementEditor({ placement, design, updatePlacement }) {
 function BomTable({ series, bom }) {
   return h("div", { className: "bom-table" },
     h("div", { className: "bom-head" },
-      h("span", null, "图片"),
-      h("span", null, "SKU/名称"),
+      h("span", null, "名称"),
+      h("span", null, "规格"),
       h("span", null, "数量"),
+      h("span", null, "单位"),
       h("span", null, "单价"),
       h("span", null, "小计")
     ),
     bom.map((item) => h("div", { className: "bom-row", key: `${item.sku}-${item.color}-${item.note}` },
-      h(ProductThumb, { series, image: item.image, name: item.nameCn }),
-      h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note)),
-      h("span", null, `${item.quantity}${item.unit}`),
-      h("span", null, formatCurrency(item.unitPrice)),
+      h("span", { className: "bom-name" },
+        h(ProductThumb, { series, image: item.image, name: item.nameCn }),
+        h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note))
+      ),
+      h("span", { className: "bom-spec" }, getBomDisplaySpec(item)),
+      h("span", null, getBomDisplayQuantity(item)),
+      h("span", null, item.unit),
+      h("span", null, formatCurrency(getBomDisplayUnitPrice(item))),
       h("span", null, formatCurrency(item.lineTotal))
     ))
   );
@@ -459,9 +464,10 @@ function GroupedBomTable({ series, bom }) {
 
   return h("div", { className: "bom-table grouped-bom-table" },
     h("div", { className: "bom-head" },
-      h("span", null, "图片"),
-      h("span", null, "SKU/名称"),
+      h("span", null, "名称"),
+      h("span", null, "规格"),
       h("span", null, "数量"),
+      h("span", null, "单位"),
       h("span", null, "单价"),
       h("span", null, "小计")
     ),
@@ -474,10 +480,14 @@ function GroupedBomTable({ series, bom }) {
           h("strong", null, formatCurrency(group.subtotal))
         ),
         isOpen && group.items.map((item) => h("div", { className: "bom-row", key: `${group.name}-${item.sku}-${item.color}-${item.note}` },
-          h(ProductThumb, { series, image: item.image, name: item.nameCn }),
-          h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note)),
-          h("span", null, `${item.quantity}${item.unit}`),
-          h("span", null, formatCurrency(item.unitPrice)),
+          h("span", { className: "bom-name" },
+            h(ProductThumb, { series, image: item.image, name: item.nameCn }),
+            h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note))
+          ),
+          h("span", { className: "bom-spec" }, getBomDisplaySpec(item)),
+          h("span", null, getBomDisplayQuantity(item)),
+          h("span", null, item.unit),
+          h("span", null, formatCurrency(getBomDisplayUnitPrice(item))),
           h("span", null, formatCurrency(item.lineTotal))
         ))
       );
@@ -508,6 +518,20 @@ function groupBomItems(bom) {
       items: group.items.slice().sort((a, b) => normalizeSortOrder(a.sortOrder) - normalizeSortOrder(b.sortOrder) || String(a.sku).localeCompare(String(b.sku)))
     }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
+}
+
+function getBomDisplaySpec(item) {
+  if (["JP-RAIL", "JP-RAIL-DOUBLE", "JP-SINGLE-RAIL", "JP-DOUBLE-RAIL"].includes(item.sku)) return "1m";
+  if (item.sku === "JP-CORNER-BRACKET") return "—";
+  return item.sizeRule || "—";
+}
+
+function getBomDisplayQuantity(item) {
+  return item.sku === "JP-RAIL-DOUBLE" ? item.quantity * 2 : item.quantity;
+}
+
+function getBomDisplayUnitPrice(item) {
+  return item.sku === "JP-RAIL-DOUBLE" ? item.unitPrice / 2 : item.unitPrice;
 }
 
 function normalizeSortOrder(value) {

@@ -16,6 +16,11 @@ export const componentTypes = [
 
 export const fixedModuleTypes = ["jewelryBox", "trouserRack"];
 export const fixedModuleWidths = [500, 600, 700, 800, 900];
+const pairMeasuredBracketSkus = new Set([
+  "JP-TOP-BRACKET",
+  "JP-SHELF-BRACKET",
+  "JP-CABINET-BRACKET"
+]);
 
 export const defaultHeightByType = {
   woodTop: 2400,
@@ -122,10 +127,20 @@ export function calculateDesign(config, data) {
   });
 
   const bomMap = new Map();
+  const cornerBracket = productBySku["JP-CORNER-BRACKET"];
+  const cornerBracketQuantity = room.width <= 3000 ? 2 : 4;
+  if (cornerBracket?.sellable) {
+    const cornerBracketBomProduct = withSelectedDepthSizeRule(cornerBracket, config.shelfDepth);
+    addBom(bomMap, cornerBracketBomProduct, cornerBracketQuantity, chooseColor(cornerBracket, config));
+  }
   const postProduct = productByType.post;
   const postQuantity = activeWalls.reduce((sum, wall) => sum + wall.postCount, 0);
   if (postProduct?.sellable) {
-    addBom(bomMap, postProduct, postQuantity, chooseColor(postProduct, config));
+    const postBomProduct = {
+      ...postProduct,
+      sizeRule: `${postHeight}mm`
+    };
+    addBom(bomMap, postBomProduct, postQuantity, chooseColor(postProduct, config));
   }
 
   data.rules
@@ -148,9 +163,45 @@ export function calculateDesign(config, data) {
       .forEach((rule) => {
         const required = productBySku[rule.childSku || rule.requiredSku];
         if (!required?.sellable) return;
-        addBom(bomMap, required, rule.quantity * placement.quantity, chooseColor(required, config), rule.note);
+        const rawQuantity = rule.quantity * placement.quantity;
+        const bomQuantity = pairMeasuredBracketSkus.has(required.sku)
+          ? rawQuantity / 2
+          : rawQuantity;
+        const groupedBomProduct = required.sku === "JP-SHELF-BRACKET" && rule.note === "柜体用"
+          ? { ...required, bomGroup: "柜体系统" }
+          : required;
+        const unitAdjustedProduct = pairMeasuredBracketSkus.has(required.sku)
+          ? { ...groupedBomProduct, unit: "对" }
+          : groupedBomProduct;
+        const bomProduct = withSelectedDepthSizeRule(unitAdjustedProduct, config.shelfDepth);
+        addBom(bomMap, bomProduct, bomQuantity, chooseColor(required, config), rule.note);
       });
   });
+
+  const nestedFastenerParentSkus = new Set([
+    "JP-TOP-BRACKET",
+    "JP-MIDDLE-BRACKET",
+    "JP-CABINET-BRACKET",
+    "JP-HORIZONTAL-RAIL",
+    "JP-CORNER-BRACKET"
+  ]);
+  Array.from(bomMap.values())
+    .filter((item) => nestedFastenerParentSkus.has(item.sku))
+    .forEach((parentItem) => {
+      data.rules
+        .filter((rule) => rule.parentSku === parentItem.sku)
+        .forEach((rule) => {
+          const required = productBySku[rule.childSku || rule.requiredSku];
+          if (!required?.sellable) return;
+          addBom(
+            bomMap,
+            required,
+            rule.quantity * parentItem.quantity,
+            chooseColor(required, config),
+            rule.note
+          );
+        });
+    });
 
   const bom = Array.from(bomMap.values()).map((item) => ({
     ...item,
@@ -413,6 +464,17 @@ function addBom(map, product, quantity, color, note = "") {
     return;
   }
   map.set(key, { ...product, quantity, color, note });
+}
+
+function withSelectedDepthSizeRule(product, shelfDepth) {
+  const depthSizedAccessorySkus = new Set([
+    "JP-TOP-BRACKET",
+    "JP-SHELF-BRACKET",
+    "JP-HORIZONTAL-RAIL",
+    "JP-CORNER-BRACKET"
+  ]);
+  if (!depthSizedAccessorySkus.has(product.sku)) return product;
+  return { ...product, sizeRule: `${Number(shelfDepth)}mm` };
 }
 
 function chooseColor(product, config) {

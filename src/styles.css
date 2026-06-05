@@ -604,7 +604,7 @@ button {
 .bom-head,
 .bom-row {
   display: grid;
-  grid-template-columns: 48px minmax(120px, 1fr) 48px 64px 72px;
+  grid-template-columns: minmax(128px, 1fr) minmax(64px, 0.65fr) 40px 36px 60px 68px;
   gap: 8px;
   align-items: center;
   min-height: 54px;
@@ -652,6 +652,26 @@ button {
   display: block;
   font-style: normal;
   margin-top: 3px;
+}
+
+.bom-name {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.bom-name strong,
+.bom-name em,
+.bom-name small,
+.bom-spec {
+  overflow-wrap: anywhere;
+}
+
+.bom-spec {
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .product-thumb {
@@ -839,7 +859,17 @@ button {
 
   .bom-head,
   .bom-row {
-    grid-template-columns: 40px 1fr 44px 34px 62px;
+    grid-template-columns: minmax(96px, 1fr) 48px 30px 26px 50px 54px;
     gap: 5px;
+  }
+
+  .bom-name {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .bom-name .product-thumb {
+    width: 34px;
+    height: 34px;
   }
 }
