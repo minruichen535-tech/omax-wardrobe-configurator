@@ -382,6 +382,7 @@ function getCutLength(componentType, usableBayWidth) {
 function getVisualScaleWidth(componentType, innerBayWidth, componentCutLength) {
   const moduleWidth = arguments[3];
   const extraRailVisualWidth = 5;
+  if (componentType === "trouserRack" || componentType === "pantsRack") return innerBayWidth;
   if (fixedModuleTypes.includes(componentType)) return moduleWidth || normalizeFixedModuleWidth(innerBayWidth);
   if (componentType === "woodTop" || componentType === "woodShelf") return componentCutLength;
   if (componentType === "singleRail" || componentType === "doubleRail") return innerBayWidth + extraRailVisualWidth;
