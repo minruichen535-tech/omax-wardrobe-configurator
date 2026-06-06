@@ -700,55 +700,65 @@ function buildQuotationExportItems(bom, design, config) {
 }
 
 async function createStandardQuotationSheet(workbook, bom, design, config, series, exportedAt) {
+  const factoryCutSkus = new Set([
+    "JP-WOOD-TOP",
+    "JP-WOOD-SHELF",
+    "JP-CABINET"
+  ]);
+  const normalBomItems = bom.filter((item) => !factoryCutSkus.has(item.sku));
+  const factoryCutItems = bom.filter((item) => factoryCutSkus.has(item.sku));
   const sheet = workbook.addWorksheet("正式报价单", {
     pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
   sheet.columns = [
     { width: 7 }, { width: 12 }, { width: 24 }, { width: 22 }, { width: 18 },
-    { width: 14 }, { width: 9 }, { width: 10 }, { width: 12 }, { width: 14 }, { width: 28 }
+    { width: 14 }, { width: 9 }, { width: 10 }, { width: 12 }, { width: 14 },
+    { width: 14 }, { width: 28 }
   ];
 
-  sheet.mergeCells("A1:K1");
+  sheet.mergeCells("A1:L1");
   sheet.getCell("A1").value = "日式衣帽间（经销商价）";
   sheet.mergeCells("A2:F2");
   sheet.getCell("A2").value = "供方：佛山市奥美斯五金制品有限公司";
-  sheet.mergeCells("G2:K2");
+  sheet.mergeCells("G2:L2");
   sheet.getCell("G2").value = "客户：";
   sheet.mergeCells("A3:F3");
   sheet.getCell("A3").value = "地址：佛山市南海区里水镇";
-  sheet.mergeCells("G3:K3");
+  sheet.mergeCells("G3:L3");
   sheet.getCell("G3").value = "地址：";
   sheet.mergeCells("A4:F4");
   sheet.getCell("A4").value = "电话：0086-13430288289";
-  sheet.mergeCells("G4:K4");
+  sheet.mergeCells("G4:L4");
   sheet.getCell("G4").value = "手机号码：";
-  sheet.mergeCells("G5:K5");
+  sheet.mergeCells("G5:L5");
   sheet.getCell("G5").value = `日期：${formatExportDate(exportedAt)}`;
 
   const headerRow = sheet.getRow(7);
-  headerRow.values = ["序号", "图片", "型号/SKU", "品名", "规格尺寸", "颜色", "单位", "数量", "销售价", "总额", "备注"];
+  headerRow.values = ["序号", "图片", "型号/SKU", "品名", "规格尺寸", "颜色", "单位", "数量", "销售价", "总额", "剪尺", "备注"];
   headerRow.height = 24;
 
   const itemImageRows = [];
   let itemIndex = 0;
-  groupBomItems(bom).forEach((group) => {
+  groupBomItems(normalBomItems).forEach((group) => {
     const groupRow = sheet.addRow([group.name]);
-    sheet.mergeCells(groupRow.number, 1, groupRow.number, 11);
+    sheet.mergeCells(groupRow.number, 1, groupRow.number, 12);
     styleQuotationRow(groupRow, "group");
 
     group.items.forEach((item) => {
       itemIndex += 1;
+      const quotationDimensions = getQuotationDimensions(item, config);
       const row = sheet.addRow([
         itemIndex,
         "",
         item.sku,
         item.nameCn,
-        getExcelDisplaySpec(item, design),
-        item.color || config.frameColor || "",
-        item.unit,
-        getBomDisplayQuantity(item),
-        getBomDisplayUnitPrice(item),
+        quotationDimensions.spec,
+        getExcelDisplayColor(item, config),
+        getQuotationDisplayUnit(item),
+        getQuotationDisplayQuantity(item),
+        getQuotationDisplayUnitPrice(item),
         item.lineTotal,
+        quotationDimensions.cutLength,
         item.note || ""
       ]);
       row.height = 45;
@@ -758,20 +768,53 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
       row.getCell(8).alignment = excelCenteredAlignment();
       row.getCell(9).alignment = excelRightAlignment();
       row.getCell(10).alignment = excelRightAlignment();
+      row.getCell(11).alignment = excelCenteredAlignment();
       itemImageRows.push({ item, rowNumber: row.number });
     });
-
-    const subtotalRow = sheet.addRow(["", "", "", "", "", "", "", "", "本组小计", group.subtotal, ""]);
-    subtotalRow.height = 24;
-    styleQuotationRow(subtotalRow, "subtotal");
   });
 
   const totalRow = sheet.addRow([
     "", "", "", "", "", "", "", "", "合计金额",
-    bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), ""
+    bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), "", ""
   ]);
   totalRow.height = 24;
   styleQuotationRow(totalRow, "total");
+  sheet.addRow([]);
+
+  const factoryTitleRow = sheet.addRow(["工厂剪尺"]);
+  sheet.mergeCells(factoryTitleRow.number, 1, factoryTitleRow.number, 12);
+  factoryTitleRow.height = 24;
+  styleQuotationRow(factoryTitleRow, "group");
+
+  const factoryHeaderRow = sheet.addRow([
+    "序号", "图片", "型号/SKU", "品名", "规格尺寸",
+    "颜色", "单位", "数量", "剪尺", "备注"
+  ]);
+  factoryHeaderRow.height = 24;
+  styleQuotationRow(factoryHeaderRow, "header", 10);
+
+  factoryCutItems.forEach((item, index) => {
+    const quotationDimensions = getQuotationDimensions(item, config);
+    const row = sheet.addRow([
+      index + 1,
+      "",
+      item.sku,
+      item.nameCn,
+      quotationDimensions.spec,
+      getExcelDisplayColor(item, config),
+      getQuotationDisplayUnit(item),
+      getQuotationDisplayQuantity(item),
+      quotationDimensions.cutLength,
+      item.note || ""
+    ]);
+    row.height = 45;
+    styleQuotationRow(row, "detail", 10);
+    row.getCell(1).alignment = excelCenteredAlignment();
+    row.getCell(7).alignment = excelCenteredAlignment();
+    row.getCell(8).alignment = excelCenteredAlignment();
+    row.getCell(9).alignment = excelCenteredAlignment();
+    itemImageRows.push({ item, rowNumber: row.number });
+  });
   sheet.addRow([]);
 
   [
@@ -781,7 +824,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
     "4.铝框层板10–15天交货"
   ].forEach((declaration) => {
     const row = sheet.addRow([declaration]);
-    sheet.mergeCells(row.number, 1, row.number, 11);
+    sheet.mergeCells(row.number, 1, row.number, 12);
     row.height = 22;
     styleQuotationRow(row, "declaration");
   });
@@ -833,31 +876,25 @@ async function insertQuotationImages(workbook, sheet, itemRows, series) {
   return report;
 }
 
-function styleQuotationRow(row, role) {
+function styleQuotationRow(row, role, maxColumn = 12) {
   const border = excelThinBorder();
   row.eachCell({ includeEmpty: true }, (cell, column) => {
-    if (column > 11) return;
+    if (column > maxColumn) return;
     cell.border = border;
     cell.alignment = { vertical: "middle", wrapText: true };
   });
   if (role === "title" || role === "header" || role === "total") {
     row.eachCell({ includeEmpty: true }, (cell, column) => {
-      if (column > 11) return;
+      if (column > maxColumn) return;
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6F3F1F" } };
       cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: role === "title" ? 16 : 11 };
       cell.alignment = excelCenteredAlignment();
     });
   } else if (role === "group") {
     row.eachCell({ includeEmpty: true }, (cell, column) => {
-      if (column > 11) return;
+      if (column > maxColumn) return;
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEADCCF" } };
       cell.font = { bold: true, color: { argb: "FF4A2A17" } };
-    });
-  } else if (role === "subtotal") {
-    row.eachCell({ includeEmpty: true }, (cell, column) => {
-      if (column > 11) return;
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3E9E1" } };
-      cell.font = { bold: true };
     });
   }
 }
@@ -873,6 +910,27 @@ function excelCenteredAlignment() {
 
 function excelRightAlignment() {
   return { horizontal: "right", vertical: "middle", wrapText: true };
+}
+
+const quotationPieceMeasuredSkus = new Set([
+  "JP-SHELF-BRACKET",
+  "JP-STORAGE-BRACKET"
+]);
+
+function getQuotationDisplayUnit(item) {
+  return quotationPieceMeasuredSkus.has(item.sku) ? "支" : item.unit;
+}
+
+function getQuotationDisplayQuantity(item) {
+  return quotationPieceMeasuredSkus.has(item.sku)
+    ? item.quantity * 2
+    : getBomDisplayQuantity(item);
+}
+
+function getQuotationDisplayUnitPrice(item) {
+  return quotationPieceMeasuredSkus.has(item.sku)
+    ? item.unitPrice / 2
+    : getBomDisplayUnitPrice(item);
 }
 
 function createBomDetailSheet(workbook, bom, design) {
@@ -931,7 +989,59 @@ function downloadExcelBuffer(buffer, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function getQuotationDimensions(item, config) {
+  const cuttableSkus = new Set([
+    "JP-WOOD-TOP",
+    "JP-WOOD-SHELF",
+    "JP-CABINET",
+    "JP-RAIL",
+    "JP-RAIL-DOUBLE"
+  ]);
+  const depth = Number(config.shelfDepth || config.depth);
+  let spec = item.sizeRule || "—";
+
+  if (item.sku === "JP-WOOD-TOP" || item.sku === "JP-WOOD-SHELF") {
+    spec = Number.isFinite(depth) && depth > 0 ? `${depth}mm` : "—";
+  } else if (item.sku === "JP-CABINET") {
+    spec = Number.isFinite(depth) && depth > 0 ? `${depth}mm` : item.sizeRule || "—";
+  } else if (item.sku === "JP-RAIL" || item.sku === "JP-RAIL-DOUBLE") {
+    spec = "—";
+  } else if (item.sku === "JP-HORIZONTAL-RAIL") {
+    spec = "500mm";
+  } else if (item.sku === "JP-CORNER-BRACKET") {
+    spec = "—";
+  }
+
+  if (!cuttableSkus.has(item.sku)) return { spec, cutLength: "" };
+  const rawCutLength = [item.componentCutLength, item.cutLength]
+    .map(Number)
+    .find((value) => Number.isFinite(value) && value > 0);
+  return {
+    spec,
+    cutLength: rawCutLength ? `${rawCutLength}mm` : ""
+  };
+}
+
 function getExcelDisplaySpec(item, design) {
+  if (item.sku === "JP-HORIZONTAL-RAIL") return "500mm";
+  if (item.sku === "JP-RAIL" || item.sku === "JP-RAIL-DOUBLE") {
+    const directLength = [item.componentCutLength, item.cutLength, item.visualScaleWidth]
+      .map(Number)
+      .find((value) => Number.isFinite(value) && value > 0);
+    if (directLength) return `${directLength}mm`;
+
+    const componentType = item.sku === "JP-RAIL" ? "singleRail" : "doubleRail";
+    const cutLengths = [...new Set(design.placements
+      .filter((placement) => placement.componentType === componentType)
+      .map((placement) => Number(
+        placement.componentCutLength
+        || placement.cutLength
+        || placement.visualScaleWidth
+      ))
+      .filter((value) => Number.isFinite(value) && value > 0))];
+    if (cutLengths.length) return cutLengths.map((value) => `${value}mm`).join(" / ");
+    return item.sizeRule || "—";
+  }
   if (item.sku === "JP-WOOD-TOP" || item.sku === "JP-WOOD-SHELF") {
     if (Number.isFinite(Number(item.componentCutLength))) {
       return `${Number(item.componentCutLength)}mm`;
@@ -944,6 +1054,20 @@ function getExcelDisplaySpec(item, design) {
     if (cutLengths.length) return cutLengths.map((value) => `${value}mm`).join(" / ");
   }
   return getBomDisplaySpec(item);
+}
+
+function getExcelDisplayColor(item, config) {
+  const colorMap = {
+    "Silver Grey": "银灰色",
+    "Wood Brown": "木纹色",
+    "Default Material": "标准件",
+    Black: "黑色",
+    White: "白色",
+    "Champagne Grey": "香槟灰",
+    "Warm Grey": "暖灰色"
+  };
+  const color = item.color || config.frameColor || "";
+  return colorMap[color] || item.colorNameCn || color;
 }
 
 function formatExportFileTimestamp(date) {

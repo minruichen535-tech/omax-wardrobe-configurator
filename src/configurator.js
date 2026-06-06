@@ -2,6 +2,7 @@ const MAX_POST_SPAN_MM = 1000;
 const MIN_HEIGHT_MM = 1800;
 const MAX_HEIGHT_MM = 3500;
 const MM_PER_METER = 1000;
+const SIDE_WALL_LENGTH_ADJUSTMENT_MM = 510;
 export const POST_PROFILE_WIDTH_MM = 25;
 
 export const componentTypes = [
@@ -128,7 +129,10 @@ export function calculateDesign(config, data) {
 
   const bomMap = new Map();
   const cornerBracket = productBySku["JP-CORNER-BRACKET"];
-  const cornerBracketQuantity = room.width <= 3000 ? 2 : 4;
+  const cornerBracketQuantity = activeWalls.reduce(
+    (quantity, wall) => quantity + (wall.length <= 3000 ? 2 : 4),
+    0
+  );
   if (cornerBracket?.sellable) {
     const cornerBracketBomProduct = withSelectedDepthSizeRule(cornerBracket, config.shelfDepth);
     addBom(bomMap, cornerBracketBomProduct, cornerBracketQuantity, chooseColor(cornerBracket, config));
@@ -225,16 +229,15 @@ export function calculateDesign(config, data) {
 
 export function getActiveWalls(config) {
   const hasBackWall = Boolean(config.walls?.back?.enabled);
-  const shelfDepth = Math.max(0, Number(config.shelfDepth || 0));
-  const wallOffset = Math.max(0, Number(config.wallOffset) || 250);
-  const cornerSafetyGap = 30;
-  const cornerAvoidanceDepth = wallOffset + shelfDepth / 2 + cornerSafetyGap;
   return Object.entries(config.walls)
     .filter(([, wall]) => wall.enabled)
     .map(([id, wall]) => {
-      const sourceLength = Math.max(1, Number(wall.length || 0));
       const isSideWall = id === "left" || id === "right";
-      const startOffset = hasBackWall && isSideWall ? cornerAvoidanceDepth : 0;
+      const sourceLength = Math.max(
+        1,
+        Number(isSideWall ? config.room?.depth : config.room?.width) || Number(wall.length || 0)
+      );
+      const startOffset = hasBackWall && isSideWall ? SIDE_WALL_LENGTH_ADJUSTMENT_MM : 0;
       const length = Math.max(1, sourceLength - startOffset);
       const bayCount = Math.max(recommendBayCount(length), Number(wall.bayCount || recommendBayCount(length)));
       const factoryInnerBayWidth = Math.max(1, getFactoryInnerBayWidth(length, bayCount));
