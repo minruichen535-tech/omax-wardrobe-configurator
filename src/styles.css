@@ -26,6 +26,104 @@ button {
   min-height: 100vh;
 }
 
+.login-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: #f7f2e9;
+}
+
+.login-panel {
+  display: grid;
+  gap: 18px;
+  width: min(100%, 390px);
+  padding: 32px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 16px 42px rgba(68, 45, 29, 0.12);
+}
+
+.login-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: #fff;
+  background: #6f3f1f;
+  border-radius: 8px;
+  font-weight: 800;
+}
+
+.login-panel h1,
+.login-panel p {
+  margin: 0;
+}
+
+.login-panel h1 {
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.login-panel > p {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.login-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-field input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+
+.login-field input:focus {
+  border-color: #6f3f1f;
+  box-shadow: 0 0 0 3px rgba(111, 63, 31, 0.12);
+}
+
+.login-error {
+  margin: -4px 0 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-button {
+  min-height: 44px;
+  color: #fff;
+  background: #6f3f1f;
+  border: 1px solid #6f3f1f;
+  border-radius: 8px;
+  font-weight: 800;
+}
+
+.login-button:hover {
+  background: #5b3218;
+  border-color: #5b3218;
+}
+
+.login-panel small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(310px, 370px) minmax(520px, 1fr) minmax(360px, 440px);
@@ -262,6 +360,29 @@ button {
   justify-content: space-between;
   gap: 18px;
   padding: 24px 28px 18px;
+}
+
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logout-button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 13px;
+  color: #6f3f1f;
+  background: var(--panel);
+  border: 1px solid #6f3f1f;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.logout-button:hover {
+  color: #fff;
+  background: #6f3f1f;
 }
 
 .eyebrow {
@@ -878,6 +999,15 @@ button {
 
   .metrics {
     justify-content: stretch;
+  }
+
+  .viewer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .logout-button {
+    align-self: flex-end;
   }
 
   .metric {

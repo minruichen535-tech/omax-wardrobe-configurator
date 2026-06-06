@@ -85,6 +85,9 @@ function App() {
 }
 
 function ClientApp({ data }) {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () => localStorage.getItem("omax-auth") === "true"
+  );
   const [config, setConfig] = useState(createInitialConfig);
   const [quoteNote, setQuoteNote] = useState("");
   const [brandInfo, setBrandInfo] = useState(null);
@@ -185,6 +188,20 @@ function ClientApp({ data }) {
     placements: current.placements.filter((placement) => placement.id !== id)
   }));
 
+  if (!isAuthenticated) {
+    return h(LoginScreen, {
+      onLogin: () => {
+        localStorage.setItem("omax-auth", "true");
+        setIsAuthenticated(true);
+      }
+    });
+  }
+
+  const logout = () => {
+    localStorage.removeItem("omax-auth");
+    setIsAuthenticated(false);
+  };
+
   return h("main", { className: "app-shell" },
     h("section", { className: "workspace upgraded-workspace" },
       h("aside", { className: "control-rail", "aria-label": "配置选项" },
@@ -261,10 +278,13 @@ function ClientApp({ data }) {
             h("p", { className: "eyebrow" }, "OMEIX HARDWARE"),
             h("h1", null, data.series.name)
           ),
-          h("div", { className: "metrics" },
-            h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
-            h(Metric, { icon: ClipboardList, label: "销售 SKU", value: `${design.bom.length} 项` }),
-            h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(design.total) })
+          h("div", { className: "viewer-actions" },
+            h("div", { className: "metrics" },
+              h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
+              h(Metric, { icon: ClipboardList, label: "销售 SKU", value: `${design.bom.length} 项` }),
+              h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(design.total) })
+            ),
+            h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
           )
         ),
         h("div", { className: "scene-frame enhanced-scene" },
@@ -322,6 +342,52 @@ function ClientApp({ data }) {
         h("p", { className: "quote-note" }, "以上价格为系统预估价格，最终报价需根据实际尺寸、颜色、包装方式、运输方式及订单数量确认。"),
         h("button", { className: "inquiry-button", type: "button" }, "提交询价")
       )
+    )
+  );
+}
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = (event) => {
+    event.preventDefault();
+    if (username === "admin" && password === "Omax2026!") {
+      setError("");
+      onLogin();
+      return;
+    }
+    setError("账号或密码错误");
+  };
+
+  return h("main", { className: "login-screen" },
+    h("form", { className: "login-panel", onSubmit: submit },
+      h("div", { className: "login-brand-mark", "aria-hidden": "true" }, "OM"),
+      h("h1", null, "OMAX Wardrobe Configurator"),
+      h("p", null, "Internal Access"),
+      h("label", { className: "login-field" },
+        h("span", null, "Username"),
+        h("input", {
+          type: "text",
+          value: username,
+          autoComplete: "username",
+          autoFocus: true,
+          onChange: (event) => setUsername(event.target.value)
+        })
+      ),
+      h("label", { className: "login-field" },
+        h("span", null, "Password"),
+        h("input", {
+          type: "password",
+          value: password,
+          autoComplete: "current-password",
+          onChange: (event) => setPassword(event.target.value)
+        })
+      ),
+      error && h("p", { className: "login-error", role: "alert" }, error),
+      h("button", { className: "login-button", type: "submit" }, "Login"),
+      h("small", null, "Temporary frontend access control")
     )
   );
 }
