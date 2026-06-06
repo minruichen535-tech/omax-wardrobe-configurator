@@ -537,6 +537,33 @@ button {
   font-size: 18px;
 }
 
+.quote-export-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.quote-export-button:hover {
+  border-color: var(--primary);
+  background: var(--input);
+}
+
+.quote-export-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .notice,
 .warning-text {
   padding: 10px 12px;
@@ -855,6 +882,14 @@ button {
 
   .metric {
     flex: 1;
+  }
+
+  .quote-heading {
+    flex-wrap: wrap;
+  }
+
+  .quote-export-button {
+    margin-left: auto;
   }
 
   .bom-head,

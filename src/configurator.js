@@ -2,7 +2,7 @@ const MAX_POST_SPAN_MM = 1000;
 const MIN_HEIGHT_MM = 1800;
 const MAX_HEIGHT_MM = 3500;
 const MM_PER_METER = 1000;
-export const POST_PROFILE_WIDTH_MM = 33;
+export const POST_PROFILE_WIDTH_MM = 25;
 
 export const componentTypes = [
   "woodTop",
@@ -237,6 +237,7 @@ export function getActiveWalls(config) {
       const startOffset = hasBackWall && isSideWall ? cornerAvoidanceDepth : 0;
       const length = Math.max(1, sourceLength - startOffset);
       const bayCount = Math.max(recommendBayCount(length), Number(wall.bayCount || recommendBayCount(length)));
+      const factoryInnerBayWidth = Math.max(1, getFactoryInnerBayWidth(length, bayCount));
       const lockedWidths = getLockedBayWidths(config.placements, id, bayCount);
       const lockedTotal = lockedWidths.reduce((sum, width) => sum + width, 0);
       const unlockedCount = lockedWidths.filter((width) => !width).length;
@@ -249,7 +250,6 @@ export function getActiveWalls(config) {
       }));
       const bays = Array.from({ length: bayCount }, (_, bayIndex) => {
         const measuredPostCenterDistance = Math.abs(posts[bayIndex + 1].x - posts[bayIndex].x);
-        const measuredInnerBayWidth = Math.max(1, measuredPostCenterDistance - POST_PROFILE_WIDTH_MM);
         return {
           bayIndex,
           leftPostIndex: bayIndex,
@@ -259,9 +259,9 @@ export function getActiveWalls(config) {
           rawBayWidth: measuredPostCenterDistance,
           postCenterDistance: measuredPostCenterDistance,
           postProfileWidth: POST_PROFILE_WIDTH_MM,
-          usableBayWidth: measuredInnerBayWidth,
-          innerBayWidth: measuredInnerBayWidth,
-          usableComponentWidth: measuredInnerBayWidth
+          usableBayWidth: factoryInnerBayWidth,
+          innerBayWidth: factoryInnerBayWidth,
+          usableComponentWidth: factoryInnerBayWidth
         };
       });
       return {
@@ -274,13 +274,20 @@ export function getActiveWalls(config) {
         rawBayWidth: unlockedWidth,
         postCenterDistance: unlockedWidth,
         postProfileWidth: POST_PROFILE_WIDTH_MM,
-        usableBayWidth: Math.max(1, unlockedWidth - POST_PROFILE_WIDTH_MM),
-        innerBayWidth: Math.max(1, unlockedWidth - POST_PROFILE_WIDTH_MM),
+        usableBayWidth: factoryInnerBayWidth,
+        innerBayWidth: factoryInnerBayWidth,
         postCount: bayCount + 1,
         posts,
         bays
       };
     });
+}
+
+export function getFactoryInnerBayWidth(totalLength, bayCount) {
+  const length = Number(totalLength);
+  const count = Number(bayCount);
+  if (!Number.isFinite(length) || !Number.isFinite(count) || count <= 0) return 0;
+  return Math.max(0, (length - (count + 1) * POST_PROFILE_WIDTH_MM) / count);
 }
 
 function getLockedBayWidths(placements, wallId, bayCount) {
@@ -424,8 +431,8 @@ function addPlacementDimensions(placement, activeWalls) {
 }
 
 function getCutLength(componentType, usableBayWidth) {
-  if (componentType === "woodTop" || componentType === "woodShelf") return Math.round(usableBayWidth - 5);
-  if (componentType === "singleRail" || componentType === "doubleRail") return Math.round(usableBayWidth - 15);
+  if (componentType === "woodTop" || componentType === "woodShelf") return Math.floor(usableBayWidth - 5);
+  if (componentType === "singleRail" || componentType === "doubleRail") return Math.floor(usableBayWidth - 15);
   if (componentType === "cabinet") return Math.round(usableBayWidth);
   return null;
 }
@@ -435,7 +442,7 @@ function getVisualScaleWidth(componentType, innerBayWidth, componentCutLength) {
   const extraRailVisualWidth = 5;
   if (componentType === "trouserRack" || componentType === "pantsRack") return innerBayWidth;
   if (fixedModuleTypes.includes(componentType)) return moduleWidth || normalizeFixedModuleWidth(innerBayWidth);
-  if (componentType === "woodTop" || componentType === "woodShelf") return componentCutLength;
+  if (componentType === "woodTop" || componentType === "woodShelf") return Math.round(innerBayWidth - 5);
   if (componentType === "singleRail" || componentType === "doubleRail") return innerBayWidth + extraRailVisualWidth;
   if (componentType === "cabinet") return innerBayWidth;
   return innerBayWidth;

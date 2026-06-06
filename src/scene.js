@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { POST_PROFILE_WIDTH_MM, meters } from "./configurator.js";
+import { getFactoryInnerBayWidth, POST_PROFILE_WIDTH_MM, meters } from "./configurator.js";
 import { resolveSeriesAsset } from "./config/productSeries.js";
 import { theme } from "./config/theme.js?v=color-system-20260602-01";
 
@@ -308,6 +308,7 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
     index: post.index,
     x: startX + meters(post.x)
   }));
+  const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount));
   const postProduct = design.productByType.post;
   const postTargetSize = { x: meters(POST_PROFILE_WIDTH_MM), y: postHeight, z: 0.1 };
   const isBackWall = wall.id === "back";
@@ -343,7 +344,7 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
   }
 
   postPositions.slice(0, -1).forEach((_, bayIndex) => {
-    const bay = getBayGeometry(postPositions, bayIndex);
+    const bay = getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth);
     if (!bay) return;
     const world = localToWorld(group, bay.centerX, 0, 0);
       report.bayCoordinates.push({
@@ -382,7 +383,7 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
   await Promise.all(design.placements
     .filter((placement) => placement.wallId === wall.id)
     .map(async (placement) => {
-      const bay = getBayGeometry(postPositions, placement.bayIndex);
+      const bay = getBayGeometry(postPositions, placement.bayIndex, factoryInnerBayWidth);
       if (!bay) {
         report.failed.add(`${wall.id}:${placement.bayIndex}`);
         report.missingPlacements.push({
@@ -486,14 +487,14 @@ function createTextSprite(text, color, x, y, z) {
   return sprite;
 }
 
-function getBayGeometry(postPositions, bayIndex) {
+function getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth) {
   const index = Number(bayIndex);
   const leftPost = postPositions[index];
   const rightPost = postPositions[index + 1];
   if (!leftPost || !rightPost) return null;
   const rawBayWidth = Math.abs(rightPost.x - leftPost.x);
   const postProfileWidth = meters(POST_PROFILE_WIDTH_MM);
-  const innerBayWidth = Math.max(0.05, rawBayWidth - postProfileWidth);
+  const innerBayWidth = Math.max(0.05, factoryInnerBayWidth);
   return {
     leftX: leftPost.x,
     rightX: rightPost.x,

@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import ExcelJS from "https://esm.sh/exceljs@4.4.0?bundle";
 import {
   ClipboardList,
   Download,
@@ -87,6 +88,7 @@ function ClientApp({ data }) {
   const [config, setConfig] = useState(createInitialConfig);
   const [quoteNote, setQuoteNote] = useState("");
   const [brandInfo, setBrandInfo] = useState(null);
+  const [isExportingQuote, setIsExportingQuote] = useState(false);
   const design = useMemo(() => calculateDesign(config, data), [config, data]);
   const selectedPlacement = design.placements.find((placement) => placement.id === config.selectedPlacementId);
   const shelfDepthOptions = data.settings?.shelfDepthOptions || [300, 450, 500];
@@ -125,6 +127,22 @@ function ClientApp({ data }) {
     setConfig((current) => syncWallLengthsWithRoom(current, { [key]: clampValue(nextValue, 1, 99999) }));
   };
   const setLayout = (layout) => setConfig((current) => applyLayout(current, layout));
+  const exportQuote = async () => {
+    setIsExportingQuote(true);
+    try {
+      await exportQuotationExcel({
+        bom: design.bom,
+        design,
+        config,
+        series: data.series
+      });
+    } catch (error) {
+      console.error("Quotation export failed.", error);
+      window.alert("报价单导出失败，请稍后重试。");
+    } finally {
+      setIsExportingQuote(false);
+    }
+  };
   const setWallBayCount = (wallId, bayCount) => setConfig((current) => ({
     ...current,
     walls: {
@@ -264,7 +282,16 @@ function ClientApp({ data }) {
         )
       ),
       h("aside", { className: "quote-pane" },
-        h("div", { className: "quote-heading" }, h(ClipboardList, { size: 20 }), h("h2", null, "配置与销售清单")),
+        h("div", { className: "quote-heading" },
+          h(ClipboardList, { size: 20 }),
+          h("h2", null, "配置与销售清单"),
+          h("button", {
+            className: "quote-export-button",
+            type: "button",
+            disabled: isExportingQuote,
+            onClick: exportQuote
+          }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : "导出Excel")
+        ),
         design.warnings.map((message) => h("p", { className: "warning-text", key: message }, message)),
         h("div", { className: "placement-list quote-placement-list" },
           design.placements.length === 0 && h("p", { className: "empty-placement" }, "从左侧拖入组合件后，这里会显示配置明细。"),
@@ -532,6 +559,347 @@ function getBomDisplayQuantity(item) {
 
 function getBomDisplayUnitPrice(item) {
   return item.sku === "JP-RAIL-DOUBLE" ? item.unitPrice / 2 : item.unitPrice;
+}
+
+async function exportQuotationExcel({ bom, design, config, series }) {
+  const exportedAt = new Date();
+  const exportBom = buildQuotationExportItems(bom, design, config);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "OMAX Wardrobe Configurator";
+  workbook.created = exportedAt;
+  const imageReport = await createStandardQuotationSheet(
+    workbook,
+    exportBom,
+    design,
+    config,
+    series,
+    exportedAt
+  );
+  createBomDetailSheet(workbook, exportBom, design);
+  createProjectInfoSheet(workbook, design, config, series, exportedAt);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadExcelBuffer(buffer, `OMAX-Quotation-${formatExportFileTimestamp(exportedAt)}.xlsx`);
+  console.info("Quotation Excel export complete.", {
+    sheetNames: workbook.worksheets.map((sheet) => sheet.name),
+    insertedImages: imageReport.inserted,
+    failedImages: imageReport.failed,
+    emptyImageSkus: imageReport.empty
+  });
+}
+
+function buildQuotationExportItems(bom, design, config) {
+  const exportItems = bom.map((item) => ({ ...item }));
+  const existingWoodSkus = new Set(exportItems
+    .filter((item) => item.sku === "JP-WOOD-TOP" || item.sku === "JP-WOOD-SHELF")
+    .map((item) => item.sku));
+  const woodTypes = [
+    { componentType: "woodTop", sku: "JP-WOOD-TOP", bomGroup: "木顶板系统" },
+    { componentType: "woodShelf", sku: "JP-WOOD-SHELF", bomGroup: "木层板系统" }
+  ];
+
+  woodTypes.forEach(({ componentType, sku, bomGroup }) => {
+    if (existingWoodSkus.has(sku)) return;
+    const product = design.productByType?.[componentType];
+    const quantitiesByCutLength = new Map();
+    design.placements
+      .filter((placement) => placement.componentType === componentType)
+      .forEach((placement) => {
+        const cutLength = Number(placement.componentCutLength);
+        if (!Number.isFinite(cutLength) || cutLength <= 0) {
+          throw new Error(`${sku} is missing componentCutLength.`);
+        }
+        quantitiesByCutLength.set(
+          cutLength,
+          (quantitiesByCutLength.get(cutLength) || 0) + Number(placement.quantity || 1)
+        );
+      });
+    quantitiesByCutLength.forEach((quantity, componentCutLength) => {
+      exportItems.push({
+        ...product,
+        sku,
+        nameCn: product?.nameCn || (componentType === "woodTop" ? "木顶板" : "木层板"),
+        componentCutLength,
+        quantity,
+        unit: product?.unit || "块",
+        unitPrice: Number(product?.unitPrice || 0),
+        lineTotal: quantity * Number(product?.unitPrice || 0),
+        color: config.panelColor || "Wood Brown",
+        note: "工厂剪尺",
+        bomGroup
+      });
+    });
+  });
+  return exportItems;
+}
+
+async function createStandardQuotationSheet(workbook, bom, design, config, series, exportedAt) {
+  const sheet = workbook.addWorksheet("正式报价单", {
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+  sheet.columns = [
+    { width: 7 }, { width: 12 }, { width: 24 }, { width: 22 }, { width: 18 },
+    { width: 14 }, { width: 9 }, { width: 10 }, { width: 12 }, { width: 14 }, { width: 28 }
+  ];
+
+  sheet.mergeCells("A1:K1");
+  sheet.getCell("A1").value = "日式衣帽间（经销商价）";
+  sheet.mergeCells("A2:F2");
+  sheet.getCell("A2").value = "供方：佛山市奥美斯五金制品有限公司";
+  sheet.mergeCells("G2:K2");
+  sheet.getCell("G2").value = "客户：";
+  sheet.mergeCells("A3:F3");
+  sheet.getCell("A3").value = "地址：佛山市南海区里水镇";
+  sheet.mergeCells("G3:K3");
+  sheet.getCell("G3").value = "地址：";
+  sheet.mergeCells("A4:F4");
+  sheet.getCell("A4").value = "电话：0086-13430288289";
+  sheet.mergeCells("G4:K4");
+  sheet.getCell("G4").value = "手机号码：";
+  sheet.mergeCells("G5:K5");
+  sheet.getCell("G5").value = `日期：${formatExportDate(exportedAt)}`;
+
+  const headerRow = sheet.getRow(7);
+  headerRow.values = ["序号", "图片", "型号/SKU", "品名", "规格尺寸", "颜色", "单位", "数量", "销售价", "总额", "备注"];
+  headerRow.height = 24;
+
+  const itemImageRows = [];
+  let itemIndex = 0;
+  groupBomItems(bom).forEach((group) => {
+    const groupRow = sheet.addRow([group.name]);
+    sheet.mergeCells(groupRow.number, 1, groupRow.number, 11);
+    styleQuotationRow(groupRow, "group");
+
+    group.items.forEach((item) => {
+      itemIndex += 1;
+      const row = sheet.addRow([
+        itemIndex,
+        "",
+        item.sku,
+        item.nameCn,
+        getExcelDisplaySpec(item, design),
+        item.color || config.frameColor || "",
+        item.unit,
+        getBomDisplayQuantity(item),
+        getBomDisplayUnitPrice(item),
+        item.lineTotal,
+        item.note || ""
+      ]);
+      row.height = 45;
+      styleQuotationRow(row, "detail");
+      row.getCell(1).alignment = excelCenteredAlignment();
+      row.getCell(7).alignment = excelCenteredAlignment();
+      row.getCell(8).alignment = excelCenteredAlignment();
+      row.getCell(9).alignment = excelRightAlignment();
+      row.getCell(10).alignment = excelRightAlignment();
+      itemImageRows.push({ item, rowNumber: row.number });
+    });
+
+    const subtotalRow = sheet.addRow(["", "", "", "", "", "", "", "", "本组小计", group.subtotal, ""]);
+    subtotalRow.height = 24;
+    styleQuotationRow(subtotalRow, "subtotal");
+  });
+
+  const totalRow = sheet.addRow([
+    "", "", "", "", "", "", "", "", "合计金额",
+    bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), ""
+  ]);
+  totalRow.height = 24;
+  styleQuotationRow(totalRow, "total");
+  sheet.addRow([]);
+
+  [
+    "1.收到货后如有差错。请3天内来电告知。逾期恕概不受理。",
+    "2.以上报价不含税，不含运费，不含银行汇款手续费",
+    "3.付款方式：出货前付清。",
+    "4.铝框层板10–15天交货"
+  ].forEach((declaration) => {
+    const row = sheet.addRow([declaration]);
+    sheet.mergeCells(row.number, 1, row.number, 11);
+    row.height = 22;
+    styleQuotationRow(row, "declaration");
+  });
+
+  sheet.getRow(1).height = 32;
+  [2, 3, 4, 5].forEach((rowNumber) => {
+    sheet.getRow(rowNumber).height = 23;
+    styleQuotationRow(sheet.getRow(rowNumber), "information");
+  });
+  styleQuotationRow(sheet.getRow(1), "title");
+  styleQuotationRow(headerRow, "header");
+  sheet.views = [{ state: "frozen", ySplit: 7 }];
+
+  return insertQuotationImages(workbook, sheet, itemImageRows, series);
+}
+
+async function insertQuotationImages(workbook, sheet, itemRows, series) {
+  const report = { inserted: 0, failed: [], empty: [] };
+  const imageCache = new Map();
+  for (const { item, rowNumber } of itemRows) {
+    if (!item.image) {
+      report.empty.push(item.sku);
+      continue;
+    }
+    const url = resolveSeriesAsset(series, item.image);
+    try {
+      let cached = imageCache.get(url);
+      if (!cached) {
+        const response = await fetch(url, { cache: "no-store" });
+        const contentType = response.headers.get("content-type") || "";
+        if (!response.ok || !contentType.toLowerCase().startsWith("image/")) {
+          throw new Error(`HTTP ${response.status}, content-type ${contentType || "missing"}`);
+        }
+        const extension = contentType.toLowerCase().includes("jpeg") ? "jpeg" : "png";
+        cached = { buffer: new Uint8Array(await response.arrayBuffer()), extension };
+        imageCache.set(url, cached);
+      }
+      const imageId = workbook.addImage(cached);
+      sheet.addImage(imageId, {
+        tl: { col: 1.12, row: rowNumber - 0.92 },
+        ext: { width: 60, height: 45 }
+      });
+      report.inserted += 1;
+    } catch (error) {
+      report.failed.push({ sku: item.sku, url, error: String(error?.message || error) });
+    }
+  }
+  if (report.failed.length) console.warn("Quotation product images failed to load.", report.failed);
+  return report;
+}
+
+function styleQuotationRow(row, role) {
+  const border = excelThinBorder();
+  row.eachCell({ includeEmpty: true }, (cell, column) => {
+    if (column > 11) return;
+    cell.border = border;
+    cell.alignment = { vertical: "middle", wrapText: true };
+  });
+  if (role === "title" || role === "header" || role === "total") {
+    row.eachCell({ includeEmpty: true }, (cell, column) => {
+      if (column > 11) return;
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6F3F1F" } };
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: role === "title" ? 16 : 11 };
+      cell.alignment = excelCenteredAlignment();
+    });
+  } else if (role === "group") {
+    row.eachCell({ includeEmpty: true }, (cell, column) => {
+      if (column > 11) return;
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEADCCF" } };
+      cell.font = { bold: true, color: { argb: "FF4A2A17" } };
+    });
+  } else if (role === "subtotal") {
+    row.eachCell({ includeEmpty: true }, (cell, column) => {
+      if (column > 11) return;
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3E9E1" } };
+      cell.font = { bold: true };
+    });
+  }
+}
+
+function excelThinBorder() {
+  const side = { style: "thin", color: { argb: "FF8C6A52" } };
+  return { top: side, bottom: side, left: side, right: side };
+}
+
+function excelCenteredAlignment() {
+  return { horizontal: "center", vertical: "middle", wrapText: true };
+}
+
+function excelRightAlignment() {
+  return { horizontal: "right", vertical: "middle", wrapText: true };
+}
+
+function createBomDetailSheet(workbook, bom, design) {
+  const headers = ["SKU", "名称", "规格", "数量", "单位", "单价", "小计", "备注"];
+  const rows = bom.map((item) => [
+    item.sku,
+    item.nameCn,
+    getExcelDisplaySpec(item, design),
+    getBomDisplayQuantity(item),
+    item.unit,
+    getBomDisplayUnitPrice(item),
+    item.lineTotal,
+    item.note || ""
+  ]);
+  const sheet = workbook.addWorksheet("BOM明细");
+  sheet.addRows([
+    headers,
+    ...rows,
+    [],
+    ["总计", "", "", "", "", "", bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), ""]
+  ]);
+  sheet.columns = [
+    { width: 24 }, { width: 22 }, { width: 18 }, { width: 10 },
+    { width: 10 }, { width: 12 }, { width: 14 }, { width: 20 }
+  ];
+  return sheet;
+}
+
+function createProjectInfoSheet(workbook, design, config, series, exportedAt) {
+  const sheet = workbook.addWorksheet("项目信息");
+  sheet.addRows([
+    ["字段", "内容"],
+    ["系列", series?.name || series?.seriesId || ""],
+    ["房间宽度", `${design.room.width}mm`],
+    ["房间深度", `${design.room.depth}mm`],
+    ["立柱高度", `${design.postHeight}mm`],
+    ["颜色", config.frameColor || ""],
+    ["导出时间", formatExportDateTime(exportedAt)]
+  ]);
+  sheet.columns = [{ width: 16 }, { width: 28 }];
+  return sheet;
+}
+
+function downloadExcelBuffer(buffer, filename) {
+  const blob = new Blob(
+    [buffer],
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function getExcelDisplaySpec(item, design) {
+  if (item.sku === "JP-WOOD-TOP" || item.sku === "JP-WOOD-SHELF") {
+    if (Number.isFinite(Number(item.componentCutLength))) {
+      return `${Number(item.componentCutLength)}mm`;
+    }
+    const componentType = item.sku === "JP-WOOD-TOP" ? "woodTop" : "woodShelf";
+    const cutLengths = [...new Set(design.placements
+      .filter((placement) => placement.componentType === componentType)
+      .map((placement) => Number(placement.componentCutLength))
+      .filter((value) => Number.isFinite(value) && value > 0))];
+    if (cutLengths.length) return cutLengths.map((value) => `${value}mm`).join(" / ");
+  }
+  return getBomDisplaySpec(item);
+}
+
+function formatExportFileTimestamp(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes())
+  ].join("");
+}
+
+function formatExportDateTime(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatExportDate(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function normalizeSortOrder(value) {
