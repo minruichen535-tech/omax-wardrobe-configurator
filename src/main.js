@@ -1007,7 +1007,7 @@ function getQuotationDimensions(item, config) {
   } else if (item.sku === "JP-RAIL" || item.sku === "JP-RAIL-DOUBLE") {
     spec = "—";
   } else if (item.sku === "JP-HORIZONTAL-RAIL") {
-    spec = "500mm";
+    spec = item.sizeRule || "—";
   } else if (item.sku === "JP-CORNER-BRACKET") {
     spec = "—";
   }
@@ -1023,7 +1023,7 @@ function getQuotationDimensions(item, config) {
 }
 
 function getExcelDisplaySpec(item, design) {
-  if (item.sku === "JP-HORIZONTAL-RAIL") return "500mm";
+  if (item.sku === "JP-HORIZONTAL-RAIL") return item.sizeRule || "—";
   if (item.sku === "JP-RAIL" || item.sku === "JP-RAIL-DOUBLE") {
     const directLength = [item.componentCutLength, item.cutLength, item.visualScaleWidth]
       .map(Number)

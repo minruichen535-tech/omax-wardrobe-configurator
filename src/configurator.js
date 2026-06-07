@@ -137,7 +137,13 @@ export function calculateDesign(config, data) {
     const cornerBracketBomProduct = withSelectedDepthSizeRule(cornerBracket, config.shelfDepth);
     addBom(bomMap, cornerBracketBomProduct, cornerBracketQuantity, chooseColor(cornerBracket, config));
   }
-  const postProduct = productByType.post;
+  const basePostProduct = productBySku["JP-POST"] || productByType.post;
+  const postSku = postHeight === 2000
+    ? "JP-POST-2000"
+    : postHeight === 2400
+      ? "JP-POST-2400"
+      : "JP-POST";
+  const postProduct = productBySku[postSku] || basePostProduct;
   const postQuantity = activeWalls.reduce((sum, wall) => sum + wall.postCount, 0);
   if (postProduct?.sellable) {
     const postBomProduct = {
@@ -148,7 +154,7 @@ export function calculateDesign(config, data) {
   }
 
   data.rules
-    .filter((rule) => ruleMatchesParent(rule, postProduct, "post"))
+    .filter((rule) => ruleMatchesParent(rule, basePostProduct, "post"))
     .forEach((rule) => {
       const required = productBySku[rule.childSku || rule.requiredSku];
       if (!required?.sellable) return;
