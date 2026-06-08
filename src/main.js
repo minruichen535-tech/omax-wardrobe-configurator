@@ -86,8 +86,9 @@ function App() {
 }
 
 function ClientApp({ data, isClientMode = false }) {
+  const authStorageKey = isClientMode ? "omax-client-auth" : "omax-auth";
   const [isAuthenticated, setIsAuthenticated] = useState(
-    () => localStorage.getItem("omax-auth") === "true"
+    () => localStorage.getItem(authStorageKey) === "true"
   );
   const [config, setConfig] = useState(createInitialConfig);
   const [quoteNote, setQuoteNote] = useState("");
@@ -199,17 +200,21 @@ function ClientApp({ data, isClientMode = false }) {
     placements: current.placements.filter((placement) => placement.id !== id)
   }));
 
-  if (!isClientMode && !isAuthenticated) {
+  if (!isAuthenticated) {
     return h(LoginScreen, {
+      title: isClientMode ? "Client Access" : "OMAX Wardrobe Configurator",
+      subtitle: isClientMode ? "Product Configuration List" : "Internal Access",
+      logoSrc: isClientMode ? "/brand/client-logo.png" : "",
+      expectedPassword: isClientMode ? "PURENEST2026！" : "Omax2026!",
       onLogin: () => {
-        localStorage.setItem("omax-auth", "true");
+        localStorage.setItem(authStorageKey, "true");
         setIsAuthenticated(true);
       }
     });
   }
 
   const logout = () => {
-    localStorage.removeItem("omax-auth");
+    localStorage.removeItem(authStorageKey);
     setIsAuthenticated(false);
   };
 
@@ -299,7 +304,7 @@ function ClientApp({ data, isClientMode = false }) {
               h(Metric, { icon: ClipboardList, label: isClientMode ? "产品 SKU" : "销售 SKU", value: `${design.bom.length} 项` }),
               !isClientMode && h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
             ),
-            !isClientMode && h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
+            h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
           )
         ),
         h("div", { className: "scene-frame enhanced-scene" },
@@ -363,14 +368,20 @@ function ClientApp({ data, isClientMode = false }) {
   );
 }
 
-function LoginScreen({ onLogin }) {
+function LoginScreen({
+  onLogin,
+  title = "OMAX Wardrobe Configurator",
+  subtitle = "Internal Access",
+  logoSrc = "",
+  expectedPassword = "Omax2026!"
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   const submit = (event) => {
     event.preventDefault();
-    if (username === "admin" && password === "Omax2026!") {
+    if (username === "admin" && password === expectedPassword) {
       setError("");
       onLogin();
       return;
@@ -380,9 +391,11 @@ function LoginScreen({ onLogin }) {
 
   return h("main", { className: "login-screen" },
     h("form", { className: "login-panel", onSubmit: submit },
-      h("div", { className: "login-brand-mark", "aria-hidden": "true" }, "OM"),
-      h("h1", null, "OMAX Wardrobe Configurator"),
-      h("p", null, "Internal Access"),
+      logoSrc
+        ? h("img", { className: "login-brand-logo", src: logoSrc, alt: "" })
+        : h("div", { className: "login-brand-mark", "aria-hidden": "true" }, "OM"),
+      h("h1", null, title),
+      h("p", null, subtitle),
       h("label", { className: "login-field" },
         h("span", null, "Username"),
         h("input", {

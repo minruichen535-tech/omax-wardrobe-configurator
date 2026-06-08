@@ -56,6 +56,12 @@ button {
   font-weight: 800;
 }
 
+.login-brand-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
 .login-panel h1,
 .login-panel p {
   margin: 0;
