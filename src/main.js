@@ -93,6 +93,10 @@ function ClientApp({ data }) {
   const [brandInfo, setBrandInfo] = useState(null);
   const [isExportingQuote, setIsExportingQuote] = useState(false);
   const design = useMemo(() => calculateDesign(config, data), [config, data]);
+  const webQuotationTotal = useMemo(
+    () => design.bom.reduce((sum, item) => sum + getWebBomDisplayLineTotal(item), 0),
+    [design.bom]
+  );
   const selectedPlacement = design.placements.find((placement) => placement.id === config.selectedPlacementId);
   const shelfDepthOptions = data.settings?.shelfDepthOptions || [300, 450, 500];
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
@@ -282,7 +286,7 @@ function ClientApp({ data }) {
             h("div", { className: "metrics" },
               h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
               h(Metric, { icon: ClipboardList, label: "销售 SKU", value: `${design.bom.length} 项` }),
-              h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(design.total) })
+              h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
             ),
             h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
           )
@@ -329,7 +333,7 @@ function ClientApp({ data }) {
           ))
         ),
         h(GroupedBomTable, { series: data.series, bom: design.bom }),
-        h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(design.total))),
+        h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(webQuotationTotal))),
         h("label", { className: "field quote-note-field" },
           h("span", null, "备注信息"),
           h("textarea", {
@@ -531,10 +535,10 @@ function BomTable({ series, bom }) {
         h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note))
       ),
       h("span", { className: "bom-spec" }, getBomDisplaySpec(item)),
-      h("span", null, getBomDisplayQuantity(item)),
-      h("span", null, item.unit),
-      h("span", null, formatCurrency(getBomDisplayUnitPrice(item))),
-      h("span", null, formatCurrency(item.lineTotal))
+      h("span", null, getWebBomDisplayQuantity(item)),
+      h("span", null, getWebBomDisplayUnit(item)),
+      h("span", null, formatCurrency(getWebBomDisplayUnitPrice(item))),
+      h("span", null, formatCurrency(getWebBomDisplayLineTotal(item)))
     ))
   );
 }
@@ -578,10 +582,10 @@ function GroupedBomTable({ series, bom }) {
             h("span", null, h("strong", null, item.sku), h("em", null, item.nameCn), item.note && h("small", null, item.note))
           ),
           h("span", { className: "bom-spec" }, getBomDisplaySpec(item)),
-          h("span", null, getBomDisplayQuantity(item)),
-          h("span", null, item.unit),
-          h("span", null, formatCurrency(getBomDisplayUnitPrice(item))),
-          h("span", null, formatCurrency(item.lineTotal))
+          h("span", null, getWebBomDisplayQuantity(item)),
+          h("span", null, getWebBomDisplayUnit(item)),
+          h("span", null, formatCurrency(getWebBomDisplayUnitPrice(item))),
+          h("span", null, formatCurrency(getWebBomDisplayLineTotal(item)))
         ))
       );
     })
@@ -603,7 +607,7 @@ function groupBomItems(bom) {
     const group = map.get(name);
     group.sortOrder = Math.min(group.sortOrder, normalizeSortOrder(item.sortOrder));
     group.items.push(item);
-    group.subtotal += item.lineTotal || 0;
+    group.subtotal += getWebBomDisplayLineTotal(item);
   });
   return Array.from(map.values())
     .map((group) => ({
@@ -625,6 +629,29 @@ function getBomDisplayQuantity(item) {
 
 function getBomDisplayUnitPrice(item) {
   return item.sku === "JP-RAIL-DOUBLE" ? item.unitPrice / 2 : item.unitPrice;
+}
+
+const webFullPricePieceMeasuredBracketSkus = new Set([
+  "JP-TOP-BRACKET",
+  "JP-SHELF-BRACKET"
+]);
+
+function getWebBomDisplayUnit(item) {
+  return webFullPricePieceMeasuredBracketSkus.has(item.sku) ? "支" : item.unit;
+}
+
+function getWebBomDisplayQuantity(item) {
+  return webFullPricePieceMeasuredBracketSkus.has(item.sku)
+    ? item.quantity * 2
+    : getBomDisplayQuantity(item);
+}
+
+function getWebBomDisplayUnitPrice(item) {
+  return getBomDisplayUnitPrice(item);
+}
+
+function getWebBomDisplayLineTotal(item) {
+  return getWebBomDisplayQuantity(item) * getWebBomDisplayUnitPrice(item);
 }
 
 async function exportQuotationExcel({ bom, design, config, series }) {
@@ -767,7 +794,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
       ]);
       row.getCell(10).value = {
         formula: `H${row.number}*I${row.number}`,
-        result: Number(item.lineTotal || 0)
+        result: getQuotationDisplayLineTotal(item)
       };
       row.height = 45;
       styleQuotationRow(row, "detail");
@@ -785,7 +812,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
   const firstQuotationDetailRow = quotationDetailRows[0];
   const lastQuotationDetailRow = quotationDetailRows[quotationDetailRows.length - 1];
   const quotationTotal = normalBomItems.reduce(
-    (sum, item) => sum + Number(item.lineTotal || 0),
+    (sum, item) => sum + getQuotationDisplayLineTotal(item),
     0
   );
   const totalRow = sheet.addRow([
@@ -937,21 +964,28 @@ const quotationPieceMeasuredSkus = new Set([
   "JP-SHELF-BRACKET",
   "JP-STORAGE-BRACKET"
 ]);
+const quotationTopBracketSku = "JP-TOP-BRACKET";
 
 function getQuotationDisplayUnit(item) {
-  return quotationPieceMeasuredSkus.has(item.sku) ? "支" : item.unit;
+  return quotationPieceMeasuredSkus.has(item.sku) || item.sku === quotationTopBracketSku
+    ? "支"
+    : item.unit;
 }
 
 function getQuotationDisplayQuantity(item) {
-  return quotationPieceMeasuredSkus.has(item.sku)
+  return quotationPieceMeasuredSkus.has(item.sku) || item.sku === quotationTopBracketSku
     ? item.quantity * 2
     : getBomDisplayQuantity(item);
 }
 
 function getQuotationDisplayUnitPrice(item) {
-  return quotationPieceMeasuredSkus.has(item.sku)
+  return item.sku === "JP-STORAGE-BRACKET"
     ? item.unitPrice / 2
     : getBomDisplayUnitPrice(item);
+}
+
+function getQuotationDisplayLineTotal(item) {
+  return getQuotationDisplayQuantity(item) * getQuotationDisplayUnitPrice(item);
 }
 
 function createBomDetailSheet(workbook, bom, design) {
