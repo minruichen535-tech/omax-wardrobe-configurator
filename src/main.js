@@ -633,6 +633,9 @@ async function exportQuotationExcel({ bom, design, config, series }) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "OMAX Wardrobe Configurator";
   workbook.created = exportedAt;
+  workbook.calcProperties.fullCalcOnLoad = true;
+  workbook.calcProperties.forceFullCalc = true;
+  workbook.calcProperties.calcMode = "auto";
   const imageReport = await createStandardQuotationSheet(
     workbook,
     exportBom,
@@ -738,6 +741,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
   headerRow.height = 24;
 
   const itemImageRows = [];
+  const quotationDetailRows = [];
   let itemIndex = 0;
   groupBomItems(normalBomItems).forEach((group) => {
     const groupRow = sheet.addRow([group.name]);
@@ -757,10 +761,14 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
         getQuotationDisplayUnit(item),
         getQuotationDisplayQuantity(item),
         getQuotationDisplayUnitPrice(item),
-        item.lineTotal,
+        null,
         quotationDimensions.cutLength,
         item.note || ""
       ]);
+      row.getCell(10).value = {
+        formula: `H${row.number}*I${row.number}`,
+        result: Number(item.lineTotal || 0)
+      };
       row.height = 45;
       styleQuotationRow(row, "detail");
       row.getCell(1).alignment = excelCenteredAlignment();
@@ -769,14 +777,27 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
       row.getCell(9).alignment = excelRightAlignment();
       row.getCell(10).alignment = excelRightAlignment();
       row.getCell(11).alignment = excelCenteredAlignment();
+      quotationDetailRows.push(row.number);
       itemImageRows.push({ item, rowNumber: row.number });
     });
   });
 
+  const firstQuotationDetailRow = quotationDetailRows[0];
+  const lastQuotationDetailRow = quotationDetailRows[quotationDetailRows.length - 1];
+  const quotationTotal = normalBomItems.reduce(
+    (sum, item) => sum + Number(item.lineTotal || 0),
+    0
+  );
   const totalRow = sheet.addRow([
     "", "", "", "", "", "", "", "", "合计金额",
-    bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), "", ""
+    null, "", ""
   ]);
+  totalRow.getCell(10).value = {
+    formula: firstQuotationDetailRow
+      ? `SUM(J${firstQuotationDetailRow}:J${lastQuotationDetailRow})`
+      : "0",
+    result: quotationTotal
+  };
   totalRow.height = 24;
   styleQuotationRow(totalRow, "total");
   sheet.addRow([]);
@@ -935,23 +956,33 @@ function getQuotationDisplayUnitPrice(item) {
 
 function createBomDetailSheet(workbook, bom, design) {
   const headers = ["SKU", "名称", "规格", "数量", "单位", "单价", "小计", "备注"];
-  const rows = bom.map((item) => [
-    item.sku,
-    item.nameCn,
-    getExcelDisplaySpec(item, design),
-    getBomDisplayQuantity(item),
-    item.unit,
-    getBomDisplayUnitPrice(item),
-    item.lineTotal,
-    item.note || ""
-  ]);
   const sheet = workbook.addWorksheet("BOM明细");
-  sheet.addRows([
-    headers,
-    ...rows,
-    [],
-    ["总计", "", "", "", "", "", bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), ""]
-  ]);
+  sheet.addRow(headers);
+  const detailRows = bom.map((item) => {
+    const row = sheet.addRow([
+      item.sku,
+      item.nameCn,
+      getExcelDisplaySpec(item, design),
+      getBomDisplayQuantity(item),
+      item.unit,
+      getBomDisplayUnitPrice(item),
+      null,
+      item.note || ""
+    ]);
+    row.getCell(7).value = {
+      formula: `D${row.number}*F${row.number}`,
+      result: Number(item.lineTotal || 0)
+    };
+    return row.number;
+  });
+  sheet.addRow([]);
+  const totalRow = sheet.addRow(["总计", "", "", "", "", "", null, ""]);
+  totalRow.getCell(7).value = {
+    formula: detailRows.length
+      ? `SUM(G${detailRows[0]}:G${detailRows[detailRows.length - 1]})`
+      : "0",
+    result: bom.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0)
+  };
   sheet.columns = [
     { width: 24 }, { width: 22 }, { width: 18 }, { width: 10 },
     { width: 10 }, { width: 12 }, { width: 14 }, { width: 20 }
