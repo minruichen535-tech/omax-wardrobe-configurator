@@ -184,6 +184,12 @@ button {
   font-weight: 800;
 }
 
+.client-header-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
 .brand-block h2,
 .brand-block p,
 .step-title h3,
@@ -211,6 +217,19 @@ button {
 .bom-row em,
 .bom-row small {
   color: var(--muted);
+}
+
+.client-bom-table .bom-head,
+.client-bom-table .bom-row {
+  grid-template-columns: minmax(150px, 1fr) minmax(72px, 0.65fr) 48px 44px;
+}
+
+.client-bom-table .bom-group-title {
+  grid-template-columns: minmax(150px, 1fr) 64px;
+}
+
+.client-mode .quote-pane {
+  background: #fffdf9;
 }
 
 .brand-block p,

@@ -4,4 +4,7 @@
 /configurator /configurator/index.html 200
 /configurator/ /configurator/index.html 200
 /configurator/* /configurator/index.html 200
+/client /client/index.html 200
+/client/ /client/index.html 200
+/client/* /client/index.html 200
 /* /index.html 200

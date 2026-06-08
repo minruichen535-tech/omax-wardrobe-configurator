@@ -54,6 +54,7 @@ applyTheme();
 
 function App() {
   const routeInfo = useMemo(() => resolveRoute(), []);
+  const isClientMode = location.pathname.startsWith("/client");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -81,10 +82,10 @@ function App() {
 
   return routeInfo.route === "admin"
     ? h(AdminApp, { data, setData })
-    : h(ClientApp, { data });
+    : h(ClientApp, { data, isClientMode });
 }
 
-function ClientApp({ data }) {
+function ClientApp({ data, isClientMode = false }) {
   const [isAuthenticated, setIsAuthenticated] = useState(
     () => localStorage.getItem("omax-auth") === "true"
   );
@@ -122,10 +123,13 @@ function ClientApp({ data }) {
   }, [data.settings?.roomHeightFixed, data.settings?.defaultPostHeight]);
 
   useEffect(() => {
-    loadBrandInfo("/brand/brand.json")
+    const brandPaths = isClientMode
+      ? ["/brand/client-brand.json", "/brand/client/brand.json"]
+      : ["/brand/brand.json"];
+    loadBrandInfo(brandPaths)
       .then(setBrandInfo)
       .catch(() => setBrandInfo(null));
-  }, []);
+  }, [isClientMode]);
 
   const updateConfig = (patch) => setConfig((current) => ({ ...current, ...patch }));
   const setRoom = (key, value) => {
@@ -137,7 +141,10 @@ function ClientApp({ data }) {
   const exportQuote = async () => {
     setIsExportingQuote(true);
     try {
-      await exportQuotationExcel({
+      const exportHandler = isClientMode
+        ? exportClientProductListExcel
+        : exportQuotationExcel;
+      await exportHandler({
         bom: design.bom,
         design,
         config,
@@ -192,7 +199,7 @@ function ClientApp({ data }) {
     placements: current.placements.filter((placement) => placement.id !== id)
   }));
 
-  if (!isAuthenticated) {
+  if (!isClientMode && !isAuthenticated) {
     return h(LoginScreen, {
       onLogin: () => {
         localStorage.setItem("omax-auth", "true");
@@ -206,10 +213,10 @@ function ClientApp({ data }) {
     setIsAuthenticated(false);
   };
 
-  return h("main", { className: "app-shell" },
+  return h("main", { className: `app-shell${isClientMode ? " client-mode" : ""}` },
     h("section", { className: "workspace upgraded-workspace" },
       h("aside", { className: "control-rail", "aria-label": "配置选项" },
-        h(Header, { active: "configurator", series: data.series }),
+        h(Header, { active: "configurator", series: data.series, isClientMode, brandInfo }),
         h(StepBlock, { icon: Home, title: "房间尺寸设置" },
           h(NumberField, { label: "房间宽度", value: config.room.width, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("width", value) }),
           h(NumberField, { label: "房间深度", value: config.room.depth, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("depth", value) }),
@@ -279,20 +286,24 @@ function ClientApp({ data }) {
       h("section", { className: "viewer-pane" },
         h("div", { className: "viewer-topline" },
           h("div", null,
-            h("p", { className: "eyebrow" }, "OMEIX HARDWARE"),
-            h("h1", null, data.series.name)
+            h("p", { className: "eyebrow" }, isClientMode
+              ? brandInfo?.brandNameEn || brandInfo?.brandNameCn || ""
+              : "OMEIX HARDWARE"),
+            h("h1", null, isClientMode
+              ? brandInfo?.brandNameCn || brandInfo?.seriesName || ""
+              : data.series.name)
           ),
           h("div", { className: "viewer-actions" },
             h("div", { className: "metrics" },
               h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
-              h(Metric, { icon: ClipboardList, label: "销售 SKU", value: `${design.bom.length} 项` }),
-              h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
+              h(Metric, { icon: ClipboardList, label: isClientMode ? "产品 SKU" : "销售 SKU", value: `${design.bom.length} 项` }),
+              !isClientMode && h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
             ),
-            h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
+            !isClientMode && h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
           )
         ),
         h("div", { className: "scene-frame enhanced-scene" },
-          brandInfo && h(BrandSceneCard, { brandInfo }),
+          brandInfo && h(BrandSceneCard, { brandInfo, isClientMode }),
           h(WardrobeScene, {
             key: `scene-side-post-depth-inset-20260603-01-${config.layout}`,
             config,
@@ -308,13 +319,13 @@ function ClientApp({ data }) {
       h("aside", { className: "quote-pane" },
         h("div", { className: "quote-heading" },
           h(ClipboardList, { size: 20 }),
-          h("h2", null, "配置与销售清单"),
+          h("h2", null, isClientMode ? "产品清单" : "配置与销售清单"),
           h("button", {
             className: "quote-export-button",
             type: "button",
             disabled: isExportingQuote,
             onClick: exportQuote
-          }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : "导出Excel")
+          }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : (isClientMode ? "导出产品清单" : "导出Excel"))
         ),
         design.warnings.map((message) => h("p", { className: "warning-text", key: message }, message)),
         h("div", { className: "placement-list quote-placement-list" },
@@ -332,8 +343,8 @@ function ClientApp({ data }) {
             !placement.autoGenerated && h("button", { type: "button", title: "删除", onClick: (event) => { event.stopPropagation(); removePlacement(placement.id); } }, h(Trash2, { size: 15 }))
           ))
         ),
-        h(GroupedBomTable, { series: data.series, bom: design.bom }),
-        h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(webQuotationTotal))),
+        h(GroupedBomTable, { series: data.series, bom: design.bom, hidePrices: isClientMode }),
+        !isClientMode && h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(webQuotationTotal))),
         h("label", { className: "field quote-note-field" },
           h("span", null, "备注信息"),
           h("textarea", {
@@ -343,7 +354,9 @@ function ClientApp({ data }) {
             onChange: (event) => setQuoteNote(event.target.value)
           })
         ),
-        h("p", { className: "quote-note" }, "以上价格为系统预估价格，最终报价需根据实际尺寸、颜色、包装方式、运输方式及订单数量确认。"),
+        h("p", { className: "quote-note" }, isClientMode
+          ? "产品尺寸与数量以最终确认方案为准。"
+          : "以上价格为系统预估价格，最终报价需根据实际尺寸、颜色、包装方式、运输方式及订单数量确认。"),
         h("button", { className: "inquiry-button", type: "button" }, "提交询价")
       )
     )
@@ -545,7 +558,7 @@ function BomTable({ series, bom }) {
 
 const defaultOpenBomGroups = new Set(["立柱系统", "木顶板系统", "木层板系统", "挂衣系统", "柜体系统"]);
 
-function GroupedBomTable({ series, bom }) {
+function GroupedBomTable({ series, bom, hidePrices = false }) {
   const groups = useMemo(() => groupBomItems(bom), [bom]);
   const [openGroups, setOpenGroups] = useState(() => {
     const initial = {};
@@ -559,14 +572,14 @@ function GroupedBomTable({ series, bom }) {
     [name]: !(current[name] ?? defaultOpenBomGroups.has(name))
   }));
 
-  return h("div", { className: "bom-table grouped-bom-table" },
+  return h("div", { className: `bom-table grouped-bom-table${hidePrices ? " client-bom-table" : ""}` },
     h("div", { className: "bom-head" },
       h("span", null, "名称"),
       h("span", null, "规格"),
       h("span", null, "数量"),
       h("span", null, "单位"),
-      h("span", null, "单价"),
-      h("span", null, "小计")
+      !hidePrices && h("span", null, "单价"),
+      !hidePrices && h("span", null, "小计")
     ),
     groups.map((group) => {
       const isOpen = openGroups[group.name] ?? defaultOpenBomGroups.has(group.name);
@@ -574,7 +587,7 @@ function GroupedBomTable({ series, bom }) {
         h("button", { className: "bom-group-title", type: "button", onClick: () => toggleGroup(group.name), "aria-expanded": isOpen },
           h("span", null, isOpen ? "v" : ">", " ", group.name),
           h("em", null, `${group.items.length} 项`),
-          h("strong", null, formatCurrency(group.subtotal))
+          !hidePrices && h("strong", null, formatCurrency(group.subtotal))
         ),
         isOpen && group.items.map((item) => h("div", { className: "bom-row", key: `${group.name}-${item.sku}-${item.color}-${item.note}` },
           h("span", { className: "bom-name" },
@@ -584,8 +597,8 @@ function GroupedBomTable({ series, bom }) {
           h("span", { className: "bom-spec" }, getBomDisplaySpec(item)),
           h("span", null, getWebBomDisplayQuantity(item)),
           h("span", null, getWebBomDisplayUnit(item)),
-          h("span", null, formatCurrency(getWebBomDisplayUnitPrice(item))),
-          h("span", null, formatCurrency(getWebBomDisplayLineTotal(item)))
+          !hidePrices && h("span", null, formatCurrency(getWebBomDisplayUnitPrice(item))),
+          !hidePrices && h("span", null, formatCurrency(getWebBomDisplayLineTotal(item)))
         ))
       );
     })
@@ -684,6 +697,34 @@ async function exportQuotationExcel({ bom, design, config, series }) {
   });
 }
 
+async function exportClientProductListExcel({ bom, design, config, series }) {
+  const exportedAt = new Date();
+  const exportBom = buildQuotationExportItems(bom, design, config);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "OMAX Wardrobe Configurator";
+  workbook.created = exportedAt;
+
+  const imageReport = await createClientProductListSheet(
+    workbook,
+    exportBom,
+    design,
+    config,
+    series,
+    exportedAt
+  );
+  createClientBomSheet(workbook, exportBom, design, config);
+  createProjectInfoSheet(workbook, design, config, series, exportedAt);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadExcelBuffer(buffer, `OMAX-Product-List-${formatExportFileTimestamp(exportedAt)}.xlsx`);
+  console.info("Client product list export complete.", {
+    sheetNames: workbook.worksheets.map((sheet) => sheet.name),
+    insertedImages: imageReport.inserted,
+    failedImages: imageReport.failed,
+    emptyImageSkus: imageReport.empty
+  });
+}
+
 function buildQuotationExportItems(bom, design, config) {
   const exportItems = bom.map((item) => ({ ...item }));
   const existingWoodSkus = new Set(exportItems
@@ -727,6 +768,96 @@ function buildQuotationExportItems(bom, design, config) {
     });
   });
   return exportItems;
+}
+
+async function createClientProductListSheet(workbook, bom, design, config, series, exportedAt) {
+  const sheet = workbook.addWorksheet("产品清单", {
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+  sheet.columns = [
+    { width: 7 }, { width: 12 }, { width: 24 }, { width: 22 }, { width: 18 },
+    { width: 14 }, { width: 9 }, { width: 10 }, { width: 14 }, { width: 28 }
+  ];
+
+  sheet.mergeCells("A1:J1");
+  sheet.getCell("A1").value = "日式衣帽间产品清单";
+  sheet.mergeCells("A2:E2");
+  sheet.getCell("A2").value = `系列：${series?.name || ""}`;
+  sheet.mergeCells("F2:J2");
+  sheet.getCell("F2").value = `日期：${formatExportDate(exportedAt)}`;
+
+  const headerRow = sheet.getRow(4);
+  headerRow.values = ["序号", "图片", "型号/SKU", "品名", "规格尺寸", "颜色", "单位", "数量", "剪尺", "备注"];
+  headerRow.height = 24;
+  styleQuotationRow(sheet.getRow(1), "title", 10);
+  styleQuotationRow(sheet.getRow(2), "information", 10);
+  styleQuotationRow(headerRow, "header", 10);
+
+  const itemImageRows = [];
+  let itemIndex = 0;
+  groupBomItems(bom).forEach((group) => {
+    const groupRow = sheet.addRow([group.name]);
+    sheet.mergeCells(groupRow.number, 1, groupRow.number, 10);
+    styleQuotationRow(groupRow, "group", 10);
+
+    group.items.forEach((item) => {
+      itemIndex += 1;
+      const dimensions = getQuotationDimensions(item, config);
+      const row = sheet.addRow([
+        itemIndex,
+        "",
+        item.sku,
+        item.nameCn,
+        dimensions.spec,
+        getExcelDisplayColor(item, config),
+        getQuotationDisplayUnit(item),
+        getQuotationDisplayQuantity(item),
+        dimensions.cutLength,
+        item.note || ""
+      ]);
+      row.height = 45;
+      styleQuotationRow(row, "detail", 10);
+      [1, 7, 8, 9].forEach((column) => {
+        row.getCell(column).alignment = excelCenteredAlignment();
+      });
+      itemImageRows.push({ item, rowNumber: row.number });
+    });
+  });
+
+  sheet.addRow([]);
+  const declarationRow = sheet.addRow(["本清单不含价格，产品尺寸与数量以最终确认方案为准。"]);
+  sheet.mergeCells(declarationRow.number, 1, declarationRow.number, 10);
+  styleQuotationRow(declarationRow, "declaration", 10);
+  sheet.getRow(1).height = 32;
+  sheet.views = [{ state: "frozen", ySplit: 4 }];
+
+  return insertQuotationImages(workbook, sheet, itemImageRows, series);
+}
+
+function createClientBomSheet(workbook, bom, design, config) {
+  const sheet = workbook.addWorksheet("BOM清单");
+  sheet.addRow(["BOM分组", "SKU", "名称", "规格", "数量", "单位", "剪尺", "备注"]);
+  groupBomItems(bom).forEach((group) => {
+    group.items.forEach((item) => {
+      const dimensions = getQuotationDimensions(item, config);
+      sheet.addRow([
+        group.name,
+        item.sku,
+        item.nameCn,
+        dimensions.spec || getExcelDisplaySpec(item, design),
+        getQuotationDisplayQuantity(item),
+        getQuotationDisplayUnit(item),
+        dimensions.cutLength,
+        item.note || ""
+      ]);
+    });
+  });
+  sheet.columns = [
+    { width: 18 }, { width: 24 }, { width: 22 }, { width: 18 },
+    { width: 10 }, { width: 10 }, { width: 14 }, { width: 24 }
+  ];
+  styleQuotationRow(sheet.getRow(1), "header", 8);
+  return sheet;
 }
 
 async function createStandardQuotationSheet(workbook, bom, design, config, series, exportedAt) {
@@ -1250,13 +1381,21 @@ function AdminApp({ data, setData }) {
   );
 }
 
-function Header({ active, series }) {
+function Header({ active, series, isClientMode = false, brandInfo = null }) {
+  const brandName = isClientMode
+    ? brandInfo?.brandNameCn || brandInfo?.brandNameEn || "Wardrobe Configurator"
+    : "奥美斯五金";
+  const seriesName = isClientMode
+    ? brandInfo?.seriesName || series.name
+    : series.name;
   return h("header", { className: "brand-block" },
-    h("div", { className: "brand-mark" }, "OM"),
+    isClientMode
+      ? h("img", { className: "client-header-logo", src: "/brand/client-logo.png", alt: "Client logo" })
+      : h("div", { className: "brand-mark" }, "OM"),
     h("div", null,
-      h("h2", null, "奥美斯五金"),
-      h("p", null, series.name),
-      h("nav", { className: "tiny-nav" },
+      h("h2", null, brandName),
+      h("p", null, seriesName),
+      !isClientMode && h("nav", { className: "tiny-nav" },
         h("a", { href: `/configurator/${series.seriesId}`, className: active === "configurator" ? "active" : "" }, "配置端"),
         h("a", { href: `/admin/${series.seriesId}`, className: active === "admin" ? "active" : "" }, "管理端")
       )
@@ -1357,9 +1496,12 @@ function ProductThumb({ series, image, name }) {
     : h("div", { className: "product-thumb placeholder" }, h(ImageIcon, { size: 17 }));
 }
 
-function BrandSceneCard({ brandInfo }) {
+function BrandSceneCard({ brandInfo, isClientMode = false }) {
   return h("aside", { className: "scene-brand-card", "aria-label": "品牌信息" },
-    h("img", { src: "/brand/logo.png", alt: brandInfo.brandNameEn || brandInfo.brandNameCn || "Brand" }),
+    h("img", {
+      src: isClientMode ? "/brand/client-logo.png" : "/brand/logo.png",
+      alt: isClientMode ? "Client logo" : (brandInfo.brandNameEn || brandInfo.brandNameCn || "Brand")
+    }),
     h("div", null,
       brandInfo.brandNameCn && h("strong", null, brandInfo.brandNameCn),
       brandInfo.brandNameEn && h("span", null, brandInfo.brandNameEn),
@@ -1369,10 +1511,24 @@ function BrandSceneCard({ brandInfo }) {
   );
 }
 
-function loadBrandInfo(url) {
+async function loadBrandInfo(urls) {
+  const candidates = Array.isArray(urls) ? urls : [urls];
   if (typeof fetch === "function") {
-    return fetch(url, { cache: "no-store" }).then((response) => response.ok ? response.json() : null);
+    for (const url of candidates) {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("json")) continue;
+      try {
+        return parseBrandInfoJson(await response.text());
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
+
+  const [url] = candidates;
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("GET", `${url}?v=${Date.now()}`);
@@ -1382,7 +1538,7 @@ function loadBrandInfo(url) {
         return;
       }
       try {
-        resolve(JSON.parse(request.responseText));
+        resolve(parseBrandInfoJson(request.responseText));
       } catch (error) {
         reject(error);
       }
@@ -1390,6 +1546,10 @@ function loadBrandInfo(url) {
     request.onerror = reject;
     request.send();
   });
+}
+
+function parseBrandInfoJson(source) {
+  return JSON.parse(String(source).replace(/,\s*([}\]])/g, "$1"));
 }
 
 function getLibraryComponentName(type, productByType) {
