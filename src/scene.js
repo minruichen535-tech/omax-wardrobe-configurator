@@ -181,6 +181,7 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
     modelBounds: [],
     transformDiagnostics: [],
     runtimeDebug: [],
+    wallGenerationOrder: [],
     woodTopDiagnostics: [],
     postCoordinates: [],
     bayCoordinates: [],
@@ -193,25 +194,28 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
   const roomHeight = meters(design.room.height);
   const postHeight = meters(design.postHeight || design.room.height);
   const seriesId = series?.seriesId || "japanese-closet";
-  const cuttingRules = getCuttingRules(seriesId) || getCuttingRules("japanese-closet");
+  const cuttingRules = design.cuttingRules || getCuttingRules(seriesId) || getCuttingRules("japanese-closet");
   const modelTransforms = getModelTransforms(seriesId) || getModelTransforms("japanese-closet");
   addRoom(root, roomWidth, roomDepth, roomHeight);
-  await Promise.all(design.activeWalls.map((wall) => addWallRun(
-    root,
-    wall,
-    roomWidth,
-    roomDepth,
-    roomHeight,
-    postHeight,
-    config,
-    design,
-    series,
-    report,
-    debug,
-    selectedId,
-    cuttingRules,
-    modelTransforms
-  )));
+  for (const wall of design.activeWalls) {
+    report.wallGenerationOrder.push(wall.id);
+    await addWallRun(
+      root,
+      wall,
+      roomWidth,
+      roomDepth,
+      roomHeight,
+      postHeight,
+      config,
+      design,
+      series,
+      report,
+      debug,
+      selectedId,
+      cuttingRules,
+      modelTransforms
+    );
+  }
   if (!scene.getObjectByName("design-root") || root.parent !== scene) return;
   publishModelReport(report, "ready");
   requestRender?.();
@@ -231,6 +235,7 @@ function publishModelReport(report, status) {
     modelBounds: report.modelBounds,
     transformDiagnostics: report.transformDiagnostics,
     runtimeDebug: report.runtimeDebug,
+    wallGenerationOrder: report.wallGenerationOrder,
     woodTopDiagnostics: report.woodTopDiagnostics,
     sceneJsImportUrl: import.meta.url,
     sceneTransformVersion,
@@ -291,16 +296,18 @@ async function addWallRun(
   const shelfDepth = meters(Number(config.shelfDepth) || 450);
   const dropTargetDepth = 0.5;
   const wallOffset = meters(Number(config.wallOffset) || 250);
-  const sideCenterZ = meters(Number(wall.startOffset) || 0) / 2;
+  const wallCenterOffset = meters(Number(wall.centerOffset) || 0);
 
-  if (wall.id === "back") group.position.set(0, 0, -roomDepth / 2 + wallOffset);
+  if (wall.id === "back") {
+    group.position.set(wallCenterOffset, 0, -roomDepth / 2 + wallOffset);
+  }
   if (wall.id === "left") {
     group.rotation.y = Math.PI / 2;
-    group.position.set(-roomWidth / 2 + wallOffset, 0, sideCenterZ);
+    group.position.set(-roomWidth / 2 + wallOffset, 0, wallCenterOffset);
   }
   if (wall.id === "right") {
     group.rotation.y = -Math.PI / 2;
-    group.position.set(roomWidth / 2 - wallOffset, 0, sideCenterZ);
+    group.position.set(roomWidth / 2 - wallOffset, 0, wallCenterOffset);
   }
   report.runtimeDebug.push({
     wallId: wall.id,
@@ -310,6 +317,10 @@ async function addWallRun(
     sidePostInsetMeters: null,
     wallOffset: toMm(wallOffset),
     wallOffsetMeters: wallOffset,
+    wallCenterOffset: toMm(wallCenterOffset),
+    reverseBayOrder: wall.reverseBayOrder === true,
+    backCornerBayIndex: wall.backCornerBayIndex,
+    openEndBayIndex: wall.openEndBayIndex,
     leftGroupX: wall.id === "left" ? toMm(group.position.x) : null,
     rightGroupX: wall.id === "right" ? toMm(group.position.x) : null,
     groupPosition: {
@@ -323,12 +334,15 @@ async function addWallRun(
 
   const startX = -length / 2;
   const wallAxis = getWallAxis(wall.id);
+  const reverseBayOrder = wall.reverseBayOrder === true;
   const postPositions = (wall.posts?.length ? wall.posts : Array.from({ length: wall.bayCount + 1 }, (_, index) => ({
     index,
     x: (wall.length / wall.bayCount) * index
   }))).map((post) => ({
     index: post.index,
-    x: startX + meters(post.x)
+    x: reverseBayOrder
+      ? startX + length - meters(post.x)
+      : startX + meters(post.x)
   }));
   const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount, cuttingRules));
   const postProduct = design.productByType.post;
@@ -358,8 +372,31 @@ async function addWallRun(
     post.position.set(visualPostX, 0, 0);
     post.userData = { ...post.userData, wallId: wall.id, postIndex: postPosition.index };
     group.add(post);
+    const shouldClampSideFirstBackCornerPost = series?.seriesId === "japanese-closet"
+      && config.layout === "U"
+      && config.uLayoutMode === "side-first"
+      && (wall.id === "left" || wall.id === "right")
+      && postPosition.index === 0;
+    if (shouldClampSideFirstBackCornerPost) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const postWorldBox = new THREE.Box3().setFromObject(post);
+      const backWallBoundaryZ = -roomDepth / 2;
+      const overflowWorldZ = backWallBoundaryZ - postWorldBox.min.z;
+      if (overflowWorldZ > 0) {
+        const worldOrigin = post.getWorldPosition(new THREE.Vector3());
+        const localOrigin = group.worldToLocal(worldOrigin.clone());
+        const localShifted = group.worldToLocal(
+          worldOrigin.clone().add(new THREE.Vector3(0, 0, overflowWorldZ))
+        );
+        post.position.x += localShifted.x - localOrigin.x;
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+    }
     const world = localToWorld(group, postPosition.x, 0, 0);
-    const visualWorld = localToWorld(group, visualPostX, 0, 0);
+    const visualWorld = post.getWorldPosition(new THREE.Vector3());
+    const finalPostWorldBox = new THREE.Box3().setFromObject(post);
     report.postCoordinates.push({
       wallId: wall.id,
       axis: wallAxis,
@@ -371,7 +408,9 @@ async function addWallRun(
       worldZ: toMm(world.z),
       visualWorldX: toMm(visualWorld.x),
       visualWorldY: toMm(visualWorld.y),
-      visualWorldZ: toMm(visualWorld.z)
+      visualWorldZ: toMm(visualWorld.z),
+      finalBBoxMinZ: toMm(finalPostWorldBox.min.z),
+      finalBBoxMaxZ: toMm(finalPostWorldBox.max.z)
     });
     if (debug) {
       group.add(createTextSprite(`P${postPosition.index}`, theme.colors.text, postPosition.x, postHeight + 0.12, 0));
@@ -379,7 +418,12 @@ async function addWallRun(
   }
 
   postPositions.slice(0, -1).forEach((_, bayIndex) => {
-    const bay = getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth, cuttingRules.postProfileWidthMm);
+    const bay = getBayGeometry(
+      postPositions,
+      bayIndex,
+      meters(wall.bays?.[bayIndex]?.innerBayWidth) || factoryInnerBayWidth,
+      cuttingRules.postProfileWidthMm
+    );
     if (!bay) return;
     const world = localToWorld(group, bay.centerX, 0, 0);
       report.bayCoordinates.push({
@@ -418,7 +462,12 @@ async function addWallRun(
   await Promise.all(design.placements
     .filter((placement) => placement.wallId === wall.id)
     .map(async (placement) => {
-      const bay = getBayGeometry(postPositions, placement.bayIndex, factoryInnerBayWidth, cuttingRules.postProfileWidthMm);
+      const bay = getBayGeometry(
+        postPositions,
+        placement.bayIndex,
+        meters(wall.bays?.[placement.bayIndex]?.innerBayWidth) || factoryInnerBayWidth,
+        cuttingRules.postProfileWidthMm
+      );
       if (!bay) {
         report.failed.add(`${wall.id}:${placement.bayIndex}`);
         report.missingPlacements.push({
@@ -573,7 +622,7 @@ async function addPlacement(
   modelTransforms
 ) {
   const y = meters(placement.heightFromFloor);
-  const product = design.productByType[placement.componentType];
+  const product = design.productBySku[placement.productSku] || design.productByType[placement.componentType];
   const name = product?.nameCn || placement.componentType;
   const transform = getComponentTransform(placement.componentType, modelTransforms, report);
   const model = await createModelOrMissing(
@@ -682,15 +731,14 @@ async function addPlacement(
     let edgeDiagnostic = getWoodTopEdgeDiagnostic(placement, wall, worldBox, design.room);
     const isSideCornerWoodTop = placement.autoGenerated
       && (wall?.id === "left" || wall?.id === "right")
-      && (
-        (wall.id === "left" && Number(placement.bayIndex) === wall.bayCount - 1)
-        || (wall.id === "right" && Number(placement.bayIndex) === 0)
-      );
+      && Number(placement.bayIndex) === getSideBackCornerBayIndex(wall);
     const isSideOpenWoodTop = placement.autoGenerated
-      && (
-        (wall?.id === "left" && Number(placement.bayIndex) === 0)
-        || (wall?.id === "right" && Number(placement.bayIndex) === wall.bayCount - 1)
-      );
+      && (wall?.id === "left" || wall?.id === "right")
+      && Number(placement.bayIndex) === getSideOpenEndBayIndex(wall);
+    const skipSideCornerWoodTopAdjustment = series?.seriesId === "japanese-closet"
+      && config.layout === "U"
+      && config.uLayoutMode === "side-first"
+      && isSideCornerWoodTop;
     if (!isSideCornerWoodTop && placement.autoGenerated && (edgeDiagnostic.suggestedLocalDirection === "-localX" || edgeDiagnostic.suggestedLocalDirection === "+localX")) {
       model.position.x += edgeDiagnostic.suggestedLocalDirection === "-localX"
         ? -modelTransforms.woodTop.edgeAdjustment
@@ -700,7 +748,7 @@ async function addPlacement(
       worldBox = new THREE.Box3().setFromObject(model);
       edgeDiagnostic = getWoodTopEdgeDiagnostic(placement, wall, worldBox, design.room);
     }
-    if (isSideCornerWoodTop) {
+    if (isSideCornerWoodTop && !skipSideCornerWoodTopAdjustment) {
       const roomDepth = meters(Number(design.room?.depth) || 0);
       const wallOffset = meters(Number(config.wallOffset) || 250);
       const targetWorldZ = -roomDepth / 2 + wallOffset + depth / 2 + modelTransforms.woodTop.cornerBackClearance;
@@ -821,7 +869,19 @@ function getWoodTopEdgeDiagnostic(placement, wall, worldBox, room) {
     actualEdgeWorld = null;
     edgeAxis = null;
     suggestedLocalDirection = "none";
-  } else if ((wall?.id === "left" && isFirstBay) || (wall?.id === "right" && isLastBay)) {
+  } else if (
+    (wall?.id === "left" || wall?.id === "right")
+    && bayIndex === getSideBackCornerBayIndex(wall)
+  ) {
+    expectedEdgeRole = "side-corner-dynamic";
+    expectedBoundaryWorld = null;
+    actualEdgeWorld = null;
+    edgeAxis = null;
+    suggestedLocalDirection = "none";
+  } else if (
+    (wall?.id === "left" || wall?.id === "right")
+    && bayIndex === getSideOpenEndBayIndex(wall)
+  ) {
     expectedEdgeRole = "side-open-edge-no-adjustment";
     expectedBoundaryWorld = null;
     actualEdgeWorld = null;
@@ -861,6 +921,16 @@ function getWoodTopEdgeDiagnostic(placement, wall, worldBox, room) {
     edgeAxis,
     suggestedLocalDirection
   };
+}
+
+function getSideBackCornerBayIndex(wall) {
+  if (Number.isInteger(wall?.backCornerBayIndex)) return wall.backCornerBayIndex;
+  return wall?.id === "left" ? Number(wall?.bayCount || 1) - 1 : 0;
+}
+
+function getSideOpenEndBayIndex(wall) {
+  if (Number.isInteger(wall?.openEndBayIndex)) return wall.openEndBayIndex;
+  return wall?.id === "left" ? 0 : Number(wall?.bayCount || 1) - 1;
 }
 
 function alignModelBoundingBox(model, targetCenterX, targetBottomY, targetCenterZ, anchor = "bottomCenter", alignMode = "bboxCenter") {

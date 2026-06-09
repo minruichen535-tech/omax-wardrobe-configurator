@@ -21,6 +21,7 @@ export function createInitialConfig() {
     shelfDepth: 450,
     wallOffset: "",
     layout: "I",
+    uLayoutMode: "bottom-first",
     frameColor: "Silver Grey",
     panelColor: "Wood Brown",
     glassColor: "透明灰",
@@ -57,7 +58,7 @@ export function syncWallLengthsWithRoom(config, roomPatch) {
 
 export function calculateDesign(config, data) {
   const seriesId = data?.series?.seriesId || DEFAULT_SERIES_ID;
-  const cuttingRules = getCuttingRules(seriesId) || defaultCuttingRules;
+  const cuttingRules = getCuttingRules(seriesId, data) || defaultCuttingRules;
   const bomCalculator = getBomCalculator(seriesId) || getBomCalculator(DEFAULT_SERIES_ID);
   const room = clampRoom({
     ...config.room,
@@ -79,14 +80,20 @@ export function calculateDesign(config, data) {
     productByType
   });
   const placements = normalizePlacements(rawPlacements, activeWalls, room.height)
-    .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules));
+    .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules))
+    .map((placement) => {
+      const product = bomCalculator.resolvePlacementProduct?.({
+        placement,
+        productsByType,
+        productByType
+      }) || productByType[placement.componentType];
+      return product ? { ...placement, productSku: product.sku } : placement;
+    });
   const errors = [];
   const warnings = [];
 
   activeWalls.forEach((wall) => {
-    if (wall.bayWidth > cuttingRules.maxPostSpanMm) {
-      errors.push(`${labelWall(wall.id)}单跨宽度不能超过 ${cuttingRules.maxPostSpanMm}mm，请增加跨数。`);
-    }
+    errors.push(...wall.validationErrors);
   });
 
   placements.forEach((placement) => {
@@ -100,15 +107,17 @@ export function calculateDesign(config, data) {
     activeWalls,
     postHeight,
     productBySku,
+    cuttingRules,
     productByType,
     rules: data.rules,
+    settings: data.settings,
     config,
     bomMap,
     addBom
   });
 
   placements.forEach((placement) => {
-    const component = productByType[placement.componentType];
+    const component = productBySku[placement.productSku] || productByType[placement.componentType];
     if (component?.sellable) {
       addBom(
         bomMap,
@@ -120,7 +129,7 @@ export function calculateDesign(config, data) {
 
     data.rules
       .filter((rule) => ruleMatchesParent(rule, component, placement.componentType))
-      .filter((rule) => ruleMatchesLed(rule, placement))
+      .filter((rule) => bomCalculator.ruleMatches?.(rule, data.settings, config, placement) !== false)
       .forEach((rule) => {
         const required = productBySku[rule.childSku || rule.requiredSku];
         if (!required?.sellable) return;
@@ -144,6 +153,7 @@ export function calculateDesign(config, data) {
     bomMap,
     rules: data.rules,
     productBySku,
+    cuttingRules,
     config,
     addBom
   });
@@ -161,6 +171,7 @@ export function calculateDesign(config, data) {
     productsByType,
     productByType,
     productBySku,
+    cuttingRules,
     bom,
     total: bom.reduce((sum, item) => sum + item.lineTotal, 0),
     errors,
@@ -170,33 +181,93 @@ export function calculateDesign(config, data) {
 
 export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
   const hasBackWall = Boolean(config.walls?.back?.enabled);
-  return Object.entries(config.walls)
+  const standardWallPlans = Object.entries(config.walls)
     .filter(([, wall]) => wall.enabled)
-    .map(([id, wall]) => {
+    .map(([id]) => {
       const isSideWall = id === "left" || id === "right";
       const sourceLength = Math.max(
         1,
-        Number(isSideWall ? config.room?.depth : config.room?.width) || Number(wall.length || 0)
+        Number(isSideWall ? config.room?.depth : config.room?.width)
+        || Number(config.walls[id]?.length || 0)
       );
       const startOffset = hasBackWall && isSideWall
         ? cuttingRules.sideWallLengthAdjustmentMm
         : 0;
-      const length = Math.max(1, sourceLength - startOffset);
+      return {
+        id,
+        sourceLength,
+        startOffset,
+        endOffset: 0,
+        length: Math.max(1, sourceLength - startOffset)
+      };
+    });
+  let wallPlans = standardWallPlans;
+
+  if (config.layout === "U" && cuttingRules.supportsULayoutModes) {
+    wallPlans = cuttingRules.preservesExistingUWallGeometry
+      ? getJapaneseUWallPlans(
+        standardWallPlans,
+        config.uLayoutMode,
+        cuttingRules.sideWallLengthAdjustmentMm
+      )
+      : generateULayout({
+        mode: config.uLayoutMode,
+        room: config.room,
+        cornerOffset: config.cornerOffset
+      });
+  }
+
+  return wallPlans.map((plan, generationIndex) => {
+      const { id } = plan;
+      const wall = config.walls[id];
+      const sourceLength = plan.sourceLength;
+      const startOffset = plan.startOffset;
+      const endOffset = plan.endOffset || 0;
+      const centerOffset = Number(plan.centerOffset) || 0;
+      const length = plan.length;
       const recommendedBayCount = recommendBayCount(length, cuttingRules);
-      const bayCount = Math.max(recommendedBayCount, Number(wall.bayCount || recommendedBayCount));
+      const requestedBayCount = Math.max(1, Number(wall.bayCount || recommendedBayCount));
+      const bayCount = cuttingRules.supportsIndependentBayWidths
+        ? requestedBayCount
+        : Math.max(recommendedBayCount, requestedBayCount);
       const factoryInnerBayWidth = Math.max(1, getFactoryInnerBayWidth(length, bayCount, cuttingRules));
-      const lockedWidths = getLockedBayWidths(config.placements, id, bayCount, cuttingRules);
-      const lockedTotal = lockedWidths.reduce((sum, width) => sum + width, 0);
-      const unlockedCount = lockedWidths.filter((width) => !width).length;
       const fallbackWidth = length / bayCount;
-      const unlockedWidth = unlockedCount ? Math.max(1, (length - lockedTotal) / unlockedCount) : fallbackWidth;
-      const bayWidths = lockedWidths.map((width) => width || unlockedWidth);
+      const requestedBayWidths = Array.isArray(wall.bayWidths)
+        ? wall.bayWidths.slice(0, bayCount).map(Number)
+        : [];
+      const hasCustomBayWidths = requestedBayWidths.length === bayCount
+        && requestedBayWidths.every((width) => Number.isFinite(width) && width > 0);
+      const validationErrors = validateBayWidths({
+        wallId: id,
+        bayWidths: hasCustomBayWidths
+          ? requestedBayWidths
+          : Array.from({ length: bayCount }, () => fallbackWidth),
+        totalLength: length,
+        minBayWidth: cuttingRules.minBayWidthMm,
+        maxBayWidth: cuttingRules.maxBayWidthMm ?? cuttingRules.maxPostSpanMm
+      });
+      const canUseCustomBayWidths = hasCustomBayWidths && validationErrors.length === 0;
+      let bayWidths;
+      if (canUseCustomBayWidths) {
+        bayWidths = requestedBayWidths;
+      } else {
+        const lockedWidths = getLockedBayWidths(config.placements, id, bayCount, cuttingRules);
+        const lockedTotal = lockedWidths.reduce((sum, width) => sum + width, 0);
+        const unlockedCount = lockedWidths.filter((width) => !width).length;
+        const unlockedWidth = unlockedCount ? Math.max(1, (length - lockedTotal) / unlockedCount) : fallbackWidth;
+        bayWidths = lockedWidths.map((width) => width || unlockedWidth);
+      }
+      const averageBayWidth = bayWidths.reduce((sum, width) => sum + width, 0) / bayCount;
+      const usesVariableBayWidths = bayWidths.some((width) => Math.abs(width - averageBayWidth) > 0.01);
       const posts = Array.from({ length: bayCount + 1 }, (_, index) => ({
         index,
         x: bayWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
       }));
       const bays = Array.from({ length: bayCount }, (_, bayIndex) => {
         const measuredPostCenterDistance = Math.abs(posts[bayIndex + 1].x - posts[bayIndex].x);
+        const innerBayWidth = usesVariableBayWidths || canUseCustomBayWidths
+          ? Math.max(1, measuredPostCenterDistance - cuttingRules.postProfileWidthMm)
+          : factoryInnerBayWidth;
         return {
           bayIndex,
           leftPostIndex: bayIndex,
@@ -206,28 +277,177 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
           rawBayWidth: measuredPostCenterDistance,
           postCenterDistance: measuredPostCenterDistance,
           postProfileWidth: cuttingRules.postProfileWidthMm,
-          usableBayWidth: factoryInnerBayWidth,
-          innerBayWidth: factoryInnerBayWidth,
-          usableComponentWidth: factoryInnerBayWidth
+          usableBayWidth: innerBayWidth,
+          innerBayWidth,
+          usableComponentWidth: innerBayWidth
         };
       });
       return {
         id,
+        generationIndex,
+        generationMode: config.layout === "U" && cuttingRules.supportsULayoutModes
+          ? cuttingRules.preservesExistingUWallGeometry
+            ? normalizeJapaneseULayoutMode(config.uLayoutMode)
+            : config.uLayoutMode || "bottom-first"
+          : "standard",
         sourceLength,
         startOffset,
+        endOffset,
+        centerOffset,
+        reverseBayOrder: plan.reverseBayOrder === true,
+        backCornerBayIndex: plan.backCornerAtStart === true
+          ? 0
+          : plan.backCornerAtStart === false
+            ? bayCount - 1
+            : null,
+        openEndBayIndex: plan.backCornerAtStart === true
+          ? bayCount - 1
+          : plan.backCornerAtStart === false
+            ? 0
+            : null,
         length,
+        totalLength: length,
         bayCount,
-        bayWidth: unlockedWidth,
-        rawBayWidth: unlockedWidth,
-        postCenterDistance: unlockedWidth,
+        bayWidths,
+        requestedBayWidths,
+        usesCustomBayWidths: canUseCustomBayWidths,
+        validationErrors,
+        bayWidth: averageBayWidth,
+        rawBayWidth: averageBayWidth,
+        postCenterDistance: averageBayWidth,
         postProfileWidth: cuttingRules.postProfileWidthMm,
-        usableBayWidth: factoryInnerBayWidth,
-        innerBayWidth: factoryInnerBayWidth,
+        usableBayWidth: bays[0]?.innerBayWidth || factoryInnerBayWidth,
+        innerBayWidth: bays[0]?.innerBayWidth || factoryInnerBayWidth,
         postCount: bayCount + 1,
         posts,
         bays
       };
     });
+}
+
+function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) {
+  const normalizedMode = normalizeJapaneseULayoutMode(mode);
+  const planById = Object.fromEntries(wallPlans.map((plan) => [plan.id, plan]));
+  const offset = Math.max(0, Number(fixedOffset) || 0);
+
+  if (normalizedMode === "side-first") {
+    const left = planById.left;
+    const back = planById.back;
+    const right = planById.right;
+    const backEndOffset = Math.min(offset, Math.max(0, (back.sourceLength - 1) / 2));
+
+    return [
+      {
+        ...left,
+        startOffset: 0,
+        endOffset: 0,
+        centerOffset: 0,
+        reverseBayOrder: true,
+        backCornerAtStart: true,
+        length: left.sourceLength
+      },
+      {
+        ...right,
+        startOffset: 0,
+        endOffset: 0,
+        centerOffset: 0,
+        reverseBayOrder: false,
+        backCornerAtStart: true,
+        length: right.sourceLength
+      },
+      {
+        ...back,
+        startOffset: backEndOffset,
+        endOffset: backEndOffset,
+        centerOffset: 0,
+        length: Math.max(1, back.sourceLength - backEndOffset * 2)
+      }
+    ];
+  }
+
+  const orderIndex = new Map(["back", "left", "right"].map((wallId, index) => [wallId, index]));
+  return wallPlans.map((plan) => ({
+    ...plan,
+    centerOffset: plan.id === "back" ? 0 : plan.startOffset / 2,
+    reverseBayOrder: false,
+    backCornerAtStart: plan.id === "right"
+      ? true
+      : plan.id === "left"
+        ? false
+        : null
+  })).sort((a, b) => (
+    (orderIndex.get(a.id) ?? order.length) - (orderIndex.get(b.id) ?? order.length)
+  ));
+}
+
+function normalizeJapaneseULayoutMode(mode) {
+  return mode === "side-first" ? "side-first" : "back-first";
+}
+
+export function generateULayout({
+  mode = "bottom-first",
+  room,
+  cornerOffset = 300
+}) {
+  const roomWidth = Math.max(1, Number(room?.width) || 1);
+  const roomDepth = Math.max(1, Number(room?.depth) || 1);
+  const requestedOffset = Math.max(0, Number(cornerOffset) || 0);
+  const safeOffset = Math.min(requestedOffset, Math.max(0, roomDepth - 1), Math.max(0, roomWidth / 2 - 1));
+
+  if (mode === "side-first") {
+    return [
+      { id: "left", sourceLength: roomDepth, startOffset: 0, endOffset: 0, length: roomDepth },
+      {
+        id: "back",
+        sourceLength: roomWidth,
+        startOffset: safeOffset,
+        endOffset: safeOffset,
+        length: Math.max(1, roomWidth - safeOffset * 2)
+      },
+      { id: "right", sourceLength: roomDepth, startOffset: 0, endOffset: 0, length: roomDepth }
+    ];
+  }
+
+  return [
+    { id: "back", sourceLength: roomWidth, startOffset: 0, endOffset: 0, length: roomWidth },
+    {
+      id: "left",
+      sourceLength: roomDepth,
+      startOffset: safeOffset,
+      endOffset: 0,
+      length: Math.max(1, roomDepth - safeOffset)
+    },
+    {
+      id: "right",
+      sourceLength: roomDepth,
+      startOffset: safeOffset,
+      endOffset: 0,
+      length: Math.max(1, roomDepth - safeOffset)
+    }
+  ];
+}
+
+function validateBayWidths({
+  wallId,
+  bayWidths,
+  totalLength,
+  minBayWidth,
+  maxBayWidth
+}) {
+  const errors = [];
+  const total = bayWidths.reduce((sum, width) => sum + Number(width || 0), 0);
+  if (total > totalLength + 0.01) {
+    errors.push(`${labelWall(wallId)}当前跨距总和超过该墙面长度，请调整跨距或减少跨数。`);
+  }
+  bayWidths.forEach((width, index) => {
+    if (Number.isFinite(minBayWidth) && width < minBayWidth) {
+      errors.push(`${labelWall(wallId)}第 ${index + 1} 跨不能小于 ${minBayWidth}mm。`);
+    }
+    if (Number.isFinite(maxBayWidth) && width > maxBayWidth) {
+      errors.push(`${labelWall(wallId)}第 ${index + 1} 跨不能大于 ${maxBayWidth}mm。`);
+    }
+  });
+  return errors;
 }
 
 export function getFactoryInnerBayWidth(totalLength, bayCount, cuttingRules = defaultCuttingRules) {
@@ -274,10 +494,6 @@ export function getDefaultHeight(componentType, roomHeight = MAX_HEIGHT_MM, cutt
 
 export function getComponentIcon(product, componentType, cuttingRules = defaultCuttingRules) {
   return product?.icon || cuttingRules.defaultIconsByType[componentType] || "";
-}
-
-function ruleMatchesLed(rule, placement) {
-  return true;
 }
 
 function ruleMatchesParent(rule, component, componentType) {

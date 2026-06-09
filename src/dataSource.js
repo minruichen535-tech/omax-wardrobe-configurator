@@ -29,7 +29,7 @@ export const productFields = [
   "heightLocked"
 ];
 
-export const ruleFields = ["parentSku", "childSku", "quantity", "note"];
+export const ruleFields = ["parentSku", "childSku", "quantity", "condition", "note"];
 
 export async function loadWorkbookData(series) {
   const productsPath = series.productsPath || series.productPath;
@@ -47,10 +47,28 @@ export async function loadWorkbookData(series) {
     rulesResponse.arrayBuffer()
   ]);
 
-  const products = parseProductsWorkbook(productsBuffer);
-  const rules = parseRulesWorkbook(rulesBuffer);
+  const products = applySeriesProductNormalization(parseProductsWorkbook(productsBuffer), series);
+  const rules = applySeriesRuleNormalization(parseRulesWorkbook(rulesBuffer), series);
   const settings = parseSettingsWorkbook(productsBuffer);
-  return { products, rules, settings, source: "xlsx", series };
+  const cuttingRules = parseFormulaSheet(productsBuffer, ["CuttingRules"], ["sku", "componentType"]);
+  const layoutRules = parseFormulaSheet(productsBuffer, ["LayoutRules"], ["ruleKey"]);
+  const projectConfig = parseKeyValueSheet(productsBuffer, ["ProjectConfig"], ["configKey", "key"]);
+  return {
+    products,
+    rules,
+    settings,
+    cuttingRules,
+    layoutRules,
+    projectConfig,
+    workbookStats: {
+      productCount: products.length,
+      ruleCount: rules.length,
+      cuttingRuleCount: cuttingRules.length,
+      settingCount: settings.__rawCount || 0
+    },
+    source: "xlsx",
+    series
+  };
 }
 
 export async function parseWorkbook(fileOrBuffer, series = null) {
@@ -61,14 +79,14 @@ export async function parseWorkbook(fileOrBuffer, series = null) {
   return { products, rules, source: "localStorage", series };
 }
 
-export async function parseProductFile(fileOrBuffer) {
+export async function parseProductFile(fileOrBuffer, series = null) {
   const buffer = fileOrBuffer instanceof ArrayBuffer ? fileOrBuffer : await fileOrBuffer.arrayBuffer();
-  return parseProductsWorkbook(buffer);
+  return applySeriesProductNormalization(parseProductsWorkbook(buffer), series);
 }
 
-export async function parseRulesFile(fileOrBuffer) {
+export async function parseRulesFile(fileOrBuffer, series = null) {
   const buffer = fileOrBuffer instanceof ArrayBuffer ? fileOrBuffer : await fileOrBuffer.arrayBuffer();
-  return parseRulesWorkbook(buffer);
+  return applySeriesRuleNormalization(parseRulesWorkbook(buffer), series);
 }
 
 export function saveWorkbookOverride(seriesId, data) {
@@ -135,7 +153,10 @@ function parseSettingsWorkbook(buffer) {
     const shelfDepthOptions = splitOptions(rawSettings.shelfDepthOptions).map(Number).filter((value) => Number.isFinite(value) && value > 0);
     const defaultShelfDepth = Number(rawSettings.defaultShelfDepth);
     const fixedPostWallOffset = Number(rawSettings.fixedPostWallOffset);
+    const connectionModeOptions = splitOptions(rawSettings.connectionModeOptions ?? rawSettings.connectionMode);
+    const requestedConnectionMode = normalizeConnectionMode(rawSettings.defaultConnectionMode);
     return {
+      ...rawSettings,
       defaultWallOffset: Number.isFinite(defaultWallOffset) && defaultWallOffset > 0 ? defaultWallOffset : fallback.defaultWallOffset,
       wallOffsetOptions: options.length ? options : fallback.wallOffsetOptions,
       roomHeightFixed: Number.isFinite(roomHeightFixed) && roomHeightFixed > 0 ? roomHeightFixed : fallback.roomHeightFixed,
@@ -144,7 +165,12 @@ function parseSettingsWorkbook(buffer) {
       hideRoomHeightInput: rawSettings.hideRoomHeightInput === undefined ? fallback.hideRoomHeightInput : parseBool(rawSettings.hideRoomHeightInput),
       shelfDepthOptions: shelfDepthOptions.length ? shelfDepthOptions : fallback.shelfDepthOptions,
       defaultShelfDepth: Number.isFinite(defaultShelfDepth) && defaultShelfDepth > 0 ? defaultShelfDepth : fallback.defaultShelfDepth,
-      fixedPostWallOffset: Number.isFinite(fixedPostWallOffset) && fixedPostWallOffset > 0 ? fixedPostWallOffset : fallback.fixedPostWallOffset
+      fixedPostWallOffset: Number.isFinite(fixedPostWallOffset) && fixedPostWallOffset > 0 ? fixedPostWallOffset : fallback.fixedPostWallOffset,
+      connectionModeOptions,
+      defaultConnectionMode: connectionModeOptions.includes(requestedConnectionMode)
+        ? requestedConnectionMode
+        : connectionModeOptions[0] || requestedConnectionMode || "wall",
+      __rawCount: Object.keys(rawSettings).length
     };
   } catch (error) {
     console.warn("Settings Sheet read failed, using fallback.", error);
@@ -184,15 +210,23 @@ function normalizeProduct(row) {
     type: String(row.type ?? row["绫诲瀷"] ?? "").trim(),
     category: String(row.category ?? ""),
     material: String(row.material ?? row["鏉愯川"] ?? "").trim(),
-    colorOptions: splitOptions(row.colorOptions ?? row["棰滆壊"]),
+    colorOptions: splitOptions(row.colorOptions ?? row.color ?? row["棰滆壊"]),
+    widthRule: String(row.widthRule ?? row.WidthRule ?? "").trim(),
+    widthOptions: splitOptions(row.widthOptions).map(Number).filter((value) => Number.isFinite(value) && value > 0),
+    depthRule: String(row.depthRule ?? row.DepthRule ?? "").trim(),
     width: numberOrBlank(row.width),
     depth: numberOrBlank(row.depth),
     height: row.height === "" || row.height == null ? "" : String(row.height),
-    sizeRule: String(row.sizeRule ?? row["灏哄"] ?? ""),
+    sizeRule: String(
+      row.sizeRule
+      ?? [row.WidthRule, row.DepthRule].filter(Boolean).join(" ")
+      ?? row["灏哄"]
+      ?? ""
+    ),
     unitPrice: numberOrZero(row.unitPrice ?? row["鍗曚环"]),
     unit: String(row.unit || "件"),
     sellable: parseBool(row.sellable ?? row["鏄惁鍞崠"]),
-    image: String(row.image ?? ""),
+    image: String(row.image ?? row.imagePath ?? ""),
     icon: String(row.icon ?? ""),
     modelPath: String(row.modelPath ?? row.glbAssetPath ?? ""),
     glbAssetPath: String(row.glbAssetPath ?? row.modelPath ?? ""),
@@ -202,9 +236,44 @@ function normalizeProduct(row) {
     resizeMode: String(row.resizeMode ?? "").trim(),
     cuttable: parseBool(row.cuttable ?? row["鏄惁鍓昂"]),
     description: String(row.description ?? ""),
+    materialTexture: String(row.materialTexture ?? ""),
     autoGenerated: parseBool(row.autoGenerated),
     heightLocked: parseBool(row.heightLocked)
   };
+}
+
+function parseFormulaSheet(buffer, sheetNames, keyFields) {
+  try {
+    const workbook = XLSX.read(buffer, { type: "array" });
+    return rowsFromWorkbook(workbook, sheetNames)
+      .map((row) => {
+        const key = keyFields.map((field) => row[field]).find((value) => String(value ?? "").trim());
+        return {
+          ...row,
+          key: String(key ?? "").trim(),
+          formula: String(row.formula ?? "").trim()
+        };
+      })
+      .filter((row) => row.key && row.formula);
+  } catch (error) {
+    console.warn(`${sheetNames[0]} Sheet read failed.`, error);
+    return [];
+  }
+}
+
+function parseKeyValueSheet(buffer, sheetNames, keyFields) {
+  try {
+    const workbook = XLSX.read(buffer, { type: "array" });
+    return Object.fromEntries(rowsFromWorkbook(workbook, sheetNames)
+      .map((row) => {
+        const key = keyFields.map((field) => row[field]).find((value) => String(value ?? "").trim());
+        return [String(key ?? "").trim(), numberOrString(row.value)];
+      })
+      .filter(([key]) => key));
+  } catch (error) {
+    console.warn(`${sheetNames[0]} Sheet read failed.`, error);
+    return {};
+  }
 }
 
 function normalizeRule(row) {
@@ -216,8 +285,19 @@ function normalizeRule(row) {
     configType: parentSku,
     requiredSku: childSku,
     quantity: numberOrZero(row.quantity ?? row["数量"]),
+    condition: String(row.condition ?? "").trim(),
     note: String(row.note ?? row["备注"] ?? "")
   };
+}
+
+function applySeriesProductNormalization(products, series) {
+  if (typeof series?.normalizeProduct !== "function") return products;
+  return products.map((product) => series.normalizeProduct(product));
+}
+
+function applySeriesRuleNormalization(rules, series) {
+  if (typeof series?.normalizeRule !== "function") return rules;
+  return rules.map((rule) => series.normalizeRule(rule));
 }
 
 function serializeProduct(product) {
@@ -239,7 +319,7 @@ function parseBool(value) {
 
 function splitOptions(value) {
   return String(value || "")
-    .split(/[|,，、；;]/)
+    .split(/[|,，、；;\/\\]/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -253,4 +333,14 @@ function numberOrBlank(value) {
   if (value === "" || value == null) return "";
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : "";
+}
+
+function numberOrString(value) {
+  const parsed = Number(value);
+  return value !== "" && Number.isFinite(parsed) ? parsed : String(value ?? "").trim();
+}
+
+function normalizeConnectionMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "celling" ? "ceiling" : normalized;
 }

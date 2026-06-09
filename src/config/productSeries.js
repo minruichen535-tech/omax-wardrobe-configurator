@@ -1,6 +1,7 @@
 import { getSeriesConfig } from "../series/index.js";
 
 const japaneseClosetConfig = getSeriesConfig("japanese-closet");
+const aluminumPostWardrobeConfig = getSeriesConfig("aluminum-post-wardrobe");
 
 export const productSeries = {
   "open-closet": {
@@ -38,6 +39,12 @@ export const productSeries = {
     productPath: japaneseClosetConfig.productsPath,
     imageRoot: japaneseClosetConfig.imagePath,
     modelRoot: japaneseClosetConfig.modelPath
+  },
+  "aluminum-post-wardrobe": {
+    ...aluminumPostWardrobeConfig,
+    productPath: aluminumPostWardrobeConfig.productsPath,
+    imageRoot: aluminumPostWardrobeConfig.imagePath,
+    modelRoot: aluminumPostWardrobeConfig.modelPath
   }
 };
 

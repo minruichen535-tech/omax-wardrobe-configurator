@@ -93,8 +93,8 @@ function ClientApp({ data, isClientMode = false }) {
   const [brandInfo, setBrandInfo] = useState(null);
   const [isExportingQuote, setIsExportingQuote] = useState(false);
   const cuttingRules = useMemo(
-    () => getCuttingRules(data.series.seriesId) || getCuttingRules("japanese-closet"),
-    [data.series.seriesId]
+    () => getCuttingRules(data.series.seriesId, data) || getCuttingRules("japanese-closet"),
+    [data]
   );
   const displayRules = useMemo(
     () => getDisplayRules(data.series.seriesId) || getDisplayRules("japanese-closet"),
@@ -108,17 +108,35 @@ function ClientApp({ data, isClientMode = false }) {
   const selectedPlacement = design.placements.find((placement) => placement.id === config.selectedPlacementId);
   const shelfDepthOptions = data.settings?.shelfDepthOptions || [300, 450, 500];
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
+  const connectionModeOptions = data.settings?.connectionModeOptions || [];
+  const supportsULayoutModes = cuttingRules.supportsULayoutModes === true;
+  const usesIconULayoutControl = cuttingRules.uLayoutModeControl === "icons";
+  const supportsIndependentBayWidths = cuttingRules.supportsIndependentBayWidths === true;
+  const japaneseULayoutMode = config.uLayoutMode === "side-first" ? "side-first" : "back-first";
+  const cornerOffsetOptions = cuttingRules.cornerOffsetOptions || [300, 400, 500];
   const hideRoomHeightInput = data.settings?.hideRoomHeightInput === true;
 
   useEffect(() => {
-    const fixedPostWallOffset = Number(data.settings?.fixedPostWallOffset) || 250;
+    const fixedPostWallOffset = Number(data.settings?.fixedPostWallOffset)
+      || Number(data.settings?.defaultWallOffset)
+      || 250;
     const defaultShelfDepth = Number(data.settings?.defaultShelfDepth) || 450;
     setConfig((current) => ({
       ...current,
       wallOffset: fixedPostWallOffset,
-      shelfDepth: current.shelfDepth || defaultShelfDepth
+      shelfDepth: current.shelfDepth || defaultShelfDepth,
+      connectionMode: current.connectionMode
+        || data.settings?.defaultConnectionMode
+        || connectionModeOptions[0]
+        || "wall"
     }));
-  }, [data.settings?.fixedPostWallOffset, data.settings?.defaultShelfDepth]);
+  }, [
+    data.settings?.fixedPostWallOffset,
+    data.settings?.defaultWallOffset,
+    data.settings?.defaultShelfDepth,
+    data.settings?.defaultConnectionMode,
+    connectionModeOptions.join("|")
+  ]);
 
   useEffect(() => {
     const roomHeightFixed = Number(data.settings?.roomHeightFixed) || 2700;
@@ -168,9 +186,33 @@ function ClientApp({ data, isClientMode = false }) {
     ...current,
     walls: {
       ...current.walls,
-      [wallId]: { ...current.walls[wallId], bayCount: Number(bayCount) }
+      [wallId]: {
+        ...current.walls[wallId],
+        bayCount: Number(bayCount),
+        bayWidths: []
+      }
     }
   }));
+  const setWallBayWidth = (wallId, bayIndex, value) => {
+    const width = parseIntegerInput(value);
+    if (width == null) return;
+    const designWall = design.activeWalls.find((wall) => wall.id === wallId);
+    setConfig((current) => {
+      const currentWall = current.walls[wallId];
+      const existingWidths = Array.isArray(currentWall.bayWidths)
+        && currentWall.bayWidths.length === currentWall.bayCount
+        ? [...currentWall.bayWidths]
+        : designWall?.bays.map((bay) => Math.round(bay.width)) || [];
+      existingWidths[bayIndex] = width;
+      return {
+        ...current,
+        walls: {
+          ...current.walls,
+          [wallId]: { ...currentWall, bayWidths: existingWidths }
+        }
+      };
+    });
+  };
 
   const addPlacement = (wallId, bayIndex, componentType) => {
     const product = design.productByType[componentType];
@@ -245,6 +287,15 @@ function ClientApp({ data, isClientMode = false }) {
             value: String(config.shelfDepth || data.settings?.defaultShelfDepth || shelfDepthOptions[0]),
             options: shelfDepthOptions.map((depth) => ({ value: String(depth), label: `${depth}mm` })),
             onChange: (shelfDepth) => updateConfig({ shelfDepth: Number(shelfDepth) })
+          }),
+          connectionModeOptions.length > 0 && h(Segmented, {
+            label: "连接方式",
+            value: config.connectionMode || data.settings?.defaultConnectionMode || connectionModeOptions[0],
+            options: connectionModeOptions.map((mode) => ({
+              value: mode,
+              label: mode === "ceiling" ? "顶装" : "墙装"
+            })),
+            onChange: (connectionMode) => updateConfig({ connectionMode })
           })
         ),
         h(StepBlock, { icon: MapPinned, title: "位置选择" },
@@ -258,20 +309,65 @@ function ClientApp({ data, isClientMode = false }) {
               { value: "U", label: "U 型" }
             ],
             onChange: setLayout
-          })
+          }),
+          supportsULayoutModes && config.layout === "U" && h("div", { className: "u-layout-options" },
+            usesIconULayoutControl
+              ? h(ULayoutModeSelector, {
+                value: japaneseULayoutMode,
+                onChange: (uLayoutMode) => updateConfig({ uLayoutMode })
+              })
+              : h(Segmented, {
+                label: "U型排布方式",
+                value: config.uLayoutMode || "bottom-first",
+                options: [
+                  { value: "bottom-first", label: "底墙优先" },
+                  { value: "side-first", label: "侧墙优先" }
+                ],
+                onChange: (uLayoutMode) => updateConfig({ uLayoutMode })
+              }),
+            !usesIconULayoutControl && h("p", { className: "u-layout-description" },
+              config.uLayoutMode === "side-first"
+                ? "左墙 → 底墙 → 右墙，适合左右两侧作为主收纳区。"
+                : "底墙 → 左墙 → 右墙，适合底墙作为主收纳或展示面。"
+            ),
+            !cuttingRules.preservesExistingUWallGeometry && h(Segmented, {
+              label: "转角预留",
+              value: String(config.cornerOffset || cornerOffsetOptions[0]),
+              options: cornerOffsetOptions.map((offset) => ({
+                value: String(offset),
+                label: `${offset}mm`
+              })),
+              onChange: (cornerOffset) => updateConfig({ cornerOffset: Number(cornerOffset) })
+            })
+          )
         ),
         h(StepBlock, { icon: Ruler, title: "跨数选择" },
-          design.activeWalls.map((wall) => h("div", { className: "wall-control", key: wall.id },
-            h("div", null,
-              h("strong", null, labelWall(wall.id)),
-              h("span", null, `${Math.round(wall.length)}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
+          design.activeWalls.map((wall) => h("div", { className: "wall-bay-config", key: wall.id },
+            h("div", { className: "wall-control" },
+              h("div", null,
+                h("strong", null, config.layout === "U" && wall.id === "back" ? "底墙" : labelWall(wall.id)),
+                h("span", null, `${Math.round(wall.length)}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
+              ),
+              h("input", {
+                type: "number",
+                min: 1,
+                value: config.walls[wall.id].bayCount,
+                onChange: (event) => setWallBayCount(wall.id, event.target.value)
+              })
             ),
-            h("input", {
-              type: "number",
-              min: recommendBayCount(wall.length, cuttingRules),
-              value: config.walls[wall.id].bayCount,
-              onChange: (event) => setWallBayCount(wall.id, event.target.value)
-            })
+            supportsIndependentBayWidths && config.layout === "U" && h("div", { className: "bay-width-editor" },
+              wall.bays.map((bay) => h("label", { key: bay.bayIndex },
+                h("span", null, `第${bay.bayIndex + 1}跨`),
+                h("input", {
+                  type: "number",
+                  min: cuttingRules.minBayWidthMm,
+                  max: cuttingRules.maxBayWidthMm,
+                  step: 1,
+                  value: config.walls[wall.id].bayWidths?.[bay.bayIndex] ?? Math.round(bay.width),
+                  onChange: (event) => setWallBayWidth(wall.id, bay.bayIndex, event.target.value)
+                })
+              ))
+            )
           )),
           design.errors.map((message) => h("p", { className: "error-text", key: message }, message))
         ),
@@ -286,6 +382,23 @@ function ClientApp({ data, isClientMode = false }) {
                 key: type,
                 "data-component-type": type,
                 draggable: true,
+                role: data.series.seriesId === "aluminum-post-wardrobe" ? "button" : undefined,
+                tabIndex: data.series.seriesId === "aluminum-post-wardrobe" ? 0 : undefined,
+                title: data.series.seriesId === "aluminum-post-wardrobe" ? "点击或拖入场景添加" : undefined,
+                onClick: data.series.seriesId === "aluminum-post-wardrobe"
+                  ? () => {
+                    const wall = design.activeWalls[0];
+                    if (wall) addPlacement(wall.id, 0, type);
+                  }
+                  : undefined,
+                onKeyDown: data.series.seriesId === "aluminum-post-wardrobe"
+                  ? (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    const wall = design.activeWalls[0];
+                    if (wall) addPlacement(wall.id, 0, type);
+                  }
+                  : undefined,
                 onDragStart: (event) => event.dataTransfer.setData("text/plain", type)
               },
                 h(ComponentIcon, {
@@ -1172,12 +1285,12 @@ function AdminApp({ data, setData }) {
   };
 
   const uploadProducts = async (file) => {
-    const products = await parseProductFile(file);
+    const products = await parseProductFile(file, data.series);
     persist({ ...data, products, source: "localStorage" });
   };
 
   const uploadRules = async (file) => {
-    const rules = await parseRulesFile(file);
+    const rules = await parseRulesFile(file, data.series);
     persist({ ...data, rules, source: "localStorage" });
   };
 
@@ -1325,6 +1438,42 @@ function Segmented({ label, value, options, onChange }) {
     h("span", null, label),
     h("div", { className: "segments" },
       options.map((option) => h("button", { key: option.value, className: value === option.value ? "active" : "", type: "button", onClick: () => onChange(option.value) }, option.label))
+    )
+  );
+}
+
+function ULayoutModeSelector({ value, onChange }) {
+  const options = [
+    {
+      value: "back-first",
+      label: "后墙优先"
+    },
+    {
+      value: "side-first",
+      label: "侧墙优先"
+    }
+  ];
+
+  return h("div", { className: "choice-group" },
+    h("span", null, "U型排布方式"),
+    h("div", { className: "u-layout-mode-buttons" },
+      options.map((option) => h("button", {
+        key: option.value,
+        type: "button",
+        className: value === option.value ? "active" : "",
+        "aria-pressed": value === option.value,
+        onClick: () => onChange(option.value)
+      },
+        h("span", {
+          className: `u-layout-diagram ${option.value}`,
+          "aria-hidden": "true"
+        },
+          h("i", { className: "back" }),
+          h("i", { className: "left" }),
+          h("i", { className: "right" })
+        ),
+        h("strong", null, option.label)
+      ))
     )
   );
 }

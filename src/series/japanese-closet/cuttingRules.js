@@ -3,6 +3,9 @@ export const japaneseClosetCuttingRules = {
   minHeightMm: 1800,
   maxHeightMm: 3500,
   sideWallLengthAdjustmentMm: 510,
+  supportsULayoutModes: true,
+  preservesExistingUWallGeometry: true,
+  uLayoutModeControl: "icons",
   postProfileWidthMm: 25,
   componentTypes: [
     "woodTop",
