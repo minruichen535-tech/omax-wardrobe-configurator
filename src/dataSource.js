@@ -32,13 +32,15 @@ export const productFields = [
 export const ruleFields = ["parentSku", "childSku", "quantity", "note"];
 
 export async function loadWorkbookData(series) {
+  const productsPath = series.productsPath || series.productPath;
+  const rulesPath = series.rulesPath;
   const [productsResponse, rulesResponse] = await Promise.all([
-    fetch(`/${series.productPath}?v=${Date.now()}`, { cache: "no-store" }),
-    fetch(`/${series.rulesPath}?v=${Date.now()}`, { cache: "no-store" })
+    fetch(`/${productsPath}?v=${Date.now()}`, { cache: "no-store" }),
+    fetch(`/${rulesPath}?v=${Date.now()}`, { cache: "no-store" })
   ]);
 
-  if (!productsResponse.ok) throw new Error(`鏃犳硶璇诲彇 /${series.productPath}`);
-  if (!rulesResponse.ok) throw new Error(`鏃犳硶璇诲彇 /${series.rulesPath}`);
+  if (!productsResponse.ok) throw new Error(`鏃犳硶璇诲彇 /${productsPath}`);
+  if (!rulesResponse.ok) throw new Error(`鏃犳硶璇诲彇 /${rulesPath}`);
 
   const [productsBuffer, rulesBuffer] = await Promise.all([
     productsResponse.arrayBuffer(),
@@ -252,4 +254,3 @@ function numberOrBlank(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : "";
 }
-

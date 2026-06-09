@@ -1,57 +1,17 @@
-const MAX_POST_SPAN_MM = 1000;
-const MIN_HEIGHT_MM = 1800;
-const MAX_HEIGHT_MM = 3500;
+import { getBomCalculator, getCuttingRules } from "./series/index.js";
+
+const DEFAULT_SERIES_ID = "japanese-closet";
+const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
+const MAX_HEIGHT_MM = defaultCuttingRules.maxHeightMm;
 const MM_PER_METER = 1000;
-const SIDE_WALL_LENGTH_ADJUSTMENT_MM = 510;
-export const POST_PROFILE_WIDTH_MM = 25;
+export const POST_PROFILE_WIDTH_MM = defaultCuttingRules.postProfileWidthMm;
 
-export const componentTypes = [
-  "woodTop",
-  "woodShelf",
-  "singleRail",
-  "doubleRail",
-  "cabinet",
-  "jewelryBox",
-  "trouserRack"
-];
-
-export const fixedModuleTypes = ["jewelryBox", "trouserRack"];
-export const fixedModuleWidths = [500, 600, 700, 800, 900];
-const pairMeasuredBracketSkus = new Set([
-  "JP-TOP-BRACKET",
-  "JP-SHELF-BRACKET",
-  "JP-CABINET-BRACKET"
-]);
-
-export const defaultHeightByType = {
-  woodTop: 2400,
-  woodShelf: 1200,
-  singleRail: 1600,
-  doubleRail: 1500,
-  cabinet: 300,
-  jewelryBox: 900,
-  trouserRack: 900
-};
-
-export const componentFallbackNames = {
-  woodTop: "木顶板",
-  woodShelf: "木层板",
-  singleRail: "挂衣杆",
-  doubleRail: "挂衣杆",
-  cabinet: "柜子",
-  jewelryBox: "首饰盒",
-  trouserRack: "裤架"
-};
-
-export const defaultIconsByType = {
-  woodTop: "images/icons/wood-top.svg",
-  woodShelf: "images/icons/wood-shelf.svg",
-  singleRail: "images/icons/single-rail.svg",
-  doubleRail: "images/icons/double-rail.svg",
-  cabinet: "images/icons/cabinet-single.svg",
-  jewelryBox: "images/icons/jewelry-box.svg",
-  trouserRack: "images/icons/trouser-rack.svg"
-};
+export const componentTypes = defaultCuttingRules.componentTypes;
+export const fixedModuleTypes = defaultCuttingRules.fixedModuleTypes;
+export const fixedModuleWidths = defaultCuttingRules.fixedModuleWidths;
+export const defaultHeightByType = defaultCuttingRules.defaultHeightByType;
+export const componentFallbackNames = defaultCuttingRules.componentFallbackNames;
+export const defaultIconsByType = defaultCuttingRules.defaultIconsByType;
 
 export function createInitialConfig() {
   const room = { width: 3600, depth: 2800, height: 2700 };
@@ -96,10 +56,13 @@ export function syncWallLengthsWithRoom(config, roomPatch) {
 }
 
 export function calculateDesign(config, data) {
+  const seriesId = data?.series?.seriesId || DEFAULT_SERIES_ID;
+  const cuttingRules = getCuttingRules(seriesId) || defaultCuttingRules;
+  const bomCalculator = getBomCalculator(seriesId) || getBomCalculator(DEFAULT_SERIES_ID);
   const room = clampRoom({
     ...config.room,
-    height: getFixedRoomHeight(data?.settings, config.room?.height)
-  });
+    height: getFixedRoomHeight(data?.settings, config.room?.height, cuttingRules)
+  }, cuttingRules);
   const postHeight = getPostHeight(config, data?.settings);
   const productBySku = Object.fromEntries(data.products.map((product) => [product.sku, product]));
   const productsByType = data.products.reduce((map, product) => {
@@ -108,16 +71,21 @@ export function calculateDesign(config, data) {
     return map;
   }, {});
   const productByType = Object.fromEntries(Object.entries(productsByType).map(([type, products]) => [type, products[0]]));
-  const activeWalls = getActiveWalls({ ...config, room });
-  const rawPlacements = withAutoWoodTopPlacements(config.placements, activeWalls, postHeight, productByType.woodTop);
+  const activeWalls = getActiveWalls({ ...config, room }, cuttingRules);
+  const rawPlacements = bomCalculator.createAutoPlacements({
+    rawPlacements: config.placements,
+    activeWalls,
+    postHeight,
+    productByType
+  });
   const placements = normalizePlacements(rawPlacements, activeWalls, room.height)
-    .map((placement) => addPlacementDimensions(placement, activeWalls));
+    .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules));
   const errors = [];
   const warnings = [];
 
   activeWalls.forEach((wall) => {
-    if (wall.bayWidth > MAX_POST_SPAN_MM) {
-      errors.push(`${labelWall(wall.id)}单跨宽度不能超过 1000mm，请增加跨数。`);
+    if (wall.bayWidth > cuttingRules.maxPostSpanMm) {
+      errors.push(`${labelWall(wall.id)}单跨宽度不能超过 ${cuttingRules.maxPostSpanMm}mm，请增加跨数。`);
     }
   });
 
@@ -128,43 +96,26 @@ export function calculateDesign(config, data) {
   });
 
   const bomMap = new Map();
-  const cornerBracket = productBySku["JP-CORNER-BRACKET"];
-  const cornerBracketQuantity = activeWalls.reduce(
-    (quantity, wall) => quantity + (wall.length <= 3000 ? 2 : 4),
-    0
-  );
-  if (cornerBracket?.sellable) {
-    const cornerBracketBomProduct = withSelectedDepthSizeRule(cornerBracket, config.shelfDepth);
-    addBom(bomMap, cornerBracketBomProduct, cornerBracketQuantity, chooseColor(cornerBracket, config));
-  }
-  const basePostProduct = productBySku["JP-POST"] || productByType.post;
-  const postSku = postHeight === 2000
-    ? "JP-POST-2000"
-    : postHeight === 2400
-      ? "JP-POST-2400"
-      : "JP-POST";
-  const postProduct = productBySku[postSku] || basePostProduct;
-  const postQuantity = activeWalls.reduce((sum, wall) => sum + wall.postCount, 0);
-  if (postProduct?.sellable) {
-    const postBomProduct = {
-      ...postProduct,
-      sizeRule: `${postHeight}mm`
-    };
-    addBom(bomMap, postBomProduct, postQuantity, chooseColor(postProduct, config));
-  }
-
-  data.rules
-    .filter((rule) => ruleMatchesParent(rule, basePostProduct, "post"))
-    .forEach((rule) => {
-      const required = productBySku[rule.childSku || rule.requiredSku];
-      if (!required?.sellable) return;
-      addBom(bomMap, required, rule.quantity * postQuantity, chooseColor(required, config), rule.note);
-    });
+  bomCalculator.addSystemBom({
+    activeWalls,
+    postHeight,
+    productBySku,
+    productByType,
+    rules: data.rules,
+    config,
+    bomMap,
+    addBom
+  });
 
   placements.forEach((placement) => {
     const component = productByType[placement.componentType];
     if (component?.sellable) {
-      addBom(bomMap, component, placement.quantity, chooseColor(component, config));
+      addBom(
+        bomMap,
+        component,
+        placement.quantity,
+        bomCalculator.chooseColor(component, config)
+      );
     }
 
     data.rules
@@ -173,45 +124,29 @@ export function calculateDesign(config, data) {
       .forEach((rule) => {
         const required = productBySku[rule.childSku || rule.requiredSku];
         if (!required?.sellable) return;
-        const rawQuantity = rule.quantity * placement.quantity;
-        const bomQuantity = pairMeasuredBracketSkus.has(required.sku)
-          ? rawQuantity / 2
-          : rawQuantity;
-        const groupedBomProduct = required.sku === "JP-SHELF-BRACKET" && rule.note === "柜体用"
-          ? { ...required, bomGroup: "柜体系统" }
-          : required;
-        const unitAdjustedProduct = pairMeasuredBracketSkus.has(required.sku)
-          ? { ...groupedBomProduct, unit: "对" }
-          : groupedBomProduct;
-        const bomProduct = withSelectedDepthSizeRule(unitAdjustedProduct, config.shelfDepth);
-        addBom(bomMap, bomProduct, bomQuantity, chooseColor(required, config), rule.note);
+        const bomItem = bomCalculator.getPlacementRuleItem({
+          required,
+          rule,
+          placement,
+          config
+        });
+        addBom(
+          bomMap,
+          bomItem.product,
+          bomItem.quantity,
+          bomItem.color,
+          bomItem.note
+        );
       });
   });
 
-  const nestedFastenerParentSkus = new Set([
-    "JP-TOP-BRACKET",
-    "JP-MIDDLE-BRACKET",
-    "JP-CABINET-BRACKET",
-    "JP-HORIZONTAL-RAIL",
-    "JP-CORNER-BRACKET"
-  ]);
-  Array.from(bomMap.values())
-    .filter((item) => nestedFastenerParentSkus.has(item.sku))
-    .forEach((parentItem) => {
-      data.rules
-        .filter((rule) => rule.parentSku === parentItem.sku)
-        .forEach((rule) => {
-          const required = productBySku[rule.childSku || rule.requiredSku];
-          if (!required?.sellable) return;
-          addBom(
-            bomMap,
-            required,
-            rule.quantity * parentItem.quantity,
-            chooseColor(required, config),
-            rule.note
-          );
-        });
-    });
+  bomCalculator.expandNestedRules({
+    bomMap,
+    rules: data.rules,
+    productBySku,
+    config,
+    addBom
+  });
 
   const bom = Array.from(bomMap.values()).map((item) => ({
     ...item,
@@ -233,7 +168,7 @@ export function calculateDesign(config, data) {
   };
 }
 
-export function getActiveWalls(config) {
+export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
   const hasBackWall = Boolean(config.walls?.back?.enabled);
   return Object.entries(config.walls)
     .filter(([, wall]) => wall.enabled)
@@ -243,11 +178,14 @@ export function getActiveWalls(config) {
         1,
         Number(isSideWall ? config.room?.depth : config.room?.width) || Number(wall.length || 0)
       );
-      const startOffset = hasBackWall && isSideWall ? SIDE_WALL_LENGTH_ADJUSTMENT_MM : 0;
+      const startOffset = hasBackWall && isSideWall
+        ? cuttingRules.sideWallLengthAdjustmentMm
+        : 0;
       const length = Math.max(1, sourceLength - startOffset);
-      const bayCount = Math.max(recommendBayCount(length), Number(wall.bayCount || recommendBayCount(length)));
-      const factoryInnerBayWidth = Math.max(1, getFactoryInnerBayWidth(length, bayCount));
-      const lockedWidths = getLockedBayWidths(config.placements, id, bayCount);
+      const recommendedBayCount = recommendBayCount(length, cuttingRules);
+      const bayCount = Math.max(recommendedBayCount, Number(wall.bayCount || recommendedBayCount));
+      const factoryInnerBayWidth = Math.max(1, getFactoryInnerBayWidth(length, bayCount, cuttingRules));
+      const lockedWidths = getLockedBayWidths(config.placements, id, bayCount, cuttingRules);
       const lockedTotal = lockedWidths.reduce((sum, width) => sum + width, 0);
       const unlockedCount = lockedWidths.filter((width) => !width).length;
       const fallbackWidth = length / bayCount;
@@ -267,7 +205,7 @@ export function getActiveWalls(config) {
           width: measuredPostCenterDistance,
           rawBayWidth: measuredPostCenterDistance,
           postCenterDistance: measuredPostCenterDistance,
-          postProfileWidth: POST_PROFILE_WIDTH_MM,
+          postProfileWidth: cuttingRules.postProfileWidthMm,
           usableBayWidth: factoryInnerBayWidth,
           innerBayWidth: factoryInnerBayWidth,
           usableComponentWidth: factoryInnerBayWidth
@@ -282,7 +220,7 @@ export function getActiveWalls(config) {
         bayWidth: unlockedWidth,
         rawBayWidth: unlockedWidth,
         postCenterDistance: unlockedWidth,
-        postProfileWidth: POST_PROFILE_WIDTH_MM,
+        postProfileWidth: cuttingRules.postProfileWidthMm,
         usableBayWidth: factoryInnerBayWidth,
         innerBayWidth: factoryInnerBayWidth,
         postCount: bayCount + 1,
@@ -292,26 +230,26 @@ export function getActiveWalls(config) {
     });
 }
 
-export function getFactoryInnerBayWidth(totalLength, bayCount) {
-  const length = Number(totalLength);
-  const count = Number(bayCount);
-  if (!Number.isFinite(length) || !Number.isFinite(count) || count <= 0) return 0;
-  return Math.max(0, (length - (count + 1) * POST_PROFILE_WIDTH_MM) / count);
+export function getFactoryInnerBayWidth(totalLength, bayCount, cuttingRules = defaultCuttingRules) {
+  return cuttingRules.getInnerBayWidth(totalLength, bayCount);
 }
 
-function getLockedBayWidths(placements, wallId, bayCount) {
+function getLockedBayWidths(placements, wallId, bayCount, cuttingRules = defaultCuttingRules) {
   const widths = Array.from({ length: bayCount }, () => 0);
   placements
-    .filter((placement) => placement.wallId === wallId && fixedModuleTypes.includes(placement.componentType))
+    .filter((placement) => placement.wallId === wallId && cuttingRules.fixedModuleTypes.includes(placement.componentType))
     .forEach((placement) => {
       const bayIndex = clampNumber(placement.bayIndex, 0, bayCount - 1);
-      widths[bayIndex] = normalizeFixedModuleWidth(placement.moduleWidth || placement.standardWidth || widths[bayIndex]);
+      widths[bayIndex] = normalizeFixedModuleWidthForRules(
+        placement.moduleWidth || placement.standardWidth || widths[bayIndex],
+        cuttingRules.fixedModuleWidths
+      );
     });
   return widths;
 }
 
-export function recommendBayCount(length) {
-  return Math.max(1, Math.ceil(Number(length || 0) / MAX_POST_SPAN_MM));
+export function recommendBayCount(length, cuttingRules = defaultCuttingRules) {
+  return Math.max(1, Math.ceil(Number(length || 0) / cuttingRules.maxPostSpanMm));
 }
 
 export function labelWall(wallId) {
@@ -326,39 +264,44 @@ export function meters(mm) {
   return mm / MM_PER_METER;
 }
 
-export function getComponentName(type, productByType = {}) {
-  return productByType[type]?.nameCn || componentFallbackNames[type] || type;
+export function getComponentName(type, productByType = {}, cuttingRules = defaultCuttingRules) {
+  return productByType[type]?.nameCn || cuttingRules.componentFallbackNames[type] || type;
 }
 
-export function getDefaultHeight(componentType, roomHeight = MAX_HEIGHT_MM) {
-  return Math.min(defaultHeightByType[componentType] || 1000, roomHeight);
+export function getDefaultHeight(componentType, roomHeight = MAX_HEIGHT_MM, cuttingRules = defaultCuttingRules) {
+  return Math.min(cuttingRules.defaultHeightByType[componentType] || 1000, roomHeight);
 }
 
-export function getComponentIcon(product, componentType) {
-  return product?.icon || defaultIconsByType[componentType] || "";
+export function getComponentIcon(product, componentType, cuttingRules = defaultCuttingRules) {
+  return product?.icon || cuttingRules.defaultIconsByType[componentType] || "";
 }
 
 function ruleMatchesLed(rule, placement) {
   return true;
 }
 
-function ruleMatchesParent(rule, product, fallbackType) {
-  const parentSku = rule.parentSku || "";
-  if (parentSku && product?.sku) return parentSku === product.sku;
-  return rule.configType === fallbackType;
+function ruleMatchesParent(rule, component, componentType) {
+  const parentSku = String(rule?.parentSku || "").trim();
+  const parentType = String(rule?.parentType || "").trim();
+  return (
+    (parentSku && parentSku === component?.sku) ||
+    (parentType && parentType === componentType)
+  );
 }
 
-function clampRoom(room) {
+function clampRoom(room, cuttingRules = defaultCuttingRules) {
   return {
     width: clampNumber(room.width, 500, 10000),
     depth: clampNumber(room.depth, 300, 5000),
-    height: clampNumber(room.height, MIN_HEIGHT_MM, MAX_HEIGHT_MM)
+    height: clampNumber(room.height, cuttingRules.minHeightMm, cuttingRules.maxHeightMm)
   };
 }
 
-function getFixedRoomHeight(settings, fallbackHeight) {
+function getFixedRoomHeight(settings, fallbackHeight, cuttingRules = defaultCuttingRules) {
   const fixedHeight = Number(settings?.roomHeightFixed);
-  return Number.isFinite(fixedHeight) && fixedHeight > 0 ? fixedHeight : fallbackHeight;
+  return Number.isFinite(fixedHeight) && fixedHeight > 0
+    ? fixedHeight
+    : clampNumber(fallbackHeight, cuttingRules.minHeightMm, cuttingRules.maxHeightMm);
 }
 
 function getPostHeight(config, settings) {
@@ -389,38 +332,23 @@ function normalizePlacements(rawPlacements, activeWalls, roomHeight) {
     });
 }
 
-function withAutoWoodTopPlacements(rawPlacements, activeWalls, postHeight, woodTopProduct) {
-  const placements = Array.isArray(rawPlacements) ? rawPlacements : [];
-  if (!woodTopProduct?.autoGenerated) return placements;
-  const existingWoodTopKeys = new Set(placements
-    .filter((placement) => (placement.componentType || placement.type) === "woodTop")
-    .map((placement) => `${placement.wallId}:${Number(placement.bayIndex)}`));
-  const autoPlacements = activeWalls.flatMap((wall) => wall.bays.map((bay) => {
-    const key = `${wall.id}:${bay.bayIndex}`;
-    if (existingWoodTopKeys.has(key)) return null;
-    return {
-      id: `auto:woodTop:${wall.id}:${bay.bayIndex}`,
-      wallId: wall.id,
-      bayIndex: bay.bayIndex,
-      componentType: "woodTop",
-      heightFromFloor: postHeight,
-      quantity: 1,
-      autoGenerated: true,
-      heightLocked: true
-    };
-  }).filter(Boolean));
-  return [...placements, ...autoPlacements];
-}
-
-function addPlacementDimensions(placement, activeWalls) {
+function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCuttingRules) {
   const wall = activeWalls.find((item) => item.id === placement.wallId);
   const bay = wall?.bays?.[placement.bayIndex];
   if (!wall || !bay) return placement;
-  const componentCutLength = getCutLength(placement.componentType, bay.innerBayWidth);
-  const moduleWidth = fixedModuleTypes.includes(placement.componentType)
-    ? normalizeFixedModuleWidth(placement.moduleWidth || placement.standardWidth || bay.postCenterDistance)
+  const componentCutLength = cuttingRules.getCutLength(placement.componentType, bay.innerBayWidth);
+  const moduleWidth = cuttingRules.fixedModuleTypes.includes(placement.componentType)
+    ? normalizeFixedModuleWidthForRules(
+      placement.moduleWidth || placement.standardWidth || bay.postCenterDistance,
+      cuttingRules.fixedModuleWidths
+    )
     : null;
-  const visualScaleWidth = getVisualScaleWidth(placement.componentType, bay.innerBayWidth, componentCutLength, moduleWidth);
+  const visualScaleWidth = cuttingRules.getVisualScaleWidth(
+    placement.componentType,
+    bay.innerBayWidth,
+    componentCutLength,
+    moduleWidth
+  );
   return {
     ...placement,
     moduleWidth,
@@ -439,28 +367,14 @@ function addPlacementDimensions(placement, activeWalls) {
   };
 }
 
-function getCutLength(componentType, usableBayWidth) {
-  if (componentType === "woodTop" || componentType === "woodShelf") return Math.floor(usableBayWidth - 5);
-  if (componentType === "singleRail" || componentType === "doubleRail") return Math.floor(usableBayWidth - 15);
-  if (componentType === "cabinet") return Math.round(usableBayWidth);
-  return null;
+export function normalizeFixedModuleWidth(width, cuttingRules = defaultCuttingRules) {
+  return normalizeFixedModuleWidthForRules(width, cuttingRules.fixedModuleWidths);
 }
 
-function getVisualScaleWidth(componentType, innerBayWidth, componentCutLength) {
-  const moduleWidth = arguments[3];
-  const extraRailVisualWidth = 5;
-  if (componentType === "trouserRack" || componentType === "pantsRack") return innerBayWidth;
-  if (fixedModuleTypes.includes(componentType)) return moduleWidth || normalizeFixedModuleWidth(innerBayWidth);
-  if (componentType === "woodTop" || componentType === "woodShelf") return Math.round(innerBayWidth - 5);
-  if (componentType === "singleRail" || componentType === "doubleRail") return innerBayWidth + extraRailVisualWidth;
-  if (componentType === "cabinet") return innerBayWidth;
-  return innerBayWidth;
-}
-
-export function normalizeFixedModuleWidth(width) {
+function normalizeFixedModuleWidthForRules(width, widthOptions) {
   const value = Number(width);
-  if (!Number.isFinite(value) || value <= 0) return fixedModuleWidths[0];
-  return fixedModuleWidths.find((option) => option >= value) || fixedModuleWidths[fixedModuleWidths.length - 1];
+  if (!Number.isFinite(value) || value <= 0) return widthOptions[0];
+  return widthOptions.find((option) => option >= value) || widthOptions[widthOptions.length - 1];
 }
 
 function prunePlacements(config) {
@@ -480,23 +394,6 @@ function addBom(map, product, quantity, color, note = "") {
     return;
   }
   map.set(key, { ...product, quantity, color, note });
-}
-
-function withSelectedDepthSizeRule(product, shelfDepth) {
-  const depthSizedAccessorySkus = new Set([
-    "JP-TOP-BRACKET",
-    "JP-SHELF-BRACKET",
-    "JP-HORIZONTAL-RAIL",
-    "JP-CORNER-BRACKET"
-  ]);
-  if (!depthSizedAccessorySkus.has(product.sku)) return product;
-  return { ...product, sizeRule: `${Number(shelfDepth)}mm` };
-}
-
-function chooseColor(product, config) {
-  if (product.type === "post" || product.type === "singleRail" || product.type === "doubleRail" || product.material === "碳钢" || product.category?.includes("配件")) return config.frameColor;
-  if (product.type === "woodTop" || product.type === "woodShelf" || product.type === "cabinet") return "Wood Brown";
-  return product.colorOptions?.[0] || "Default Material";
 }
 
 function clampNumber(value, min, max) {

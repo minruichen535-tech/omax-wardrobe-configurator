@@ -2,9 +2,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getFactoryInnerBayWidth, POST_PROFILE_WIDTH_MM, meters } from "./configurator.js";
+import { getFactoryInnerBayWidth, meters } from "./configurator.js";
 import { resolveSeriesAsset } from "./config/productSeries.js";
 import { theme } from "./config/theme.js?v=color-system-20260602-01";
+import { getCuttingRules, getModelTransforms } from "./series/index.js";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -13,18 +14,6 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const sceneTransformVersion = "scene-transform-map-20260531-01";
 const sceneRuntimeVersion = "woodtop-alignment-verified-20260605-01";
-
-const componentTransformMap = {
-  woodTop: { rotation: [0, Math.PI, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: -0.04, resizeMode: "stretchToBay", offsetX: 0, depthAnchor: "back", depthAnchorBaseDepth: 0.45 },
-  woodShelf: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015, offsetZ: 0, depthAnchor: "back", depthAnchorBaseDepth: 0.45 },
-  railSingle: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0.08, heightOffset: 0, resizeMode: "stretchToBay" },
-  railDouble: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0.08, heightOffset: 0, resizeMode: "stretchToBay" },
-  singleRail: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0 },
-  doubleRail: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0 },
-  cabinet: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015 },
-  jewelryBox: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "centerInBay", offsetX: 0.015 },
-  trouserRack: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchWidthAndDepth", offsetX: 0 }
-};
 
 console.log("[scene.js]", sceneTransformVersion);
 
@@ -203,8 +192,26 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
   const roomDepth = meters(design.room.depth);
   const roomHeight = meters(design.room.height);
   const postHeight = meters(design.postHeight || design.room.height);
+  const seriesId = series?.seriesId || "japanese-closet";
+  const cuttingRules = getCuttingRules(seriesId) || getCuttingRules("japanese-closet");
+  const modelTransforms = getModelTransforms(seriesId) || getModelTransforms("japanese-closet");
   addRoom(root, roomWidth, roomDepth, roomHeight);
-  await Promise.all(design.activeWalls.map((wall) => addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeight, config, design, series, report, debug, selectedId)));
+  await Promise.all(design.activeWalls.map((wall) => addWallRun(
+    root,
+    wall,
+    roomWidth,
+    roomDepth,
+    roomHeight,
+    postHeight,
+    config,
+    design,
+    series,
+    report,
+    debug,
+    selectedId,
+    cuttingRules,
+    modelTransforms
+  )));
   if (!scene.getObjectByName("design-root") || root.parent !== scene) return;
   publishModelReport(report, "ready");
   requestRender?.();
@@ -263,7 +270,22 @@ function addRoom(root, width, depth, height) {
   root.add(grid);
 }
 
-async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeight, config, design, series, report, debug, selectedId) {
+async function addWallRun(
+  root,
+  wall,
+  roomWidth,
+  roomDepth,
+  roomHeight,
+  postHeight,
+  config,
+  design,
+  series,
+  report,
+  debug,
+  selectedId,
+  cuttingRules,
+  modelTransforms
+) {
   const group = new THREE.Group();
   const length = meters(wall.length);
   const shelfDepth = meters(Number(config.shelfDepth) || 450);
@@ -308,14 +330,27 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
     index: post.index,
     x: startX + meters(post.x)
   }));
-  const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount));
+  const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount, cuttingRules));
   const postProduct = design.productByType.post;
-  const postTargetSize = { x: meters(POST_PROFILE_WIDTH_MM), y: postHeight, z: 0.1 };
+  const postTargetSize = {
+    x: meters(cuttingRules.postProfileWidthMm),
+    y: postHeight,
+    z: modelTransforms.post.targetDepth
+  };
   const isBackWall = wall.id === "back";
-  const postEndVisualInset = meters(25);
+  const postEndVisualInset = meters(modelTransforms.post.backEndVisualInsetMm);
   for (const postPosition of postPositions) {
-    const post = await createModelOrMissing(postProduct, series, report, postTargetSize, "绔嬫煴", getComponentTransform("post"), "post");
-    if (wall.id === "right") {
+    const post = await createModelOrMissing(
+      postProduct,
+      series,
+      report,
+      postTargetSize,
+      "绔嬫煴",
+      getComponentTransform("post", modelTransforms),
+      "post",
+      modelTransforms
+    );
+    if (wall.id === "right" && modelTransforms.post.rotateRightWallByPi) {
       post.rotation.y += Math.PI;
     }
     applyPostColor(post, config.frameColor);
@@ -344,7 +379,7 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
   }
 
   postPositions.slice(0, -1).forEach((_, bayIndex) => {
-    const bay = getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth);
+    const bay = getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth, cuttingRules.postProfileWidthMm);
     if (!bay) return;
     const world = localToWorld(group, bay.centerX, 0, 0);
       report.bayCoordinates.push({
@@ -383,7 +418,7 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
   await Promise.all(design.placements
     .filter((placement) => placement.wallId === wall.id)
     .map(async (placement) => {
-      const bay = getBayGeometry(postPositions, placement.bayIndex, factoryInnerBayWidth);
+      const bay = getBayGeometry(postPositions, placement.bayIndex, factoryInnerBayWidth, cuttingRules.postProfileWidthMm);
       if (!bay) {
         report.failed.add(`${wall.id}:${placement.bayIndex}`);
         report.missingPlacements.push({
@@ -407,7 +442,21 @@ async function addWallRun(root, wall, roomWidth, roomDepth, roomHeight, postHeig
         componentCutLength: placement.componentCutLength,
         visualScaleWidth: placement.visualScaleWidth
       });
-      await addPlacement(group, placement, bay.centerX, meters(placement.visualScaleWidth || bay.innerBayWidth), shelfDepth, config, design, series, report, debug, selectedId, wall);
+      await addPlacement(
+        group,
+        placement,
+        bay.centerX,
+        meters(placement.visualScaleWidth || bay.innerBayWidth),
+        shelfDepth,
+        config,
+        design,
+        series,
+        report,
+        debug,
+        selectedId,
+        wall,
+        modelTransforms
+      );
     }));
 
   group.updateMatrixWorld(true);
@@ -487,13 +536,13 @@ function createTextSprite(text, color, x, y, z) {
   return sprite;
 }
 
-function getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth) {
+function getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth, postProfileWidthMm) {
   const index = Number(bayIndex);
   const leftPost = postPositions[index];
   const rightPost = postPositions[index + 1];
   if (!leftPost || !rightPost) return null;
   const rawBayWidth = Math.abs(rightPost.x - leftPost.x);
-  const postProfileWidth = meters(POST_PROFILE_WIDTH_MM);
+  const postProfileWidth = meters(postProfileWidthMm);
   const innerBayWidth = Math.max(0.05, factoryInnerBayWidth);
   return {
     leftX: leftPost.x,
@@ -508,13 +557,36 @@ function getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth) {
   };
 }
 
-async function addPlacement(group, placement, x, bayWidth, depth, config, design, series, report, debug, selectedId, wall = null) {
+async function addPlacement(
+  group,
+  placement,
+  x,
+  bayWidth,
+  depth,
+  config,
+  design,
+  series,
+  report,
+  debug,
+  selectedId,
+  wall,
+  modelTransforms
+) {
   const y = meters(placement.heightFromFloor);
   const product = design.productByType[placement.componentType];
   const name = product?.nameCn || placement.componentType;
-  const transform = getComponentTransform(placement.componentType, report);
-  const model = await createModelOrMissing(product, series, report, getTargetSize(placement.componentType, bayWidth, depth), name, transform, placement.componentType);
-  applyPlacementColor(model, placement.componentType, config.frameColor);
+  const transform = getComponentTransform(placement.componentType, modelTransforms, report);
+  const model = await createModelOrMissing(
+    product,
+    series,
+    report,
+    modelTransforms.targetSize(placement.componentType, bayWidth, depth),
+    name,
+    transform,
+    placement.componentType,
+    modelTransforms
+  );
+  applyPlacementColor(model, placement.componentType, config.frameColor, modelTransforms);
   const targetZ = transform.depthOffset;
   const targetY = y + transform.heightOffset;
   if (model.name === "Missing Model") {
@@ -527,22 +599,22 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
     model.position.z += transform.offsetZ || 0;
   }
   if (placement.componentType === "singleRail" || placement.componentType === "doubleRail") {
-    const railLateralVisualOffset = 0.008;
+    const railLateralVisualOffset = modelTransforms.rail.lateralVisualOffset;
     if (wall?.id === "back") {
-      model.position.z -= 0.05;
+      model.position.z += modelTransforms.rail.backDepthOffset;
       model.position.x += railLateralVisualOffset;
     }
     if (wall?.id === "left") {
-      model.position.z -= 0.05;
+      model.position.z += modelTransforms.rail.leftDepthOffset;
       model.position.x += railLateralVisualOffset;
     }
     if (wall?.id === "right") {
-      model.position.z += 0.05;
+      model.position.z += modelTransforms.rail.rightDepthOffset;
       model.position.x -= railLateralVisualOffset;
     }
   }
-  if (placement.componentType === "trouserRack" || placement.componentType === "jewelryBox") {
-    const fixedModuleLateralVisualOffset = 0.015;
+  if (modelTransforms.fixedModule.componentTypes.includes(placement.componentType)) {
+    const fixedModuleLateralVisualOffset = modelTransforms.fixedModule.lateralVisualOffset;
     if (wall?.id === "back" || wall?.id === "left") {
       model.position.x += fixedModuleLateralVisualOffset;
     }
@@ -602,7 +674,7 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
     addSelectionOutline(model);
   }
   group.add(model);
-  if (placement.componentType === "woodTop") {
+  if (placement.componentType === "woodTop" && modelTransforms.woodTop.enabled) {
     group.updateMatrixWorld(true);
     model.updateMatrixWorld(true);
     const bayCenterWorld = localToWorld(group, x, 0, 0);
@@ -620,7 +692,9 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
         || (wall?.id === "right" && Number(placement.bayIndex) === wall.bayCount - 1)
       );
     if (!isSideCornerWoodTop && placement.autoGenerated && (edgeDiagnostic.suggestedLocalDirection === "-localX" || edgeDiagnostic.suggestedLocalDirection === "+localX")) {
-      model.position.x += edgeDiagnostic.suggestedLocalDirection === "-localX" ? -0.019 : 0.019;
+      model.position.x += edgeDiagnostic.suggestedLocalDirection === "-localX"
+        ? -modelTransforms.woodTop.edgeAdjustment
+        : modelTransforms.woodTop.edgeAdjustment;
       group.updateMatrixWorld(true);
       model.updateMatrixWorld(true);
       worldBox = new THREE.Box3().setFromObject(model);
@@ -629,8 +703,8 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
     if (isSideCornerWoodTop) {
       const roomDepth = meters(Number(design.room?.depth) || 0);
       const wallOffset = meters(Number(config.wallOffset) || 250);
-      const targetWorldZ = -roomDepth / 2 + wallOffset + depth / 2 + 0.015;
-      const targetOuterEdgeWorldZ = worldBox.max.z + 0.02;
+      const targetWorldZ = -roomDepth / 2 + wallOffset + depth / 2 + modelTransforms.woodTop.cornerBackClearance;
+      const targetOuterEdgeWorldZ = worldBox.max.z + modelTransforms.woodTop.cornerOpenExtension;
       const currentSpan = worldBox.max.z - worldBox.min.z;
       const targetSpan = targetOuterEdgeWorldZ - targetWorldZ;
       model.scale.x *= targetSpan / currentSpan;
@@ -646,7 +720,7 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
     }
     if (isSideOpenWoodTop) {
       const fixedInnerEdgeWorldZ = worldBox.min.z;
-      const targetOpenEdgeWorldZ = worldBox.max.z + 0.02;
+      const targetOpenEdgeWorldZ = worldBox.max.z + modelTransforms.woodTop.sideOpenExtension;
       const currentSpan = worldBox.max.z - worldBox.min.z;
       const targetSpan = targetOpenEdgeWorldZ - fixedInnerEdgeWorldZ;
       model.scale.x *= targetSpan / currentSpan;
@@ -658,12 +732,12 @@ async function addPlacement(group, placement, x, bayWidth, depth, config, design
       group.updateMatrixWorld(true);
       model.updateMatrixWorld(true);
       worldBox = new THREE.Box3().setFromObject(model);
-      const visibleInnerMesh = model.getObjectByName("Geom3D");
+      const visibleInnerMesh = model.getObjectByName(modelTransforms.woodTop.visibleMeshName);
       if (visibleInnerMesh?.isMesh && visibleInnerMesh.parent) {
         const visibleBox = new THREE.Box3().setFromObject(visibleInnerMesh);
         const fixedVisibleInnerEdgeWorldZ = visibleBox.min.z;
         const visibleSpan = visibleBox.max.z - visibleBox.min.z;
-        visibleInnerMesh.scale.x *= (visibleSpan + 0.006) / visibleSpan;
+        visibleInnerMesh.scale.x *= (visibleSpan + modelTransforms.woodTop.visibleExtension) / visibleSpan;
         group.updateMatrixWorld(true);
         model.updateMatrixWorld(true);
         const scaledVisibleBox = new THREE.Box3().setFromObject(visibleInnerMesh);
@@ -829,8 +903,8 @@ function addSelectionOutline(model) {
   model.add(outline);
 }
 
-function getComponentTransform(componentType, report = null) {
-  const transform = componentTransformMap[componentType];
+function getComponentTransform(componentType, modelTransforms, report = null) {
+  const transform = modelTransforms.components[componentType];
   if (!transform) {
     console.warn("transform not matched:", componentType);
     report?.transformDiagnostics?.push({
@@ -850,17 +924,7 @@ function getComponentTransform(componentType, report = null) {
   };
 }
 
-function getTargetSize(componentType, bayWidth, shelfDepth) {
-  const defaultDepth = 0.5;
-  if (componentType === "woodTop" || componentType === "woodShelf") return { x: bayWidth, y: 0.08, z: shelfDepth };
-  if (componentType === "singleRail" || componentType === "doubleRail") return { x: bayWidth, y: 0.16, z: 0.18 };
-  if (componentType === "cabinet") return { x: bayWidth, y: 0.5, z: defaultDepth * 0.92 };
-  if (componentType === "jewelryBox") return { x: bayWidth, y: 0.22, z: defaultDepth * 0.86 };
-  if (componentType === "trouserRack") return { x: bayWidth, y: 0.22, z: defaultDepth * 0.86 };
-  return { x: bayWidth, y: 0.3, z: defaultDepth };
-}
-
-async function createModelOrMissing(product, series, report, targetSize, label, transform = getComponentTransform(""), componentType = "") {
+async function createModelOrMissing(product, series, report, targetSize, label, transform, componentType = "", modelTransforms) {
   const modelPath = product?.modelPath || product?.glbAssetPath || "";
   if (!modelPath) {
     report.failed.add(label);
@@ -891,7 +955,7 @@ async function createModelOrMissing(product, series, report, targetSize, label, 
     const fittedBox = new THREE.Box3().setFromObject(clone);
     const transformDiagnostic = {
       componentType,
-      matchedTransformKey: componentTransformMap[componentType] ? componentType : null,
+      matchedTransformKey: modelTransforms.components[componentType] ? componentType : null,
       rotation: transform.rotation,
       scaleAxis: transform.scaleAxis,
       resizeMode: transform.resizeMode,
@@ -959,12 +1023,13 @@ function applyPostColor(object, frameColor) {
   applyModelColor(object, getFrameColor(frameColor), { metalness: 0.45, roughness: 0.32 });
 }
 
-function applyPlacementColor(object, componentType, frameColor) {
-  if (componentType === "singleRail" || componentType === "doubleRail") {
+function applyPlacementColor(object, componentType, frameColor, modelTransforms) {
+  const colorMode = modelTransforms.colorMode(componentType);
+  if (colorMode === "frame") {
     applyModelColor(object, getFrameColor(frameColor), { metalness: 0.55, roughness: 0.28 });
     return;
   }
-  if (componentType === "woodTop" || componentType === "woodShelf" || componentType === "cabinet") {
+  if (colorMode === "wood") {
     applyModelColor(object, theme.colors.woodBrown, { metalness: 0, roughness: 0.58 });
   }
 }
@@ -1011,7 +1076,7 @@ function serializeBox(box3) {
   };
 }
 
-function fitObjectToBox(object, targetSize, transform = getComponentTransform("")) {
+function fitObjectToBox(object, targetSize, transform) {
   const box3 = new THREE.Box3().setFromObject(object);
   const size = box3.getSize(new THREE.Vector3());
   if (!size.x || !size.y || !size.z) return;

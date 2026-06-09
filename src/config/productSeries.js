@@ -1,3 +1,7 @@
+import { getSeriesConfig } from "../series/index.js";
+
+const japaneseClosetConfig = getSeriesConfig("japanese-closet");
+
 export const productSeries = {
   "open-closet": {
     seriesId: "open-closet",
@@ -30,14 +34,10 @@ export const productSeries = {
     suSourcePath: "products/wall-mounted/su"
   },
   "japanese-closet": {
-    seriesId: "japanese-closet",
-    name: "日式衣帽间",
-    productPath: "products/japanese-closet/excel/products.xlsx",
-    rulesPath: "products/japanese-closet/excel/rules.xlsx",
-    assetRoot: "products/japanese-closet",
-    imageRoot: "products/japanese-closet/images",
-    modelRoot: "products/japanese-closet/models/glb",
-    suSourcePath: "products/japanese-closet/su/日式衣帽间.skp"
+    ...japaneseClosetConfig,
+    productPath: japaneseClosetConfig.productsPath,
+    imageRoot: japaneseClosetConfig.imagePath,
+    modelRoot: japaneseClosetConfig.modelPath
   }
 };
 
