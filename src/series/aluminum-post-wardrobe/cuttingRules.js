@@ -48,10 +48,13 @@ function createRules(data = {}) {
     maxBayWidthMm: 1200,
     minHeightMm: 1800,
     maxHeightMm: 3500,
-    sideWallLengthAdjustmentMm: 0,
+    sideWallLengthAdjustmentMm: 510,
+    sideWallLengthAdjustmentLayouts: ["L-left", "L-right", "U"],
     supportsULayoutModes: true,
+    preservesExistingUWallGeometry: true,
+    uLayoutModeControl: "icons",
     supportsIndependentBayWidths: true,
-    cornerOffsetOptions: [300, 400, 500],
+    insetBackWallPostCentersByHalfProfileLayouts: ["L-left", "L-right", "U"],
     postProfileWidthMm: positiveNumber(projectConfig.POST_WIDTH, 30),
     componentTypes: componentTypes.length
       ? componentTypes
@@ -94,6 +97,9 @@ function createRules(data = {}) {
     getVisualScaleWidth(componentType, innerBayWidth, componentCutLength, moduleWidth) {
       if (this.fixedModuleTypes.includes(componentType)) {
         return moduleWidth || normalizeFixedModuleWidth(innerBayWidth, this.fixedModuleWidths);
+      }
+      if (componentType === "woodShelf" || componentType === "glassShelf") {
+        return innerBayWidth;
       }
       return Number.isFinite(componentCutLength) && componentCutLength > 0
         ? componentCutLength

@@ -10,7 +10,7 @@ import {
   aluminumPostWardrobeCuttingRules,
   createAluminumPostWardrobeCuttingRules
 } from "./aluminum-post-wardrobe/cuttingRules.js";
-import { aluminumPostWardrobeModelTransforms } from "./aluminum-post-wardrobe/modelTransforms.js";
+import { aluminumPostWardrobeModelTransforms } from "./aluminum-post-wardrobe/modelTransforms.js?v=rail-width-only-20260610-01";
 import { aluminumPostWardrobeDisplayRules } from "./aluminum-post-wardrobe/displayRules.js";
 
 const seriesRegistry = new Map([

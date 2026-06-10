@@ -15,7 +15,7 @@ export const aluminumPostWardrobeModelTransforms = {
     post: { ...standardTransform, resizeMode: "centerInBay" },
     woodShelf: { ...standardTransform, depthAnchor: "back", depthAnchorBaseDepth: 0.5 },
     glassShelf: { ...standardTransform, depthAnchor: "back", depthAnchorBaseDepth: 0.5 },
-    singleRail: { ...standardTransform },
+    singleRail: { ...standardTransform, resizeMode: "stretchWidthOnly", depthOffset: -0.03 },
     cabinet: { ...standardTransform, depthAnchor: "back", depthAnchorBaseDepth: 0.5 },
     jewelryBox: { ...standardTransform, resizeMode: "centerInBay", depthAnchor: "back", depthAnchorBaseDepth: 0.5 }
   },

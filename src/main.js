@@ -41,14 +41,31 @@ import {
 } from "./dataSource.js?v=shelf-depth-settings-20260602-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
 import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js";
-import { WardrobeScene } from "./scene.js?v=side-post-depth-inset-20260603-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js";
+import { WardrobeScene } from "./scene.js?v=aluminum-rail-width-only-20260610-03";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-rail-width-only-20260610-01";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
 const woodColor = "Wood Brown";
 const defaultProductColor = "Default Material";
 applyTheme();
+
+function parseBooleanSetting(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function normalizeAluminumConnectionMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "wall" || normalized === "wall-mounted") return "wall-mounted";
+  if (normalized === "ceiling" || normalized === "celling" || normalized === "ceiling-mounted") {
+    return "ceiling-mounted";
+  }
+  return "wall-mounted";
+}
 
 function App() {
   const routeInfo = useMemo(() => resolveRoute(), []);
@@ -109,6 +126,7 @@ function ClientApp({ data, isClientMode = false }) {
   const shelfDepthOptions = data.settings?.shelfDepthOptions || [300, 450, 500];
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
+  const isAluminumPostWardrobe = data.series.seriesId === "aluminum-post-wardrobe";
   const supportsULayoutModes = cuttingRules.supportsULayoutModes === true;
   const usesIconULayoutControl = cuttingRules.uLayoutModeControl === "icons";
   const supportsIndependentBayWidths = cuttingRules.supportsIndependentBayWidths === true;
@@ -123,18 +141,33 @@ function ClientApp({ data, isClientMode = false }) {
     const defaultShelfDepth = Number(data.settings?.defaultShelfDepth) || 450;
     setConfig((current) => ({
       ...current,
-      wallOffset: fixedPostWallOffset,
-      shelfDepth: current.shelfDepth || defaultShelfDepth,
-      connectionMode: current.connectionMode
-        || data.settings?.defaultConnectionMode
-        || connectionModeOptions[0]
-        || "wall"
+      wallOffset: isAluminumPostWardrobe ? 250 : fixedPostWallOffset,
+      shelfDepth: isAluminumPostWardrobe ? 500 : (current.shelfDepth || defaultShelfDepth),
+      connectionMode: isAluminumPostWardrobe
+        ? normalizeAluminumConnectionMode(
+          current.connectionMode
+          || data.settings?.defaultConnectionMode
+          || connectionModeOptions[0]
+        )
+        : current.connectionMode
+          || data.settings?.defaultConnectionMode
+          || connectionModeOptions[0]
+          || "wall",
+      ...(isAluminumPostWardrobe ? {
+        frameColor: "Black",
+        postStyle: current.postStyle || "round",
+        led: typeof current.led === "boolean"
+          ? current.led
+          : parseBooleanSetting(data.settings?.defaultLed, false)
+      } : {})
     }));
   }, [
+    isAluminumPostWardrobe,
     data.settings?.fixedPostWallOffset,
     data.settings?.defaultWallOffset,
     data.settings?.defaultShelfDepth,
     data.settings?.defaultConnectionMode,
+    data.settings?.defaultLed,
     connectionModeOptions.join("|")
   ]);
 
@@ -282,20 +315,45 @@ function ClientApp({ data, isClientMode = false }) {
             options: postHeightOptions.map((height) => ({ value: String(height), label: `${height}mm` })),
             onChange: (postHeight) => updateConfig({ postHeight: Number(postHeight) })
           }),
-          shelfDepthOptions.length > 0 && h(Segmented, {
+          !isAluminumPostWardrobe && shelfDepthOptions.length > 0 && h(Segmented, {
             label: "层板深度",
             value: String(config.shelfDepth || data.settings?.defaultShelfDepth || shelfDepthOptions[0]),
             options: shelfDepthOptions.map((depth) => ({ value: String(depth), label: `${depth}mm` })),
             onChange: (shelfDepth) => updateConfig({ shelfDepth: Number(shelfDepth) })
           }),
-          connectionModeOptions.length > 0 && h(Segmented, {
+          (isAluminumPostWardrobe || connectionModeOptions.length > 0) && h(Segmented, {
             label: "连接方式",
-            value: config.connectionMode || data.settings?.defaultConnectionMode || connectionModeOptions[0],
-            options: connectionModeOptions.map((mode) => ({
-              value: mode,
-              label: mode === "ceiling" ? "顶装" : "墙装"
-            })),
+            value: isAluminumPostWardrobe
+              ? normalizeAluminumConnectionMode(config.connectionMode)
+              : config.connectionMode || data.settings?.defaultConnectionMode || connectionModeOptions[0],
+            options: isAluminumPostWardrobe
+              ? [
+                { value: "wall-mounted", label: "墙装" },
+                { value: "ceiling-mounted", label: "顶装" }
+              ]
+              : connectionModeOptions.map((mode) => ({
+                value: mode,
+                label: mode === "ceiling" ? "顶装" : "墙装"
+              })),
             onChange: (connectionMode) => updateConfig({ connectionMode })
+          }),
+          isAluminumPostWardrobe && h(Segmented, {
+            label: "立柱样式",
+            value: config.postStyle || "round",
+            options: [
+              { value: "round", label: "圆立柱" },
+              { value: "square", label: "方立柱" }
+            ],
+            onChange: (postStyle) => updateConfig({ postStyle })
+          }),
+          isAluminumPostWardrobe && h(Segmented, {
+            label: "Lighting",
+            value: config.led === true ? "true" : "false",
+            options: [
+              { value: "false", label: "No LED" },
+              { value: "true", label: "LED System" }
+            ],
+            onChange: (led) => updateConfig({ led: led === "true" })
           })
         ),
         h(StepBlock, { icon: MapPinned, title: "位置选择" },
@@ -372,7 +430,14 @@ function ClientApp({ data, isClientMode = false }) {
           design.errors.map((message) => h("p", { className: "error-text", key: message }, message))
         ),
         h(StepBlock, { icon: Shirt, title: "组件库" },
-          h(SwatchGroup, { label: "立柱颜色", value: config.frameColor, options: frameColorOptions, onChange: (frameColor) => updateConfig({ frameColor }) }),
+          h(SwatchGroup, {
+            label: "立柱颜色",
+            value: isAluminumPostWardrobe ? "Black" : config.frameColor,
+            options: isAluminumPostWardrobe ? ["Black"] : frameColorOptions,
+            onChange: (frameColor) => updateConfig({
+              frameColor: isAluminumPostWardrobe ? "Black" : frameColor
+            })
+          }),
           h("div", { className: "component-library" },
             cuttingRules.componentTypes.filter((type) => !design.productByType[type]?.autoGenerated).map((type) => {
               const product = design.productByType[type];

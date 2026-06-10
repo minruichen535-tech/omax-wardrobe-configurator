@@ -9,7 +9,8 @@ export const aluminumPostWardrobeBomCalculator = {
     addBom,
     productBySku
   }) {
-    const postProduct = productByType.post;
+    const postSku = resolvePostSku(config);
+    const postProduct = productBySku[postSku] || productByType.post;
     const postQuantity = activeWalls.reduce((sum, wall) => sum + wall.postCount, 0);
     if (postProduct?.sellable) {
       addBom(bomMap, postProduct, postQuantity, this.chooseColor(postProduct, config));
@@ -29,6 +30,27 @@ export const aluminumPostWardrobeBomCalculator = {
           rule.note
         );
       });
+
+    if (config.led === true) {
+      const ledProduct = productBySku["LZ-001-6"];
+      if (ledProduct?.sellable) {
+        addBom(bomMap, ledProduct, 1, this.chooseColor(ledProduct, config));
+      }
+      rules
+        .filter((rule) => rule.parentSku === ledProduct?.sku)
+        .filter((rule) => this.ruleMatches(rule, settings, config))
+        .forEach((rule) => {
+          const required = productBySku[rule.childSku || rule.requiredSku];
+          if (!required?.sellable) return;
+          addBom(
+            bomMap,
+            required,
+            rule.quantity,
+            this.chooseColor(required, config),
+            rule.note
+          );
+        });
+    }
   },
 
   getPlacementRuleItem({ required, rule, placement, config }) {
@@ -83,9 +105,20 @@ function ruleConditionMatches(rule, settings, config) {
   return actual === expected;
 }
 
+function resolvePostSku(config) {
+  const postStyle = config.postStyle === "square" ? "square" : "round";
+  const connectionMode = normalizeValue(config.connectionMode);
+  const isWallMounted = connectionMode === "wall";
+
+  if (postStyle === "square") return isWallMounted ? "LZ-007-2" : "LZ-007-1";
+  return isWallMounted ? "LZ-001-2" : "LZ-001-1";
+}
+
 function normalizeValue(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
-  return normalized === "celling" ? "ceiling" : normalized;
+  if (normalized === "celling" || normalized === "ceiling-mounted") return "ceiling";
+  if (normalized === "wall-mounted") return "wall";
+  return normalized;
 }
 
 function capitalize(value) {

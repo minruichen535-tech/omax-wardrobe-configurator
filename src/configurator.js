@@ -181,6 +181,9 @@ export function calculateDesign(config, data) {
 
 export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
   const hasBackWall = Boolean(config.walls?.back?.enabled);
+  const sideWallAdjustmentLayouts = cuttingRules.sideWallLengthAdjustmentLayouts;
+  const appliesSideWallAdjustment = !Array.isArray(sideWallAdjustmentLayouts)
+    || sideWallAdjustmentLayouts.includes(config.layout);
   const standardWallPlans = Object.entries(config.walls)
     .filter(([, wall]) => wall.enabled)
     .map(([id]) => {
@@ -190,7 +193,7 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         Number(isSideWall ? config.room?.depth : config.room?.width)
         || Number(config.walls[id]?.length || 0)
       );
-      const startOffset = hasBackWall && isSideWall
+      const startOffset = hasBackWall && isSideWall && appliesSideWallAdjustment
         ? cuttingRules.sideWallLengthAdjustmentMm
         : 0;
       return {
@@ -198,6 +201,18 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         sourceLength,
         startOffset,
         endOffset: 0,
+        centerOffset: isSideWall && cuttingRules.centerSideWallAfterStartOffset
+          ? startOffset / 2
+          : 0,
+        reverseBayOrder: isSideWall
+          && startOffset > 0
+          && cuttingRules.sideWallLayoutStartsAtBackCorner
+          && id === "left",
+        backCornerAtStart: isSideWall
+          && startOffset > 0
+          && cuttingRules.sideWallLayoutStartsAtBackCorner
+          ? true
+          : null,
         length: Math.max(1, sourceLength - startOffset)
       };
     });
@@ -246,6 +261,11 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         minBayWidth: cuttingRules.minBayWidthMm,
         maxBayWidth: cuttingRules.maxBayWidthMm ?? cuttingRules.maxPostSpanMm
       });
+      if (sourceLength <= startOffset) {
+        validationErrors.unshift(
+          `${labelWall(id)}长度必须大于转角避让距离 ${startOffset}mm。`
+        );
+      }
       const canUseCustomBayWidths = hasCustomBayWidths && validationErrors.length === 0;
       let bayWidths;
       if (canUseCustomBayWidths) {
@@ -257,15 +277,28 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         const unlockedWidth = unlockedCount ? Math.max(1, (length - lockedTotal) / unlockedCount) : fallbackWidth;
         bayWidths = lockedWidths.map((width) => width || unlockedWidth);
       }
-      const averageBayWidth = bayWidths.reduce((sum, width) => sum + width, 0) / bayCount;
-      const usesVariableBayWidths = bayWidths.some((width) => Math.abs(width - averageBayWidth) > 0.01);
+      const shouldInsetPostCenters = (
+        cuttingRules.insetSideWallPostCentersByHalfProfile === true
+        && (id === "left" || id === "right")
+        && startOffset > 0
+      ) || shouldInsetBackWallPostCenters(config.layout, id, cuttingRules);
+      const postCenterInset = shouldInsetPostCenters
+        ? cuttingRules.postProfileWidthMm / 2
+        : 0;
+      const postCenterSpan = Math.max(1, length - postCenterInset * 2);
+      const plannedBayWidthTotal = bayWidths.reduce((sum, width) => sum + width, 0);
+      const postCenterBayWidths = shouldInsetPostCenters && plannedBayWidthTotal > 0
+        ? bayWidths.map((width) => width * postCenterSpan / plannedBayWidthTotal)
+        : bayWidths;
+      const averageBayWidth = postCenterBayWidths.reduce((sum, width) => sum + width, 0) / bayCount;
+      const usesVariableBayWidths = postCenterBayWidths.some((width) => Math.abs(width - averageBayWidth) > 0.01);
       const posts = Array.from({ length: bayCount + 1 }, (_, index) => ({
         index,
-        x: bayWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
+        x: postCenterInset + postCenterBayWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
       }));
       const bays = Array.from({ length: bayCount }, (_, bayIndex) => {
         const measuredPostCenterDistance = Math.abs(posts[bayIndex + 1].x - posts[bayIndex].x);
-        const innerBayWidth = usesVariableBayWidths || canUseCustomBayWidths
+        const innerBayWidth = shouldInsetPostCenters || usesVariableBayWidths || canUseCustomBayWidths
           ? Math.max(1, measuredPostCenterDistance - cuttingRules.postProfileWidthMm)
           : factoryInnerBayWidth;
         return {
@@ -308,8 +341,10 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         length,
         totalLength: length,
         bayCount,
-        bayWidths,
+        bayWidths: postCenterBayWidths,
         requestedBayWidths,
+        postCenterInset,
+        postCenterSpan,
         usesCustomBayWidths: canUseCustomBayWidths,
         validationErrors,
         bayWidth: averageBayWidth,
@@ -382,6 +417,13 @@ function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) 
 
 function normalizeJapaneseULayoutMode(mode) {
   return mode === "side-first" ? "side-first" : "back-first";
+}
+
+function shouldInsetBackWallPostCenters(layout, wallId, cuttingRules) {
+  if (wallId !== "back") return false;
+  const layouts = cuttingRules.insetBackWallPostCentersByHalfProfileLayouts;
+  if (!Array.isArray(layouts)) return false;
+  return layouts.includes(layout);
 }
 
 export function generateULayout({
