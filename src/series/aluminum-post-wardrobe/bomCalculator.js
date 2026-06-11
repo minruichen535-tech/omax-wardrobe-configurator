@@ -34,7 +34,7 @@ export const aluminumPostWardrobeBomCalculator = {
     if (config.led === true) {
       const ledProduct = productBySku["LZ-001-6"];
       if (ledProduct?.sellable) {
-        addBom(bomMap, ledProduct, postQuantity, this.chooseColor(ledProduct, config));
+        addBom(bomMap, ledProduct, postQuantity * 2, this.chooseColor(ledProduct, config));
       }
       rules
         .filter((rule) => rule.parentSku === ledProduct?.sku)

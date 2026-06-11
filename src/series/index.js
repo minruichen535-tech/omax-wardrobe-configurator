@@ -5,7 +5,7 @@ import { japaneseClosetModelTransforms } from "./japanese-closet/modelTransforms
 import { japaneseClosetDisplayRules } from "./japanese-closet/displayRules.js";
 import { baseSupportClosetSeriesConfig } from "./base-support-closet/series.config.js";
 import { aluminumPostWardrobeSeriesConfig } from "./aluminum-post-wardrobe/series.config.js";
-import { aluminumPostWardrobeBomCalculator } from "./aluminum-post-wardrobe/bomCalculator.js?v=led-quantity-20260611-01";
+import { aluminumPostWardrobeBomCalculator } from "./aluminum-post-wardrobe/bomCalculator.js?v=led-quantity-20260611-02";
 import {
   aluminumPostWardrobeCuttingRules,
   createAluminumPostWardrobeCuttingRules

@@ -42,7 +42,7 @@ import {
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
 import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js";
 import { WardrobeScene } from "./scene.js?v=aluminum-l-side-inset-20260611-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-led-quantity-20260611-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-led-quantity-20260611-02";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];

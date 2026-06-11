@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=aluminum-led-quantity-20260611-01";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=aluminum-led-quantity-20260611-02";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
