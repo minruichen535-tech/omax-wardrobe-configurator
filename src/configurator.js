@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=aluminum-led-quantity-20260611-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -58,13 +58,18 @@ export function syncWallLengthsWithRoom(config, roomPatch) {
 
 export function calculateDesign(config, data) {
   const seriesId = data?.series?.seriesId || DEFAULT_SERIES_ID;
+  const isAluminumPostWardrobe = seriesId === "aluminum-post-wardrobe";
   const cuttingRules = getCuttingRules(seriesId, data) || defaultCuttingRules;
   const bomCalculator = getBomCalculator(seriesId) || getBomCalculator(DEFAULT_SERIES_ID);
   const room = clampRoom({
     ...config.room,
-    height: getFixedRoomHeight(data?.settings, config.room?.height, cuttingRules)
+    height: isAluminumPostWardrobe
+      ? 3300
+      : getFixedRoomHeight(data?.settings, config.room?.height, cuttingRules)
   }, cuttingRules);
-  const postHeight = getPostHeight(config, data?.settings);
+  const postHeight = isAluminumPostWardrobe
+    ? 3000
+    : getPostHeight(config, data?.settings);
   const productBySku = Object.fromEntries(data.products.map((product) => [product.sku, product]));
   const productsByType = data.products.reduce((map, product) => {
     if (!map[product.type]) map[product.type] = [];
@@ -282,12 +287,19 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         && (id === "left" || id === "right")
         && startOffset > 0
       ) || shouldInsetBackWallPostCenters(config.layout, id, cuttingRules);
-      const postCenterInset = shouldInsetPostCenters
-        ? cuttingRules.postProfileWidthMm / 2
-        : 0;
+      const sideBoundaryInsetLayouts = cuttingRules.sideWallPostBoundaryInsetLayouts;
+      const usesSideBoundaryInset = (id === "left" || id === "right")
+        && startOffset > 0
+        && Array.isArray(sideBoundaryInsetLayouts)
+        && sideBoundaryInsetLayouts.includes(config.layout);
+      const postCenterInset = usesSideBoundaryInset
+        ? Math.max(0, Number(cuttingRules.sideWallPostBoundaryInsetMm) || 0)
+        : shouldInsetPostCenters
+          ? cuttingRules.postProfileWidthMm / 2
+          : 0;
       const postCenterSpan = Math.max(1, length - postCenterInset * 2);
       const plannedBayWidthTotal = bayWidths.reduce((sum, width) => sum + width, 0);
-      const postCenterBayWidths = shouldInsetPostCenters && plannedBayWidthTotal > 0
+      const postCenterBayWidths = (shouldInsetPostCenters || usesSideBoundaryInset) && plannedBayWidthTotal > 0
         ? bayWidths.map((width) => width * postCenterSpan / plannedBayWidthTotal)
         : bayWidths;
       const averageBayWidth = postCenterBayWidths.reduce((sum, width) => sum + width, 0) / bayCount;

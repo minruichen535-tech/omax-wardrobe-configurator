@@ -377,25 +377,6 @@ async function addWallRun(
   const postEndVisualInset = meters(modelTransforms.post.backEndVisualInsetMm);
   const postLocalBoundsByIndex = new Map();
   for (const postPosition of postPositions) {
-    const shouldSkipAluminumLCornerPost = series?.seriesId === "aluminum-post-wardrobe"
-      && (
-        (config.layout === "L-left" && wall.id === "left" && postPosition.index === postPositions.length - 1)
-        || (config.layout === "L-right" && wall.id === "right" && postPosition.index === 0)
-      );
-    if (shouldSkipAluminumLCornerPost) {
-      const world = localToWorld(group, postPosition.x, 0, 0);
-      report.skippedPostCoordinates.push({
-        reason: "aluminum-l-corner-dedup",
-        wallId: wall.id,
-        axis: wallAxis,
-        postIndex: postPosition.index,
-        localX: toMm(postPosition.x),
-        worldX: toMm(world.x),
-        worldY: toMm(world.y),
-        worldZ: toMm(world.z)
-      });
-      continue;
-    }
     const post = await createModelOrMissing(
       selectedPostProduct,
       series,
@@ -414,6 +395,20 @@ async function addWallRun(
     post.position.set(visualPostX, 0, 0);
     post.userData = { ...post.userData, wallId: wall.id, postIndex: postPosition.index };
     group.add(post);
+    const shouldRecenterAluminumLSidePost = series?.seriesId === "aluminum-post-wardrobe"
+      && (config.layout === "L-left" || config.layout === "L-right")
+      && (wall.id === "left" || wall.id === "right");
+    if (shouldRecenterAluminumLSidePost) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const postLocalBox = getObjectBoxRelativeTo(post, group);
+      if (!postLocalBox.isEmpty()) {
+        const postLocalCenterX = (postLocalBox.min.x + postLocalBox.max.x) / 2;
+        post.position.x += postPosition.x - postLocalCenterX;
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+    }
     const shouldAlignAluminumWallMountedPost = series?.seriesId === "aluminum-post-wardrobe"
       && config.connectionMode === "wall-mounted";
     if (shouldAlignAluminumWallMountedPost) {

@@ -29,7 +29,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=l-shape-effective-length-20260603-02";
+} from "./configurator.js?v=aluminum-fixed-height-20260611-01";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -41,13 +41,19 @@ import {
 } from "./dataSource.js?v=shelf-depth-settings-20260602-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
 import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js";
-import { WardrobeScene } from "./scene.js?v=aluminum-rail-width-only-20260610-03";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-rail-width-only-20260610-01";
+import { WardrobeScene } from "./scene.js?v=aluminum-l-side-inset-20260611-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-led-quantity-20260611-01";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
 const woodColor = "Wood Brown";
 const defaultProductColor = "Default Material";
+const employeeBrandFallback = {
+  brandNameCn: "奥美斯五金",
+  brandNameEn: "OMAX Hardware",
+  seriesName: "日式衣帽间",
+  phone: "+86 18818717590"
+};
 applyTheme();
 
 function parseBooleanSetting(value, fallback = false) {
@@ -127,6 +133,11 @@ function ClientApp({ data, isClientMode = false }) {
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
   const isAluminumPostWardrobe = data.series.seriesId === "aluminum-post-wardrobe";
+  const sceneBrandInfo = isAluminumPostWardrobe
+    ? isClientMode
+      ? null
+      : brandInfo || employeeBrandFallback
+    : brandInfo;
   const supportsULayoutModes = cuttingRules.supportsULayoutModes === true;
   const usesIconULayoutControl = cuttingRules.uLayoutModeControl === "icons";
   const supportsIndependentBayWidths = cuttingRules.supportsIndependentBayWidths === true;
@@ -172,13 +183,19 @@ function ClientApp({ data, isClientMode = false }) {
   ]);
 
   useEffect(() => {
-    const roomHeightFixed = Number(data.settings?.roomHeightFixed) || 2700;
-    const defaultPostHeight = Number(data.settings?.defaultPostHeight) || 2400;
+    const roomHeightFixed = isAluminumPostWardrobe
+      ? 3300
+      : Number(data.settings?.roomHeightFixed) || 2700;
+    const defaultPostHeight = isAluminumPostWardrobe
+      ? 3000
+      : Number(data.settings?.defaultPostHeight) || 2400;
     setConfig((current) => ({
       ...syncWallLengthsWithRoom(current, { height: roomHeightFixed }),
-      postHeight: current.postHeight || defaultPostHeight
+      postHeight: isAluminumPostWardrobe
+        ? defaultPostHeight
+        : current.postHeight || defaultPostHeight
     }));
-  }, [data.settings?.roomHeightFixed, data.settings?.defaultPostHeight]);
+  }, [isAluminumPostWardrobe, data.settings?.roomHeightFixed, data.settings?.defaultPostHeight]);
 
   useEffect(() => {
     const brandPaths = isClientMode
@@ -308,13 +325,15 @@ function ClientApp({ data, isClientMode = false }) {
         h(StepBlock, { icon: Home, title: "房间尺寸设置" },
           h(NumberField, { label: "房间宽度", value: config.room.width, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("width", value) }),
           h(NumberField, { label: "房间深度", value: config.room.depth, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("depth", value) }),
-          !hideRoomHeightInput && h(NumberField, { label: "房间高度", value: config.room.height, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("height", value) }),
-          postHeightOptions.length > 0 && h(Segmented, {
+          !isAluminumPostWardrobe && !hideRoomHeightInput && h(NumberField, { label: "房间高度", value: config.room.height, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("height", value) }),
+          isAluminumPostWardrobe
+            ? h("p", { className: "fixed-height-note" }, "立柱标准高度 3000mm")
+            : postHeightOptions.length > 0 && h(Segmented, {
             label: "立柱高度",
             value: String(config.postHeight || data.settings?.defaultPostHeight || postHeightOptions[0]),
             options: postHeightOptions.map((height) => ({ value: String(height), label: `${height}mm` })),
             onChange: (postHeight) => updateConfig({ postHeight: Number(postHeight) })
-          }),
+            }),
           !isAluminumPostWardrobe && shelfDepthOptions.length > 0 && h(Segmented, {
             label: "层板深度",
             value: String(config.shelfDepth || data.settings?.defaultShelfDepth || shelfDepthOptions[0]),
@@ -506,7 +525,11 @@ function ClientApp({ data, isClientMode = false }) {
           )
         ),
         h("div", { className: "scene-frame enhanced-scene" },
-          brandInfo && h(BrandSceneCard, { brandInfo, isClientMode, series: data.series }),
+          sceneBrandInfo && h(BrandSceneCard, {
+            brandInfo: sceneBrandInfo,
+            isClientMode,
+            series: data.series
+          }),
           h(WardrobeScene, {
             key: `scene-side-post-depth-inset-20260603-01-${config.layout}`,
             config,

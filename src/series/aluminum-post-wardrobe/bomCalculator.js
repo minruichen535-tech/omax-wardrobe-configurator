@@ -34,7 +34,7 @@ export const aluminumPostWardrobeBomCalculator = {
     if (config.led === true) {
       const ledProduct = productBySku["LZ-001-6"];
       if (ledProduct?.sellable) {
-        addBom(bomMap, ledProduct, 1, this.chooseColor(ledProduct, config));
+        addBom(bomMap, ledProduct, postQuantity, this.chooseColor(ledProduct, config));
       }
       rules
         .filter((rule) => rule.parentSku === ledProduct?.sku)
@@ -42,10 +42,11 @@ export const aluminumPostWardrobeBomCalculator = {
         .forEach((rule) => {
           const required = productBySku[rule.childSku || rule.requiredSku];
           if (!required?.sellable) return;
+          const quantity = required.sku === "LZ-001-5" ? 1 : rule.quantity;
           addBom(
             bomMap,
             required,
-            rule.quantity,
+            quantity,
             this.chooseColor(required, config),
             rule.note
           );
