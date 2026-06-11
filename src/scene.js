@@ -636,6 +636,7 @@ async function addWallRun(
         selectedId,
         wall,
         modelTransforms,
+        cuttingRules,
         aluminumComponentPostEdges
       );
     }));
@@ -796,6 +797,7 @@ async function addPlacement(
   selectedId,
   wall,
   modelTransforms,
+  cuttingRules,
   aluminumComponentPostEdges = null
 ) {
   const y = meters(placement.heightFromFloor);
