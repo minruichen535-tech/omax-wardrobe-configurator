@@ -29,7 +29,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=aluminum-fixed-height-20260611-01";
+} from "./configurator.js?v=carbon-v2-visual-position-20260611-02";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -38,11 +38,11 @@ import {
   parseProductFile,
   parseRulesFile,
   saveWorkbookOverride
-} from "./dataSource.js?v=shelf-depth-settings-20260602-01";
+} from "./dataSource.js?v=carbon-v2-model-20260611-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
-import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js";
-import { WardrobeScene } from "./scene.js?v=aluminum-l-side-inset-20260611-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=aluminum-led-quantity-20260611-02";
+import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=carbon-v2-visual-position-20260611-02";
+import { WardrobeScene } from "./scene.js?v=carbon-v2-visual-position-20260611-02";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
@@ -133,6 +133,9 @@ function ClientApp({ data, isClientMode = false }) {
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
   const isAluminumPostWardrobe = data.series.seriesId === "aluminum-post-wardrobe";
+  const fixedFrameColor = data.series.fixedFrameColor || "";
+  const supportsLibraryClick = data.series.supportsLibraryClick === true || isAluminumPostWardrobe;
+  const hideShelfDepthControl = data.series.hideShelfDepthControl === true;
   const sceneBrandInfo = isAluminumPostWardrobe
     ? isClientMode
       ? null
@@ -170,6 +173,11 @@ function ClientApp({ data, isClientMode = false }) {
         led: typeof current.led === "boolean"
           ? current.led
           : parseBooleanSetting(data.settings?.defaultLed, false)
+      } : {}),
+      ...(fixedFrameColor ? {
+        frameColor: fixedFrameColor,
+        color: data.series.fixedConfigColor || fixedFrameColor.toLowerCase(),
+        shelfDepth: Number(data.settings?.defaultShelfDepth) || 415
       } : {})
     }));
   }, [
@@ -179,7 +187,9 @@ function ClientApp({ data, isClientMode = false }) {
     data.settings?.defaultShelfDepth,
     data.settings?.defaultConnectionMode,
     data.settings?.defaultLed,
-    connectionModeOptions.join("|")
+    connectionModeOptions.join("|"),
+    fixedFrameColor,
+    data.series.fixedConfigColor
   ]);
 
   useEffect(() => {
@@ -334,7 +344,7 @@ function ClientApp({ data, isClientMode = false }) {
             options: postHeightOptions.map((height) => ({ value: String(height), label: `${height}mm` })),
             onChange: (postHeight) => updateConfig({ postHeight: Number(postHeight) })
             }),
-          !isAluminumPostWardrobe && shelfDepthOptions.length > 0 && h(Segmented, {
+          !isAluminumPostWardrobe && !hideShelfDepthControl && shelfDepthOptions.length > 0 && h(Segmented, {
             label: "层板深度",
             value: String(config.shelfDepth || data.settings?.defaultShelfDepth || shelfDepthOptions[0]),
             options: shelfDepthOptions.map((depth) => ({ value: String(depth), label: `${depth}mm` })),
@@ -423,7 +433,7 @@ function ClientApp({ data, isClientMode = false }) {
             h("div", { className: "wall-control" },
               h("div", null,
                 h("strong", null, config.layout === "U" && wall.id === "back" ? "底墙" : labelWall(wall.id)),
-                h("span", null, `${Math.round(wall.length)}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
+                h("span", null, `${Math.round(getWallDisplayLength(data.series, wall, design.room))}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
               ),
               h("input", {
                 type: "number",
@@ -451,10 +461,11 @@ function ClientApp({ data, isClientMode = false }) {
         h(StepBlock, { icon: Shirt, title: "组件库" },
           h(SwatchGroup, {
             label: "立柱颜色",
-            value: isAluminumPostWardrobe ? "Black" : config.frameColor,
-            options: isAluminumPostWardrobe ? ["Black"] : frameColorOptions,
+            value: fixedFrameColor || (isAluminumPostWardrobe ? "Black" : config.frameColor),
+            options: fixedFrameColor || isAluminumPostWardrobe ? ["Black"] : frameColorOptions,
             onChange: (frameColor) => updateConfig({
-              frameColor: isAluminumPostWardrobe ? "Black" : frameColor
+              frameColor: fixedFrameColor || (isAluminumPostWardrobe ? "Black" : frameColor),
+              ...(fixedFrameColor ? { color: data.series.fixedConfigColor || "black" } : {})
             })
           }),
           h("div", { className: "component-library" },
@@ -466,16 +477,16 @@ function ClientApp({ data, isClientMode = false }) {
                 key: type,
                 "data-component-type": type,
                 draggable: true,
-                role: data.series.seriesId === "aluminum-post-wardrobe" ? "button" : undefined,
-                tabIndex: data.series.seriesId === "aluminum-post-wardrobe" ? 0 : undefined,
-                title: data.series.seriesId === "aluminum-post-wardrobe" ? "点击或拖入场景添加" : undefined,
-                onClick: data.series.seriesId === "aluminum-post-wardrobe"
+                role: supportsLibraryClick ? "button" : undefined,
+                tabIndex: supportsLibraryClick ? 0 : undefined,
+                title: supportsLibraryClick ? "点击或拖入场景添加" : undefined,
+                onClick: supportsLibraryClick
                   ? () => {
                     const wall = design.activeWalls[0];
                     if (wall) addPlacement(wall.id, 0, type);
                   }
                   : undefined,
-                onKeyDown: data.series.seriesId === "aluminum-post-wardrobe"
+                onKeyDown: supportsLibraryClick
                   ? (event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
@@ -503,7 +514,14 @@ function ClientApp({ data, isClientMode = false }) {
             })
           )
         ),
-        selectedPlacement && h(PlacementEditor, { placement: selectedPlacement, design, updatePlacement, cuttingRules })
+        selectedPlacement && h(PlacementEditor, {
+          placement: selectedPlacement,
+          design,
+          updatePlacement,
+          removePlacement,
+          cuttingRules,
+          series: data.series
+        })
       ),
       h("section", { className: "viewer-pane" },
         h("div", { className: "viewer-topline" },
@@ -729,7 +747,7 @@ function DebugCoordinatePanel({ design }) {
   );
 }
 
-function PlacementEditor({ placement, design, updatePlacement, cuttingRules }) {
+function PlacementEditor({ placement, design, updatePlacement, removePlacement, cuttingRules, series }) {
   const name = getComponentName(placement.componentType, design.productByType, cuttingRules);
   const product = design.productByType[placement.componentType];
   const heightLocked = placement.heightLocked || product?.heightLocked;
@@ -762,6 +780,19 @@ function PlacementEditor({ placement, design, updatePlacement, cuttingRules }) {
       },
         cuttingRules.fixedModuleWidths.map((width) => h("option", { key: width, value: width }, `${width}mm`))
       )
+    ),
+    series?.supportsPlacementBayControls === true && h("div", { className: "placement-editor-actions" },
+      h("button", {
+        type: "button",
+        disabled: placement.bayIndex <= 0,
+        onClick: () => updatePlacement(placement.id, { bayIndex: placement.bayIndex - 1 })
+      }, "上一跨"),
+      h("button", {
+        type: "button",
+        disabled: placement.bayIndex >= (design.activeWalls.find((wall) => wall.id === placement.wallId)?.bayCount || 1) - 1,
+        onClick: () => updatePlacement(placement.id, { bayIndex: placement.bayIndex + 1 })
+      }, "下一跨"),
+      h("button", { type: "button", onClick: () => removePlacement(placement.id) }, "删除")
     )
   );
 }
@@ -1320,6 +1351,16 @@ function getExcelDisplayColor(item, config) {
   };
   const color = item.color || config.frameColor || "";
   return colorMap[color] || item.colorNameCn || color;
+}
+
+function getWallDisplayLength(series, wall, room) {
+  if (
+    series?.seriesId === "carbon-steel-post-wardrobe-v2"
+    && (wall.id === "left" || wall.id === "right")
+  ) {
+    return Math.max(0, Number(room?.depth || 0) - 435);
+  }
+  return wall.length;
 }
 
 function formatExportFileTimestamp(date) {

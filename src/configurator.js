@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=aluminum-led-quantity-20260611-02";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -200,6 +200,7 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
       );
       const startOffset = hasBackWall && isSideWall && appliesSideWallAdjustment
         ? cuttingRules.sideWallLengthAdjustmentMm
+          + Math.max(0, Number(cuttingRules.backWallInnerSurfaceInsetMm) || 0)
         : 0;
       return {
         id,
@@ -216,7 +217,7 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         backCornerAtStart: isSideWall
           && startOffset > 0
           && cuttingRules.sideWallLayoutStartsAtBackCorner
-          ? true
+          ? id === "right"
           : null,
         length: Math.max(1, sourceLength - startOffset)
       };
@@ -224,11 +225,15 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
   let wallPlans = standardWallPlans;
 
   if (config.layout === "U" && cuttingRules.supportsULayoutModes) {
+    const uWallCornerOffset = config.uLayoutMode === "side-first"
+      && Number.isFinite(Number(cuttingRules.uSideFirstBackWallCornerOffsetMm))
+      ? Number(cuttingRules.uSideFirstBackWallCornerOffsetMm)
+      : cuttingRules.sideWallLengthAdjustmentMm;
     wallPlans = cuttingRules.preservesExistingUWallGeometry
       ? getJapaneseUWallPlans(
         standardWallPlans,
         config.uLayoutMode,
-        cuttingRules.sideWallLengthAdjustmentMm
+        uWallCornerOffset
       )
       : generateULayout({
         mode: config.uLayoutMode,
@@ -297,20 +302,39 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         : shouldInsetPostCenters
           ? cuttingRules.postProfileWidthMm / 2
           : 0;
-      const postCenterSpan = Math.max(1, length - postCenterInset * 2);
+      const backCornerPostInset = (id === "left" || id === "right")
+        && startOffset > 0
+        && typeof cuttingRules.getSideWallBackCornerPostInsetMm === "function"
+        ? Math.max(0, Number(cuttingRules.getSideWallBackCornerPostInsetMm(config)) || 0)
+        : 0;
+      const startPostCenterInset = postCenterInset + (plan.backCornerAtStart === true
+        ? backCornerPostInset
+        : 0);
+      const endPostCenterInset = postCenterInset + (plan.backCornerAtStart === false
+        ? backCornerPostInset
+        : 0);
+      const postCenterSpan = Math.max(1, length - startPostCenterInset - endPostCenterInset);
       const plannedBayWidthTotal = bayWidths.reduce((sum, width) => sum + width, 0);
-      const postCenterBayWidths = (shouldInsetPostCenters || usesSideBoundaryInset) && plannedBayWidthTotal > 0
+      const postCenterBayWidths = (
+        shouldInsetPostCenters
+        || usesSideBoundaryInset
+        || backCornerPostInset > 0
+      ) && plannedBayWidthTotal > 0
         ? bayWidths.map((width) => width * postCenterSpan / plannedBayWidthTotal)
         : bayWidths;
       const averageBayWidth = postCenterBayWidths.reduce((sum, width) => sum + width, 0) / bayCount;
       const usesVariableBayWidths = postCenterBayWidths.some((width) => Math.abs(width - averageBayWidth) > 0.01);
       const posts = Array.from({ length: bayCount + 1 }, (_, index) => ({
         index,
-        x: postCenterInset + postCenterBayWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
+        x: startPostCenterInset
+          + postCenterBayWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
       }));
       const bays = Array.from({ length: bayCount }, (_, bayIndex) => {
         const measuredPostCenterDistance = Math.abs(posts[bayIndex + 1].x - posts[bayIndex].x);
-        const innerBayWidth = shouldInsetPostCenters || usesVariableBayWidths || canUseCustomBayWidths
+        const innerBayWidth = shouldInsetPostCenters
+          || usesVariableBayWidths
+          || canUseCustomBayWidths
+          || backCornerPostInset > 0
           ? Math.max(1, measuredPostCenterDistance - cuttingRules.postProfileWidthMm)
           : factoryInnerBayWidth;
         return {
@@ -356,6 +380,9 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         bayWidths: postCenterBayWidths,
         requestedBayWidths,
         postCenterInset,
+        backCornerPostInset,
+        startPostCenterInset,
+        endPostCenterInset,
         postCenterSpan,
         usesCustomBayWidths: canUseCustomBayWidths,
         validationErrors,

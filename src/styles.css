@@ -812,6 +812,16 @@ button {
   accent-color: var(--primary);
 }
 
+.placement-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.placement-editor-actions button {
+  flex: 1;
+}
+
 .quote-heading {
   gap: 8px;
   margin-bottom: 18px;

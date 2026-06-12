@@ -12,6 +12,14 @@ import {
 } from "./aluminum-post-wardrobe/cuttingRules.js?v=l-side-inset-20260611-01";
 import { aluminumPostWardrobeModelTransforms } from "./aluminum-post-wardrobe/modelTransforms.js?v=rail-width-only-20260610-01";
 import { aluminumPostWardrobeDisplayRules } from "./aluminum-post-wardrobe/displayRules.js";
+import { carbonSteelPostWardrobeV2SeriesConfig } from "./carbon-steel-post-wardrobe-v2/series.config.js?v=carbon-v2-visual-position-20260611-02";
+import { carbonSteelPostWardrobeV2BomCalculator } from "./carbon-steel-post-wardrobe-v2/bomCalculator.js?v=carbon-v2-visual-position-20260611-02";
+import {
+  carbonSteelPostWardrobeV2CuttingRules,
+  createCarbonSteelPostWardrobeV2CuttingRules
+} from "./carbon-steel-post-wardrobe-v2/cuttingRules.js?v=carbon-v2-visual-position-20260611-02";
+import { carbonSteelPostWardrobeV2ModelTransforms } from "./carbon-steel-post-wardrobe-v2/modelTransforms.js";
+import { carbonSteelPostWardrobeV2DisplayRules } from "./carbon-steel-post-wardrobe-v2/displayRules.js";
 
 const seriesRegistry = new Map([
   [
@@ -33,6 +41,17 @@ const seriesRegistry = new Map([
       createCuttingRules: createAluminumPostWardrobeCuttingRules,
       modelTransforms: aluminumPostWardrobeModelTransforms,
       displayRules: aluminumPostWardrobeDisplayRules
+    }
+  ],
+  [
+    carbonSteelPostWardrobeV2SeriesConfig.seriesId,
+    {
+      config: carbonSteelPostWardrobeV2SeriesConfig,
+      bomCalculator: carbonSteelPostWardrobeV2BomCalculator,
+      cuttingRules: carbonSteelPostWardrobeV2CuttingRules,
+      createCuttingRules: createCarbonSteelPostWardrobeV2CuttingRules,
+      modelTransforms: carbonSteelPostWardrobeV2ModelTransforms,
+      displayRules: carbonSteelPostWardrobeV2DisplayRules
     }
   ],
   [

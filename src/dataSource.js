@@ -49,7 +49,7 @@ export async function loadWorkbookData(series) {
 
   const products = applySeriesProductNormalization(parseProductsWorkbook(productsBuffer), series);
   const rules = applySeriesRuleNormalization(parseRulesWorkbook(rulesBuffer), series);
-  const settings = parseSettingsWorkbook(productsBuffer);
+  const settings = applySeriesSettingsNormalization(parseSettingsWorkbook(productsBuffer), series);
   const cuttingRules = parseFormulaSheet(productsBuffer, ["CuttingRules"], ["sku", "componentType"]);
   const layoutRules = parseFormulaSheet(productsBuffer, ["LayoutRules"], ["ruleKey"]);
   const projectConfig = parseKeyValueSheet(productsBuffer, ["ProjectConfig"], ["configKey", "key"]);
@@ -298,6 +298,11 @@ function applySeriesProductNormalization(products, series) {
 function applySeriesRuleNormalization(rules, series) {
   if (typeof series?.normalizeRule !== "function") return rules;
   return rules.map((rule) => series.normalizeRule(rule));
+}
+
+function applySeriesSettingsNormalization(settings, series) {
+  if (typeof series?.normalizeSettings !== "function") return settings;
+  return series.normalizeSettings(settings);
 }
 
 function serializeProduct(product) {

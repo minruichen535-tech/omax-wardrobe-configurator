@@ -1,7 +1,8 @@
-import { getSeriesConfig } from "../series/index.js";
+import { getSeriesConfig } from "../series/index.js?v=carbon-v2-visual-position-20260611-02";
 
 const japaneseClosetConfig = getSeriesConfig("japanese-closet");
 const aluminumPostWardrobeConfig = getSeriesConfig("aluminum-post-wardrobe");
+const carbonSteelPostWardrobeV2Config = getSeriesConfig("carbon-steel-post-wardrobe-v2");
 
 export const productSeries = {
   "open-closet": {
@@ -45,6 +46,12 @@ export const productSeries = {
     productPath: aluminumPostWardrobeConfig.productsPath,
     imageRoot: aluminumPostWardrobeConfig.imagePath,
     modelRoot: aluminumPostWardrobeConfig.modelPath
+  },
+  "carbon-steel-post-wardrobe-v2": {
+    ...carbonSteelPostWardrobeV2Config,
+    productPath: carbonSteelPostWardrobeV2Config.productsPath,
+    imageRoot: carbonSteelPostWardrobeV2Config.imagePath,
+    modelRoot: carbonSteelPostWardrobeV2Config.modelPath
   }
 };
 

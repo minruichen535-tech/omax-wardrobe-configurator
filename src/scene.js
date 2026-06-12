@@ -5,7 +5,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { getFactoryInnerBayWidth, meters } from "./configurator.js";
 import { resolveSeriesAsset } from "./config/productSeries.js";
 import { theme } from "./config/theme.js?v=color-system-20260602-01";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=aluminum-rail-width-only-20260610-01";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -192,6 +192,7 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
     postCoordinates: [],
     skippedPostCoordinates: [],
     bayCoordinates: [],
+    carbonCornerDiagnostics: [],
     ledGlowStripCount: 0,
     ledGlowDiagnostics: [],
     geometryPlaceholders: ["room-floor", "room-walls"]
@@ -252,6 +253,7 @@ function publishModelReport(report, status) {
     postCoordinates: report.postCoordinates,
     skippedPostCoordinates: report.skippedPostCoordinates,
     bayCoordinates: report.bayCoordinates,
+    carbonCornerDiagnostics: report.carbonCornerDiagnostics,
     ledGlowStripCount: report.ledGlowStripCount,
     ledGlowDiagnostics: report.ledGlowDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
@@ -263,7 +265,7 @@ function publishModelReport(report, status) {
 function addRoom(root, width, depth, height, seriesId) {
   const floorMat = new THREE.MeshStandardMaterial({ color: theme.colors.border, roughness: 0.85 });
   const wallMat = new THREE.MeshStandardMaterial({ color: theme.colors.background, roughness: 0.9, transparent: true, opacity: 0.82 });
-  const wallThickness = 0.04;
+  const wallThickness = seriesId === "carbon-steel-post-wardrobe-v2" ? 0.06 : 0.04;
 
   const floor = box(width, wallThickness, depth, floorMat);
   floor.position.set(0, -wallThickness / 2, 0);
@@ -273,6 +275,8 @@ function addRoom(root, width, depth, height, seriesId) {
   const backWall = box(width, height, wallThickness, wallMat);
   const backWallCenterZ = seriesId === "aluminum-post-wardrobe"
     ? -depth / 2 - wallThickness / 2
+    : seriesId === "carbon-steel-post-wardrobe-v2"
+      ? -depth / 2 - wallThickness / 2
     : -depth / 2;
   backWall.position.set(0, height / 2, backWallCenterZ);
   root.add(backWall);
@@ -361,13 +365,23 @@ async function addWallRun(
   }));
   const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount, cuttingRules));
   const postProduct = design.productByType.post;
-  const selectedPostProduct = series?.seriesId === "aluminum-post-wardrobe"
+  const resolvedPostModelPath = series?.resolvePostModelPath?.({
+    connectionMode: config.connectionMode,
+    postHeight: design.postHeight
+  });
+  const selectedPostProduct = resolvedPostModelPath
     ? {
+      ...postProduct,
+      modelPath: resolvedPostModelPath,
+      glbAssetPath: resolvedPostModelPath
+    }
+    : series?.seriesId === "aluminum-post-wardrobe"
+      ? {
       ...postProduct,
       modelPath: getAluminumPostModelPath(config),
       glbAssetPath: getAluminumPostModelPath(config)
-    }
-    : postProduct;
+      }
+      : postProduct;
   const postTargetSize = {
     x: meters(cuttingRules.postProfileWidthMm),
     y: postHeight,
@@ -392,9 +406,65 @@ async function addWallRun(
     }
     applyPostColor(post, config.frameColor);
     const visualPostX = getVisualPostX(postPosition, postPositions.length, isBackWall, postEndVisualInset);
-    post.position.set(visualPostX, 0, 0);
+    const fittedPostOffset = post.position.clone();
+    post.position.set(
+      visualPostX + (series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.x : 0),
+      series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.y : 0,
+      series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.z : 0
+    );
     post.userData = { ...post.userData, wallId: wall.id, postIndex: postPosition.index };
     group.add(post);
+    const isCarbonSeries = series?.seriesId === "carbon-steel-post-wardrobe-v2";
+    const carbonPostWallClearance = meters(210);
+    if (isCarbonSeries) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const postWorldBox = getCarbonPostWallReferenceBox(post);
+      let deltaWorldX = 0;
+      let deltaWorldZ = 0;
+      if (wall.id === "left") {
+        deltaWorldX = (-roomWidth / 2 + carbonPostWallClearance) - postWorldBox.min.x;
+      } else if (wall.id === "right") {
+        deltaWorldX = (roomWidth / 2 - carbonPostWallClearance) - postWorldBox.max.x;
+      } else if (wall.id === "back") {
+        deltaWorldZ = (-roomDepth / 2 + carbonPostWallClearance) - postWorldBox.min.z;
+      }
+      if (Math.abs(deltaWorldX) > 1e-12 || Math.abs(deltaWorldZ) > 1e-12) {
+        const worldOrigin = post.getWorldPosition(new THREE.Vector3());
+        const localOrigin = group.worldToLocal(worldOrigin.clone());
+        const localShifted = group.worldToLocal(
+          worldOrigin.clone().add(new THREE.Vector3(deltaWorldX, 0, deltaWorldZ))
+        );
+        post.position.add(localShifted.sub(localOrigin));
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+    }
+    const isCarbonBackEndPost = series?.seriesId === "carbon-steel-post-wardrobe-v2"
+      && wall.id === "back"
+      && (postPosition === postPositions[0] || postPosition === postPositions[postPositions.length - 1])
+      && !(config.layout === "U" && config.uLayoutMode === "side-first");
+    if (isCarbonBackEndPost) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const postWorldBox = new THREE.Box3().setFromObject(post);
+      const backWallEndClearance = meters(10);
+      const roomLeftBoundary = -roomWidth / 2 + backWallEndClearance;
+      const roomRightBoundary = roomWidth / 2 - backWallEndClearance;
+      const boundaryDeltaX = postPosition === postPositions[0]
+        ? roomLeftBoundary - postWorldBox.min.x
+        : roomRightBoundary - postWorldBox.max.x;
+      if (Math.abs(boundaryDeltaX) > 1e-12) {
+        const worldOrigin = post.getWorldPosition(new THREE.Vector3());
+        const localOrigin = group.worldToLocal(worldOrigin.clone());
+        const localShifted = group.worldToLocal(
+          worldOrigin.clone().add(new THREE.Vector3(boundaryDeltaX, 0, 0))
+        );
+        post.position.add(localShifted.sub(localOrigin));
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+    }
     const shouldRecenterAluminumLSidePost = series?.seriesId === "aluminum-post-wardrobe"
       && (config.layout === "L-left" || config.layout === "L-right")
       && (wall.id === "left" || wall.id === "right");
@@ -490,7 +560,10 @@ async function addWallRun(
         post.updateMatrixWorld(true);
       }
     }
-    if (series?.seriesId === "aluminum-post-wardrobe") {
+    if (
+      series?.seriesId === "aluminum-post-wardrobe"
+      || series?.seriesId === "carbon-steel-post-wardrobe-v2"
+    ) {
       group.updateMatrixWorld(true);
       post.updateMatrixWorld(true);
       const postLocalBox = getObjectBoxRelativeTo(post, group);
@@ -606,6 +679,12 @@ async function addWallRun(
         && usesAluminumPostInnerEdgeAlignment(placement.componentType)
         ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
         : null;
+      const carbonComponentPostEdges = series?.seriesId === "carbon-steel-post-wardrobe-v2"
+        ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
+        : null;
+      const componentCenterX = carbonComponentPostEdges
+        ? (carbonComponentPostEdges.leftPostInnerEdge + carbonComponentPostEdges.rightPostInnerEdge) / 2
+        : bay.centerX;
       report.bayPlacements.push({
         placementId: placement.id,
         wallId: wall.id,
@@ -620,12 +699,14 @@ async function addWallRun(
         innerBayWidth: toMm(bay.innerBayWidth),
         componentCutLength: placement.componentCutLength,
         visualScaleWidth: placement.visualScaleWidth,
-        aluminumComponentPostEdges: serializeAluminumPostInnerEdges(aluminumComponentPostEdges)
+        aluminumComponentPostEdges: serializeAluminumPostInnerEdges(aluminumComponentPostEdges),
+        carbonComponentPostEdges: serializeAluminumPostInnerEdges(carbonComponentPostEdges),
+        componentCenterX: toMm(componentCenterX)
       });
       await addPlacement(
         group,
         placement,
-        bay.centerX,
+        componentCenterX,
         meters(placement.visualScaleWidth || bay.innerBayWidth),
         shelfDepth,
         config,
@@ -637,7 +718,8 @@ async function addWallRun(
         wall,
         modelTransforms,
         cuttingRules,
-        aluminumComponentPostEdges
+        aluminumComponentPostEdges,
+        carbonComponentPostEdges
       );
     }));
 
@@ -798,17 +880,44 @@ async function addPlacement(
   wall,
   modelTransforms,
   cuttingRules,
-  aluminumComponentPostEdges = null
+  aluminumComponentPostEdges = null,
+  carbonComponentPostEdges = null
 ) {
   const y = meters(placement.heightFromFloor);
   const product = design.productBySku[placement.productSku] || design.productByType[placement.componentType];
   const name = product?.nameCn || placement.componentType;
   const transform = getComponentTransform(placement.componentType, modelTransforms, report);
+  const requestedVisualWidth = getCarbonRequestedVisualWidth({
+    seriesId: series?.seriesId,
+    componentType: placement.componentType,
+    wallId: wall?.id,
+    bayWidth
+  });
+  const carbonVisualCompensation = getCarbonVisualCompensation({
+    seriesId: series?.seriesId,
+    componentType: placement.componentType,
+    wallId: wall?.id
+  });
+  const carbonPostInnerWidth = carbonComponentPostEdges
+    ? carbonComponentPostEdges.rightPostInnerEdge - carbonComponentPostEdges.leftPostInnerEdge
+    : null;
+  const usesCarbonPostInnerWidthCompensation =
+    series?.seriesId === "carbon-steel-post-wardrobe-v2"
+    && ["back", "left", "right"].includes(wall?.id)
+    && usesCarbonVisualWidthCompensation(placement.componentType)
+    && Number.isFinite(carbonPostInnerWidth);
+  const visualWidth = usesCarbonPostInnerWidthCompensation
+    ? carbonPostInnerWidth + carbonVisualCompensation
+    : series?.seriesId === "carbon-steel-post-wardrobe-v2"
+      && usesCarbonVisualWidthCompensation(placement.componentType)
+      && Number.isFinite(carbonPostInnerWidth)
+      ? Math.min(requestedVisualWidth, carbonPostInnerWidth)
+      : requestedVisualWidth;
   const model = await createModelOrMissing(
     product,
     series,
     report,
-    modelTransforms.targetSize(placement.componentType, bayWidth, depth),
+    modelTransforms.targetSize(placement.componentType, visualWidth, depth),
     name,
     transform,
     placement.componentType,
@@ -860,6 +969,20 @@ async function addPlacement(
     && usesAluminumPostInnerEdgeAlignment(placement.componentType)
     ? fitAluminumComponentToPostEdges(model, group, aluminumComponentPostEdges)
     : null;
+  if (
+    series?.seriesId === "carbon-steel-post-wardrobe-v2"
+    && usesCarbonVisualWidthCompensation(placement.componentType)
+    && ["back", "left", "right"].includes(wall?.id)
+  ) {
+    alignCarbonComponentToWall(
+      model,
+      group,
+      wall,
+      meters(Number(design.room?.width) || 0),
+      meters(Number(design.room?.depth) || 0),
+      placement.componentType
+    );
+  }
   const actualWidth = getObjectWidth(model);
   model.userData = {
     ...model.userData,
@@ -885,6 +1008,12 @@ async function addPlacement(
     innerBayWidth: placement.innerBayWidth,
     componentCutLength: placement.componentCutLength,
     visualScaleWidth: placement.visualScaleWidth,
+    requestedVisualWidth: toMm(requestedVisualWidth),
+    actualPostInnerWidth: Number.isFinite(carbonPostInnerWidth)
+      ? toMm(carbonPostInnerWidth)
+      : null,
+    clampedVisualWidth: toMm(visualWidth),
+    usesSideWallPostInnerWidth: usesCarbonPostInnerWidthCompensation,
     aluminumPostInnerEdgeAdjustment,
     originalBoundingBoxWidth: model.userData.originalBoundingBoxWidth,
     finalBoundingBoxWidth: toMm(actualWidth),
@@ -1149,6 +1278,90 @@ function applyDepthAnchor(model, transform) {
   model.position.z += targetBackZ - box3.min.z;
 }
 
+function getCarbonPostWallReferenceBox(post) {
+  const wholeBox = new THREE.Box3().setFromObject(post);
+  if (wholeBox.isEmpty()) return wholeBox;
+  const shaftMeshes = findCarbonPostShaftMeshes(post);
+  if (!shaftMeshes.length) return wholeBox;
+  const shaftBox = getObjectsBoxRelativeToWorld(shaftMeshes);
+  return shaftBox.isEmpty() ? wholeBox : shaftBox;
+}
+
+function findCarbonPostShaftMeshes(post) {
+  const candidates = [];
+  post.traverse((child) => {
+    if (!child.isMesh) return;
+    const box3 = new THREE.Box3().setFromObject(child);
+    if (box3.isEmpty()) return;
+    const size = box3.getSize(new THREE.Vector3());
+    candidates.push({
+      mesh: child,
+      height: size.y,
+      depth: size.z,
+      width: size.x
+    });
+  });
+  if (!candidates.length) return [];
+
+  const maxHeight = Math.max(...candidates.map((candidate) => candidate.height));
+  return candidates
+    .filter((candidate) => candidate.height >= maxHeight - 1e-6)
+    .sort((a, b) => a.depth - b.depth || b.width - a.width)
+    .map((candidate) => candidate.mesh);
+}
+
+function alignCarbonComponentToWall(model, group, wall, roomWidth, roomDepth, componentType) {
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const worldBox = new THREE.Box3().setFromObject(model);
+  if (worldBox.isEmpty()) return;
+
+  const wallClearance = meters(getCarbonComponentWallClearanceMm(wall?.id, componentType));
+  let deltaWorldX = 0;
+  let deltaWorldZ = 0;
+
+  if (wall?.id === "left") {
+    const targetWallSideX = -roomWidth / 2 + wallClearance;
+    deltaWorldX = targetWallSideX - worldBox.min.x;
+  } else if (wall?.id === "right") {
+    const targetWallSideX = roomWidth / 2 - wallClearance;
+    deltaWorldX = targetWallSideX - worldBox.max.x;
+  } else if (wall?.id === "back") {
+    const targetWallSideZ = -roomDepth / 2 + wallClearance;
+    deltaWorldZ = targetWallSideZ - worldBox.min.z;
+  }
+
+  if (Math.abs(deltaWorldX) <= 1e-12 && Math.abs(deltaWorldZ) <= 1e-12) return;
+  translateObjectByWorldDelta(model, group, deltaWorldX, 0, deltaWorldZ);
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+}
+
+function getCarbonComponentWallClearanceMm(wallId, componentType) {
+  if (wallId === "back") {
+    return componentType === "singleRail" || componentType === "doubleRail" ? 208 : 10;
+  }
+  if (wallId === "left" || wallId === "right") {
+    return componentType === "singleRail" || componentType === "doubleRail" ? 208 : 10;
+  }
+  return 10;
+}
+
+function getCarbonRequestedVisualWidth({ seriesId, componentType, wallId, bayWidth }) {
+  if (seriesId !== "carbon-steel-post-wardrobe-v2" || !usesCarbonVisualWidthCompensation(componentType)) {
+    return bayWidth;
+  }
+  const extraWidthMm = ["back", "left", "right"].includes(wallId) ? 25 : 5;
+  return bayWidth + meters(extraWidthMm);
+}
+
+function getCarbonVisualCompensation({ seriesId, componentType, wallId }) {
+  if (seriesId !== "carbon-steel-post-wardrobe-v2") return 0;
+  if (!["back", "left", "right"].includes(wallId)) return 0;
+  if (!usesCarbonVisualWidthCompensation(componentType)) return 0;
+  return meters(25);
+}
+
 function usesAluminumPostInnerEdgeAlignment(componentType) {
   return [
     "woodShelf",
@@ -1231,6 +1444,7 @@ function fitAluminumComponentToPostEdges(model, group, postEdges) {
         && finalBoardBox.max.x <= finalComponentBox.max.x + 1e-6)
   };
 }
+
 
 function findAluminumShelfBoardMeshes(model) {
   const candidates = [];
@@ -1322,7 +1536,9 @@ async function createModelOrMissing(product, series, report, targetSize, label, 
     const effectiveTransform = componentType === "post"
       ? series?.seriesId === "aluminum-post-wardrobe"
         ? { ...transform, resizeMode: "stretchHeightOnly", scaleAxis: "y" }
-        : { ...transform, resizeMode: "stretchXYZ", scaleAxis: "y" }
+        : series?.seriesId === "carbon-steel-post-wardrobe-v2"
+          ? transform
+          : { ...transform, resizeMode: "stretchXYZ", scaleAxis: "y" }
       : series?.seriesId === "aluminum-post-wardrobe" && componentType === "singleRail"
         ? { ...transform, resizeMode: "stretchWidthOnly", scaleAxis: "x" }
         : transform;
@@ -1549,6 +1765,15 @@ function getObjectsBoxRelativeTo(objects, relativeTo) {
   return box;
 }
 
+function getObjectsBoxRelativeToWorld(objects) {
+  const box = new THREE.Box3();
+  objects.forEach((object) => {
+    const objectBox = new THREE.Box3().setFromObject(object);
+    if (!objectBox.isEmpty()) box.union(objectBox);
+  });
+  return box;
+}
+
 function translateObjectByGroupLocalDelta(object, group, deltaX, deltaY = 0, deltaZ = 0) {
   const parent = object.parent || group;
   group.updateMatrixWorld(true);
@@ -1558,6 +1783,18 @@ function translateObjectByGroupLocalDelta(object, group, deltaX, deltaY = 0, del
   const parentOrigin = parent.worldToLocal(groupOriginWorld.clone());
   const parentShift = parent.worldToLocal(groupShiftWorld.clone());
   object.position.add(parentShift.sub(parentOrigin));
+}
+
+function translateObjectByWorldDelta(object, relativeTo, deltaX, deltaY = 0, deltaZ = 0) {
+  const parent = object.parent || relativeTo;
+  parent.updateMatrixWorld(true);
+  object.updateMatrixWorld(true);
+  const worldOrigin = object.getWorldPosition(new THREE.Vector3());
+  const localOrigin = parent.worldToLocal(worldOrigin.clone());
+  const localShifted = parent.worldToLocal(
+    worldOrigin.clone().add(new THREE.Vector3(deltaX, deltaY, deltaZ))
+  );
+  object.position.add(localShifted.sub(localOrigin));
 }
 
 function serializeVectorMm(vector) {
@@ -1571,15 +1808,38 @@ function serializeVectorMm(vector) {
 function applyPlacementColor(object, componentType, frameColor, modelTransforms, seriesId = "") {
   const colorMode = modelTransforms.colorMode(componentType);
   if (colorMode === "frame") {
-    applyModelColor(object, getFrameColor(frameColor), { metalness: 0.55, roughness: 0.28 });
+    const materialPatch = seriesId === "carbon-steel-post-wardrobe-v2"
+      ? { metalness: 0.45, roughness: 0.32 }
+      : { metalness: 0.55, roughness: 0.28 };
+    applyModelColor(object, getFrameColor(frameColor), materialPatch);
     return;
   }
   if (colorMode === "wood") {
-    const materialFilter = seriesId === "aluminum-post-wardrobe"
+    const materialFilter = seriesId === "carbon-steel-post-wardrobe-v2"
+      ? (material) => /^P(?:ly|lay)wood_01_1k$/i.test(material.name || "")
+      : seriesId === "aluminum-post-wardrobe"
       ? (material) => !/^Metal_06_1k$/i.test(material.name || "")
       : null;
     applyModelColor(object, theme.colors.woodBrown, { metalness: 0, roughness: 0.58 }, materialFilter);
+    if (seriesId === "carbon-steel-post-wardrobe-v2") {
+      applyModelColor(
+        object,
+        getFrameColor(frameColor),
+        { metalness: 0.45, roughness: 0.32 },
+        (material) => /^Metal_06_1K$/i.test(material.name || "")
+      );
+    }
   }
+}
+
+function usesCarbonVisualWidthCompensation(componentType) {
+  return [
+    "woodShelf",
+    "shoesShelf",
+    "singleRail",
+    "cabinet",
+    "jewelryBox"
+  ].includes(componentType);
 }
 
 function applyAluminumMetalMaterialColor(object, frameColor) {
