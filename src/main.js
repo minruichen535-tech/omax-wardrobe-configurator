@@ -1229,6 +1229,33 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
   };
   totalRow.height = 24;
   styleQuotationRow(totalRow, "total");
+
+  const shippingRow = sheet.addRow([
+    "", "", "", "", "", "", "", "", "运费",
+    null, "", ""
+  ]);
+  shippingRow.height = 24;
+  styleQuotationRow(shippingRow, "detail");
+  styleQuotationFeeRow(shippingRow);
+
+  const packagingRow = sheet.addRow([
+    "", "", "", "", "", "", "", "", "包装费",
+    null, "", ""
+  ]);
+  packagingRow.height = 24;
+  styleQuotationRow(packagingRow, "detail");
+  styleQuotationFeeRow(packagingRow);
+
+  const finalTotalRow = sheet.addRow([
+    "", "", "", "", "", "", "", "", "最终总价",
+    null, "", ""
+  ]);
+  finalTotalRow.getCell(10).value = {
+    formula: `J${totalRow.number}+N(J${shippingRow.number})+N(J${packagingRow.number})`,
+    result: quotationTotal
+  };
+  finalTotalRow.height = 24;
+  styleQuotationRow(finalTotalRow, "total");
   sheet.addRow([]);
 
   const factoryTitleRow = sheet.addRow(["工厂剪尺"]);
@@ -1269,7 +1296,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
 
   [
     "1.收到货后如有差错。请3天内来电告知。逾期恕概不受理。",
-    "2.以上报价不含税，不含运费，不含银行汇款手续费",
+    "2.以上报价不含税，不含银行汇款手续费；运费及包装费以报价单填写金额为准。",
     "3.付款方式：出货前付清。",
     "4.铝框层板10–15天交货"
   ].forEach((declaration) => {
@@ -1347,6 +1374,14 @@ function styleQuotationRow(row, role, maxColumn = 12) {
       cell.font = { bold: true, color: { argb: "FF4A2A17" } };
     });
   }
+}
+
+function styleQuotationFeeRow(row) {
+  row.getCell(9).font = { bold: true, color: { argb: "FF4A2A17" } };
+  row.getCell(9).alignment = excelCenteredAlignment();
+  row.getCell(10).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+  row.getCell(10).numberFormat = "¥#,##0.00";
+  row.getCell(10).alignment = excelRightAlignment();
 }
 
 function excelThinBorder() {
