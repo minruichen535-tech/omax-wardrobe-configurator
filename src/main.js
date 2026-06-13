@@ -41,7 +41,7 @@ import {
 } from "./dataSource.js?v=carbon-v2-model-20260611-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
 import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=u-asymmetric-side-walls-20260613-01";
-import { WardrobeScene } from "./scene.js?v=u-asymmetric-side-walls-20260613-01";
+import { WardrobeScene } from "./scene.js?v=u-asymmetric-room-surfaces-20260613-01";
 import { getCuttingRules, getDisplayRules } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
 
 const h = React.createElement;

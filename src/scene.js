@@ -212,6 +212,7 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
       glassShelf: 0
     },
     aluminumBaseLedDiagnostics: [],
+    roomWallDiagnostics: null,
     geometryPlaceholders: ["room-floor", "room-walls"]
   };
   publishModelReport(report, "loading");
@@ -223,7 +224,22 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
   const seriesId = series?.seriesId || "japanese-closet";
   const cuttingRules = design.cuttingRules || getCuttingRules(seriesId) || getCuttingRules("japanese-closet");
   const modelTransforms = getModelTransforms(seriesId) || getModelTransforms("japanese-closet");
-  addRoom(root, roomWidth, roomDepth, roomHeight, seriesId);
+  const usesAsymmetricUSideWalls = config.layout === "U" && config.uAsymmetricSideWalls === true;
+  const leftWallDepth = usesAsymmetricUSideWalls
+    ? meters(Number(config.leftWallLength) || design.room.depth)
+    : roomDepth;
+  const rightWallDepth = usesAsymmetricUSideWalls
+    ? meters(Number(config.rightWallLength) || design.room.depth)
+    : roomDepth;
+  report.roomWallDiagnostics = addRoom(
+    root,
+    roomWidth,
+    roomDepth,
+    roomHeight,
+    seriesId,
+    leftWallDepth,
+    rightWallDepth
+  );
   for (const wall of design.activeWalls) {
     report.wallGenerationOrder.push(wall.id);
     await addWallRun(
@@ -276,19 +292,22 @@ function publishModelReport(report, status) {
     ledGlowDiagnostics: report.ledGlowDiagnostics,
     aluminumBaseLedStripCounts: report.aluminumBaseLedStripCounts,
     aluminumBaseLedDiagnostics: report.aluminumBaseLedDiagnostics,
+    roomWallDiagnostics: report.roomWallDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
   };
   window.__modelLoadReport = payload;
   document.documentElement.setAttribute("data-model-report", JSON.stringify(payload));
 }
 
-function addRoom(root, width, depth, height, seriesId) {
+function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, rightWallDepth = depth) {
   const floorMat = new THREE.MeshStandardMaterial({ color: theme.colors.border, roughness: 0.85 });
   const wallMat = new THREE.MeshStandardMaterial({ color: theme.colors.background, roughness: 0.9, transparent: true, opacity: 0.82 });
   const wallThickness = seriesId === "carbon-steel-post-wardrobe-v2" ? 0.06 : 0.04;
+  const floorDepth = Math.max(depth, leftWallDepth, rightWallDepth);
+  const floorCenterZ = (floorDepth - depth) / 2;
 
-  const floor = box(width, wallThickness, depth, floorMat);
-  floor.position.set(0, -wallThickness / 2, 0);
+  const floor = box(width, wallThickness, floorDepth, floorMat);
+  floor.position.set(0, -wallThickness / 2, floorCenterZ);
   floor.receiveShadow = true;
   root.add(floor);
 
@@ -301,17 +320,52 @@ function addRoom(root, width, depth, height, seriesId) {
   backWall.position.set(0, height / 2, backWallCenterZ);
   root.add(backWall);
 
-  const leftWall = box(wallThickness, height, depth, wallMat);
-  leftWall.position.set(-width / 2 - wallThickness / 2, height / 2, 0);
+  const leftWall = box(wallThickness, height, leftWallDepth, wallMat);
+  leftWall.position.set(
+    -width / 2 - wallThickness / 2,
+    height / 2,
+    (leftWallDepth - depth) / 2
+  );
   root.add(leftWall);
 
-  const rightWall = box(wallThickness, height, depth, wallMat);
-  rightWall.position.set(width / 2 + wallThickness / 2, height / 2, 0);
+  const rightWall = box(wallThickness, height, rightWallDepth, wallMat);
+  rightWall.position.set(
+    width / 2 + wallThickness / 2,
+    height / 2,
+    (rightWallDepth - depth) / 2
+  );
   root.add(rightWall);
 
-  const grid = new THREE.GridHelper(Math.max(width, depth), 12, theme.colors.walnut, theme.colors.divider);
-  grid.position.y = 0.03;
+  const gridSize = Math.max(width, floorDepth);
+  const grid = new THREE.GridHelper(gridSize, 12, theme.colors.walnut, theme.colors.divider);
+  grid.position.set(0, 0.03, floorCenterZ);
   root.add(grid);
+
+  return {
+    floor: {
+      widthMm: Math.round(width * 1000),
+      depthMm: Math.round(floorDepth * 1000),
+      centerZMm: Math.round(floorCenterZ * 1000)
+    },
+    grid: {
+      sizeMm: Math.round(gridSize * 1000),
+      centerZMm: Math.round(floorCenterZ * 1000)
+    },
+    back: {
+      lengthMm: Math.round(width * 1000),
+      axis: "worldX"
+    },
+    left: {
+      lengthMm: Math.round(leftWallDepth * 1000),
+      axis: "worldZ",
+      centerZMm: Math.round(leftWall.position.z * 1000)
+    },
+    right: {
+      lengthMm: Math.round(rightWallDepth * 1000),
+      axis: "worldZ",
+      centerZMm: Math.round(rightWall.position.z * 1000)
+    }
+  };
 }
 
 async function addWallRun(
