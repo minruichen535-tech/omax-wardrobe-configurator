@@ -29,7 +29,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=carbon-v2-visual-position-20260611-02";
+} from "./configurator.js?v=u-asymmetric-side-walls-20260613-01";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -40,9 +40,9 @@ import {
   saveWorkbookOverride
 } from "./dataSource.js?v=carbon-v2-model-20260611-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
-import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=carbon-v2-visual-position-20260611-02";
-import { WardrobeScene } from "./scene.js?v=carbon-v2-visual-position-20260611-02";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
+import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=u-asymmetric-side-walls-20260613-01";
+import { WardrobeScene } from "./scene.js?v=u-asymmetric-side-walls-20260613-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
@@ -120,8 +120,8 @@ function ClientApp({ data, isClientMode = false }) {
     [data]
   );
   const displayRules = useMemo(
-    () => getDisplayRules(data.series.seriesId) || getDisplayRules("japanese-closet"),
-    [data.series.seriesId]
+    () => getDisplayRules(data.series.seriesId, data) || getDisplayRules("japanese-closet"),
+    [data]
   );
   const design = useMemo(() => calculateDesign(config, data), [config, data]);
   const webQuotationTotal = useMemo(
@@ -133,7 +133,14 @@ function ClientApp({ data, isClientMode = false }) {
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
   const isAluminumPostWardrobe = data.series.seriesId === "aluminum-post-wardrobe";
+  const supportsLed = data.series.supportsLed === true || isAluminumPostWardrobe;
+  const usesProductPostHeight = data.series.usesProductPostHeight === true;
+  const resolvedShelfDepth = data.series.resolveShelfDepth?.({
+    products: data.products,
+    settings: data.settings
+  });
   const fixedFrameColor = data.series.fixedFrameColor || "";
+  const fixedShelfDepth = Number(data.series.fixedShelfDepth);
   const supportsLibraryClick = data.series.supportsLibraryClick === true || isAluminumPostWardrobe;
   const hideShelfDepthControl = data.series.hideShelfDepthControl === true;
   const sceneBrandInfo = isAluminumPostWardrobe
@@ -156,7 +163,11 @@ function ClientApp({ data, isClientMode = false }) {
     setConfig((current) => ({
       ...current,
       wallOffset: isAluminumPostWardrobe ? 250 : fixedPostWallOffset,
-      shelfDepth: isAluminumPostWardrobe ? 500 : (current.shelfDepth || defaultShelfDepth),
+      shelfDepth: Number.isFinite(fixedShelfDepth) && fixedShelfDepth > 0
+        ? fixedShelfDepth
+        : isAluminumPostWardrobe
+        ? 500
+        : Number(resolvedShelfDepth) || current.shelfDepth || defaultShelfDepth,
       connectionMode: isAluminumPostWardrobe
         ? normalizeAluminumConnectionMode(
           current.connectionMode
@@ -170,18 +181,21 @@ function ClientApp({ data, isClientMode = false }) {
       ...(isAluminumPostWardrobe ? {
         frameColor: "Black",
         postStyle: current.postStyle || "round",
+      } : {}),
+      ...(supportsLed ? {
         led: typeof current.led === "boolean"
           ? current.led
           : parseBooleanSetting(data.settings?.defaultLed, false)
       } : {}),
       ...(fixedFrameColor ? {
         frameColor: fixedFrameColor,
-        color: data.series.fixedConfigColor || fixedFrameColor.toLowerCase(),
-        shelfDepth: Number(data.settings?.defaultShelfDepth) || 415
+        color: data.series.fixedConfigColor || fixedFrameColor.toLowerCase()
       } : {})
     }));
   }, [
     isAluminumPostWardrobe,
+    supportsLed,
+    resolvedShelfDepth,
     data.settings?.fixedPostWallOffset,
     data.settings?.defaultWallOffset,
     data.settings?.defaultShelfDepth,
@@ -189,6 +203,7 @@ function ClientApp({ data, isClientMode = false }) {
     data.settings?.defaultLed,
     connectionModeOptions.join("|"),
     fixedFrameColor,
+    fixedShelfDepth,
     data.series.fixedConfigColor
   ]);
 
@@ -223,6 +238,50 @@ function ClientApp({ data, isClientMode = false }) {
     setConfig((current) => syncWallLengthsWithRoom(current, { [key]: clampValue(nextValue, 1, 99999) }));
   };
   const setLayout = (layout) => setConfig((current) => applyLayout(current, layout));
+  const setUAsymmetricSideWalls = (enabled) => setConfig((current) => {
+    const leftWallLength = Number(current.leftWallLength) > 0
+      ? Number(current.leftWallLength)
+      : current.room.depth;
+    const rightWallLength = Number(current.rightWallLength) > 0
+      ? Number(current.rightWallLength)
+      : current.room.depth;
+    return {
+      ...current,
+      uAsymmetricSideWalls: enabled,
+      leftWallLength,
+      rightWallLength,
+      walls: {
+        ...current.walls,
+        left: {
+          ...current.walls.left,
+          length: enabled ? leftWallLength : current.room.depth
+        },
+        right: {
+          ...current.walls.right,
+          length: enabled ? rightWallLength : current.room.depth
+        }
+      }
+    };
+  });
+  const setUSideWallLength = (wallId, value) => {
+    const nextValue = parseIntegerInput(value);
+    if (nextValue == null) return;
+    const length = clampValue(nextValue, 1, 99999);
+    const field = wallId === "left" ? "leftWallLength" : "rightWallLength";
+    setConfig((current) => ({
+      ...current,
+      [field]: length,
+      walls: {
+        ...current.walls,
+        [wallId]: {
+          ...current.walls[wallId],
+          length,
+          bayCount: recommendBayCount(length, cuttingRules),
+          bayWidths: []
+        }
+      }
+    }));
+  };
   const exportQuote = async () => {
     setIsExportingQuote(true);
     try {
@@ -336,8 +395,8 @@ function ClientApp({ data, isClientMode = false }) {
           h(NumberField, { label: "房间宽度", value: config.room.width, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("width", value) }),
           h(NumberField, { label: "房间深度", value: config.room.depth, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("depth", value) }),
           !isAluminumPostWardrobe && !hideRoomHeightInput && h(NumberField, { label: "房间高度", value: config.room.height, suffix: "mm", min: 1, max: 99999, step: 1, onChange: (value) => setRoom("height", value) }),
-          isAluminumPostWardrobe
-            ? h("p", { className: "fixed-height-note" }, "立柱标准高度 3000mm")
+          isAluminumPostWardrobe || usesProductPostHeight
+            ? h("p", { className: "fixed-height-note" }, `立柱标准高度 ${design.postHeight}mm`)
             : postHeightOptions.length > 0 && h(Segmented, {
             label: "立柱高度",
             value: String(config.postHeight || data.settings?.defaultPostHeight || postHeightOptions[0]),
@@ -375,7 +434,7 @@ function ClientApp({ data, isClientMode = false }) {
             ],
             onChange: (postStyle) => updateConfig({ postStyle })
           }),
-          isAluminumPostWardrobe && h(Segmented, {
+          supportsLed && h(Segmented, {
             label: "Lighting",
             value: config.led === true ? "true" : "false",
             options: [
@@ -397,6 +456,36 @@ function ClientApp({ data, isClientMode = false }) {
             ],
             onChange: setLayout
           }),
+          config.layout === "U" && h("div", { className: "u-asymmetric-options" },
+            h("label", { className: "check-field" },
+              h("input", {
+                type: "checkbox",
+                checked: config.uAsymmetricSideWalls === true,
+                onChange: (event) => setUAsymmetricSideWalls(event.target.checked)
+              }),
+              "左右墙独立尺寸"
+            ),
+            config.uAsymmetricSideWalls === true && h("div", { className: "u-side-length-fields" },
+              h(NumberField, {
+                label: "左墙长度",
+                value: config.leftWallLength,
+                suffix: "mm",
+                min: 1,
+                max: 99999,
+                step: 1,
+                onChange: (value) => setUSideWallLength("left", value)
+              }),
+              h(NumberField, {
+                label: "右墙长度",
+                value: config.rightWallLength,
+                suffix: "mm",
+                min: 1,
+                max: 99999,
+                step: 1,
+                onChange: (value) => setUSideWallLength("right", value)
+              })
+            )
+          ),
           supportsULayoutModes && config.layout === "U" && h("div", { className: "u-layout-options" },
             usesIconULayoutControl
               ? h(ULayoutModeSelector, {
@@ -433,7 +522,7 @@ function ClientApp({ data, isClientMode = false }) {
             h("div", { className: "wall-control" },
               h("div", null,
                 h("strong", null, config.layout === "U" && wall.id === "back" ? "底墙" : labelWall(wall.id)),
-                h("span", null, `${Math.round(getWallDisplayLength(data.series, wall, design.room))}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
+                h("span", null, `${Math.round(getWallDisplayLength(data.series, wall, design.room, config))}mm / 单跨 ${Math.round(wall.bayWidth)}mm`)
               ),
               h("input", {
                 type: "number",
@@ -1353,7 +1442,13 @@ function getExcelDisplayColor(item, config) {
   return colorMap[color] || item.colorNameCn || color;
 }
 
-function getWallDisplayLength(series, wall, room) {
+function getWallDisplayLength(series, wall, room, config) {
+  if (
+    config?.layout === "U"
+    && config.uAsymmetricSideWalls === true
+  ) {
+    return wall.sourceLength;
+  }
   if (
     series?.seriesId === "carbon-steel-post-wardrobe-v2"
     && (wall.id === "left" || wall.id === "right")

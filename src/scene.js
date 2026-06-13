@@ -2,14 +2,24 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getFactoryInnerBayWidth, meters } from "./configurator.js";
+import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=u-asymmetric-side-walls-20260613-01";
 import { resolveSeriesAsset } from "./config/productSeries.js";
 import { theme } from "./config/theme.js?v=color-system-20260602-01";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
 const modelCache = new Map();
+const aluminumBaseSupportedUpdatedModelVersions = new Map([
+  ["models/TD-007-3-600.glb", "aluminum-base-supported-td-007-3-20260612-01"],
+  ["models/TD-007-3-700.glb", "aluminum-base-supported-td-007-3-20260612-01"],
+  ["models/TD-007-3-800.glb", "aluminum-base-supported-td-007-3-20260612-01"],
+  ["models/TD-007-3-900.glb", "aluminum-base-supported-td-007-3-20260612-01"],
+  ["models/TD-007-4-600.glb", "aluminum-base-supported-td-007-4-20260612-01"],
+  ["models/TD-007-4-700.glb", "aluminum-base-supported-td-007-4-20260612-01"],
+  ["models/TD-007-4-800.glb", "aluminum-base-supported-td-007-4-20260612-01"],
+  ["models/TD-007-4-900.glb", "aluminum-base-supported-td-007-4-20260612-01"]
+]);
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const sceneTransformVersion = "scene-transform-map-20260531-01";
@@ -193,8 +203,15 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
     skippedPostCoordinates: [],
     bayCoordinates: [],
     carbonCornerDiagnostics: [],
+    aluminumBaseSideCornerDiagnostics: [],
     ledGlowStripCount: 0,
     ledGlowDiagnostics: [],
+    aluminumBaseLedStripCounts: {
+      post: 0,
+      woodShelf: 0,
+      glassShelf: 0
+    },
+    aluminumBaseLedDiagnostics: [],
     geometryPlaceholders: ["room-floor", "room-walls"]
   };
   publishModelReport(report, "loading");
@@ -254,8 +271,11 @@ function publishModelReport(report, status) {
     skippedPostCoordinates: report.skippedPostCoordinates,
     bayCoordinates: report.bayCoordinates,
     carbonCornerDiagnostics: report.carbonCornerDiagnostics,
+    aluminumBaseSideCornerDiagnostics: report.aluminumBaseSideCornerDiagnostics,
     ledGlowStripCount: report.ledGlowStripCount,
     ledGlowDiagnostics: report.ledGlowDiagnostics,
+    aluminumBaseLedStripCounts: report.aluminumBaseLedStripCounts,
+    aluminumBaseLedDiagnostics: report.aluminumBaseLedDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
   };
   window.__modelLoadReport = payload;
@@ -316,9 +336,18 @@ async function addWallRun(
   const dropTargetDepth = 0.5;
   const wallOffset = meters(Number(config.wallOffset) || 250);
   const wallCenterOffset = meters(Number(wall.centerOffset) || 0);
+  const wallThickness = series?.seriesId === "carbon-steel-post-wardrobe-v2" ? 0.06 : 0.04;
+  const backWallInnerSurfaceShift = series?.seriesId === "aluminum-base-supported"
+    && wall.id === "back"
+    ? wallThickness / 2
+    : 0;
 
   if (wall.id === "back") {
-    group.position.set(wallCenterOffset, 0, -roomDepth / 2 + wallOffset);
+    group.position.set(
+      wallCenterOffset,
+      0,
+      -roomDepth / 2 + wallOffset + backWallInnerSurfaceShift
+    );
   }
   if (wall.id === "left") {
     group.rotation.y = Math.PI / 2;
@@ -365,6 +394,8 @@ async function addWallRun(
   }));
   const factoryInnerBayWidth = meters(getFactoryInnerBayWidth(wall.length, wall.bayCount, cuttingRules));
   const postProduct = design.productByType.post;
+  const aluminumBaseMiddlePostProduct = design.productBySku["TD-001-1"] || postProduct;
+  const aluminumBaseSidePostProduct = design.productBySku["TD-001-2"] || aluminumBaseMiddlePostProduct;
   const resolvedPostModelPath = series?.resolvePostModelPath?.({
     connectionMode: config.connectionMode,
     postHeight: design.postHeight
@@ -390,9 +421,17 @@ async function addWallRun(
   const isBackWall = wall.id === "back";
   const postEndVisualInset = meters(modelTransforms.post.backEndVisualInsetMm);
   const postLocalBoundsByIndex = new Map();
+  const aluminumBaseAdjustedPostIndexes = new Set();
   for (const postPosition of postPositions) {
+    const isWallRunEndPost = postPosition.index === 0
+      || postPosition.index === postPositions.length - 1;
+    const wallPostProduct = series?.seriesId === "aluminum-base-supported"
+      ? isWallRunEndPost
+        ? aluminumBaseSidePostProduct
+        : aluminumBaseMiddlePostProduct
+      : selectedPostProduct;
     const post = await createModelOrMissing(
-      selectedPostProduct,
+      wallPostProduct,
       series,
       report,
       postTargetSize,
@@ -408,12 +447,31 @@ async function addWallRun(
     const visualPostX = getVisualPostX(postPosition, postPositions.length, isBackWall, postEndVisualInset);
     const fittedPostOffset = post.position.clone();
     post.position.set(
-      visualPostX + (series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.x : 0),
+      visualPostX + (
+        series?.seriesId === "carbon-steel-post-wardrobe-v2"
+        || series?.seriesId === "aluminum-base-supported"
+          ? fittedPostOffset.x
+          : 0
+      ),
       series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.y : 0,
       series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.z : 0
     );
     post.userData = { ...post.userData, wallId: wall.id, postIndex: postPosition.index };
+    post.userData.productSku = wallPostProduct?.sku || "";
     group.add(post);
+    if (series?.seriesId === "aluminum-base-supported") {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const backPanelTransform = getComponentTransform("backPanel", modelTransforms);
+      const backPanelBackPlane = (Number(backPanelTransform.depthOffset) || 0)
+        - (Number(backPanelTransform.depthAnchorBaseDepth) || 0.45) / 2;
+      const postLocalBox = getObjectBoxRelativeTo(post, group);
+      if (!postLocalBox.isEmpty()) {
+        post.position.z += backPanelBackPlane - postLocalBox.min.z;
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+    }
     const isCarbonSeries = series?.seriesId === "carbon-steel-post-wardrobe-v2";
     const carbonPostWallClearance = meters(210);
     if (isCarbonSeries) {
@@ -514,6 +572,82 @@ async function addWallRun(
         post.updateMatrixWorld(true);
       }
     }
+    const aluminumBaseLogicalBackCornerPostIndex = wall.backCornerBayIndex === 0
+      ? 0
+      : wall.backCornerBayIndex === wall.bayCount - 1
+        ? wall.bayCount
+        : null;
+    const aluminumBaseBackCornerPostIndex = aluminumBaseLogicalBackCornerPostIndex === null
+      ? null
+      : reverseBayOrder
+        ? wall.bayCount - aluminumBaseLogicalBackCornerPostIndex
+        : aluminumBaseLogicalBackCornerPostIndex;
+    const shouldAlignAluminumBaseSideCornerPost = series?.seriesId === "aluminum-base-supported"
+      && (wall.id === "left" || wall.id === "right")
+      && postPosition.index === aluminumBaseBackCornerPostIndex
+      && (
+        config.layout === "L-left"
+        || config.layout === "L-right"
+        || (config.layout === "U" && config.uLayoutMode !== "side-first")
+      );
+    if (shouldAlignAluminumBaseSideCornerPost) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const beforeWorldPosition = post.getWorldPosition(new THREE.Vector3());
+      const beforeWorldBox = new THREE.Box3().setFromObject(post);
+      const backWallInnerSurfaceZ = -roomDepth / 2 + wallThickness / 2;
+      const targetWorldMinZ = backWallInnerSurfaceZ + meters(61);
+      const deltaWorldZ = targetWorldMinZ - beforeWorldBox.min.z;
+      if (Math.abs(deltaWorldZ) > 1e-12) {
+        const localOrigin = group.worldToLocal(beforeWorldPosition.clone());
+        const localShifted = group.worldToLocal(
+          beforeWorldPosition.clone().add(new THREE.Vector3(0, 0, deltaWorldZ))
+        );
+        post.position.add(localShifted.sub(localOrigin));
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+      const wallGap = meters(8);
+      const beforeWallGapBox = new THREE.Box3().setFromObject(post);
+      const targetWallSideX = wall.id === "left"
+        ? -roomWidth / 2 + wallGap
+        : roomWidth / 2 - wallGap;
+      const deltaWorldX = wall.id === "left"
+        ? targetWallSideX - beforeWallGapBox.min.x
+        : targetWallSideX - beforeWallGapBox.max.x;
+      if (Math.abs(deltaWorldX) > 1e-12) {
+        translateObjectByWorldDelta(post, group, deltaWorldX);
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+      const afterLocalBox = getObjectBoxRelativeTo(post, group);
+      if (!afterLocalBox.isEmpty()) {
+        postPosition.x = (afterLocalBox.min.x + afterLocalBox.max.x) / 2;
+      }
+      aluminumBaseAdjustedPostIndexes.add(postPosition.index);
+      const afterWorldPosition = post.getWorldPosition(new THREE.Vector3());
+      const afterWorldBox = new THREE.Box3().setFromObject(post);
+      report.aluminumBaseSideCornerDiagnostics.push({
+        layout: config.layout,
+        uLayoutMode: config.layout === "U" ? config.uLayoutMode || "back-first" : null,
+        wallId: wall.id,
+        postIndex: postPosition.index,
+        beforeWorldPosition: serializeVectorMm(beforeWorldPosition),
+        beforeWorldBBox: serializeBox(beforeWorldBox),
+        backWallInnerSurfaceZ: toMm(backWallInnerSurfaceZ),
+        targetWorldMinZ: toMm(targetWorldMinZ),
+        deltaWorldZ: toMm(deltaWorldZ),
+        sideWallInnerSurfaceX: toMm(wall.id === "left" ? -roomWidth / 2 : roomWidth / 2),
+        targetWallSideX: toMm(targetWallSideX),
+        deltaWorldX: toMm(deltaWorldX),
+        afterWorldPosition: serializeVectorMm(afterWorldPosition),
+        afterWorldBBox: serializeBox(afterWorldBox),
+        actualClearance: toMm(afterWorldBox.min.z - backWallInnerSurfaceZ),
+        actualSideWallClearance: toMm(wall.id === "left"
+          ? afterWorldBox.min.x + roomWidth / 2
+          : roomWidth / 2 - afterWorldBox.max.x)
+      });
+    }
     const shouldRecenterAluminumBackPost = series?.seriesId === "aluminum-post-wardrobe"
       && (config.layout === "L-left" || config.layout === "L-right" || config.layout === "U")
       && wall.id === "back";
@@ -563,6 +697,7 @@ async function addWallRun(
     if (
       series?.seriesId === "aluminum-post-wardrobe"
       || series?.seriesId === "carbon-steel-post-wardrobe-v2"
+      || series?.seriesId === "aluminum-base-supported"
     ) {
       group.updateMatrixWorld(true);
       post.updateMatrixWorld(true);
@@ -587,12 +722,26 @@ async function addWallRun(
         ...ledDiagnostic
       });
     }
+    if (series?.seriesId === "aluminum-base-supported") {
+      const ledDiagnostic = addAluminumBasePostLedStrip(
+        post,
+        group,
+        config.led === true,
+        wall.id,
+        postPosition.index
+      );
+      if (ledDiagnostic) {
+        report.aluminumBaseLedStripCounts.post += 1;
+        report.aluminumBaseLedDiagnostics.push(ledDiagnostic);
+      }
+    }
     const world = localToWorld(group, postPosition.x, 0, 0);
     const visualWorld = post.getWorldPosition(new THREE.Vector3());
     const finalPostWorldBox = new THREE.Box3().setFromObject(post);
     report.postCoordinates.push({
       wallId: wall.id,
-      modelPath: selectedPostProduct?.modelPath || "",
+      productSku: wallPostProduct?.sku || "",
+      modelPath: wallPostProduct?.modelPath || "",
       postStyle: config.postStyle || "round",
       connectionMode: config.connectionMode || "wall-mounted",
       axis: wallAxis,
@@ -617,10 +766,19 @@ async function addWallRun(
   }
 
   postPositions.slice(0, -1).forEach((_, bayIndex) => {
+    const usesAdjustedAluminumBaseBay = aluminumBaseAdjustedPostIndexes.has(bayIndex)
+      || aluminumBaseAdjustedPostIndexes.has(bayIndex + 1);
+    const renderedInnerBayWidth = usesAdjustedAluminumBaseBay
+      ? Math.max(
+        0.05,
+        Math.abs(postPositions[bayIndex + 1].x - postPositions[bayIndex].x)
+          - meters(cuttingRules.postProfileWidthMm)
+      )
+      : meters(wall.bays?.[bayIndex]?.innerBayWidth) || factoryInnerBayWidth;
     const bay = getBayGeometry(
       postPositions,
       bayIndex,
-      meters(wall.bays?.[bayIndex]?.innerBayWidth) || factoryInnerBayWidth,
+      renderedInnerBayWidth,
       cuttingRules.postProfileWidthMm
     );
     if (!bay) return;
@@ -658,13 +816,21 @@ async function addWallRun(
     }
   });
 
-  await Promise.all(design.placements
-    .filter((placement) => placement.wallId === wall.id)
-    .map(async (placement) => {
+  const wallPlacements = design.placements.filter((placement) => placement.wallId === wall.id);
+  const addWallPlacement = async (placement) => {
+      const usesAdjustedAluminumBaseBay = aluminumBaseAdjustedPostIndexes.has(placement.bayIndex)
+        || aluminumBaseAdjustedPostIndexes.has(placement.bayIndex + 1);
+      const renderedInnerBayWidth = usesAdjustedAluminumBaseBay
+        ? Math.max(
+          0.05,
+          Math.abs(postPositions[placement.bayIndex + 1].x - postPositions[placement.bayIndex].x)
+            - meters(cuttingRules.postProfileWidthMm)
+        )
+        : meters(wall.bays?.[placement.bayIndex]?.innerBayWidth) || factoryInnerBayWidth;
       const bay = getBayGeometry(
         postPositions,
         placement.bayIndex,
-        meters(wall.bays?.[placement.bayIndex]?.innerBayWidth) || factoryInnerBayWidth,
+        renderedInnerBayWidth,
         cuttingRules.postProfileWidthMm
       );
       if (!bay) {
@@ -682,14 +848,61 @@ async function addWallRun(
       const carbonComponentPostEdges = series?.seriesId === "carbon-steel-post-wardrobe-v2"
         ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
         : null;
-      const componentCenterX = carbonComponentPostEdges
-        ? (carbonComponentPostEdges.leftPostInnerEdge + carbonComponentPostEdges.rightPostInnerEdge) / 2
+      const aluminumBaseBackPanelPostEdges = series?.seriesId === "aluminum-base-supported"
+        && placement.componentType === "backPanel"
+        ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
+        : null;
+      const aluminumBaseWallWideShelfEdges = series?.seriesId === "aluminum-base-supported"
+        && placement.componentType === "woodShelf"
+        && (placement.wallWideSource || placement.wallWideDerived)
+        ? getWallWideShelfEdges(
+          postLocalBoundsByIndex,
+          placement.bayIndex,
+          wall.bayCount
+        )
+        : null;
+      const placementPostEdges = aluminumBaseWallWideShelfEdges
+        || aluminumBaseBackPanelPostEdges
+        || carbonComponentPostEdges;
+      const componentCenterX = placementPostEdges
+        ? (placementPostEdges.leftPostInnerEdge + placementPostEdges.rightPostInnerEdge) / 2
         : bay.centerX;
+      const componentWidth = aluminumBaseWallWideShelfEdges || aluminumBaseBackPanelPostEdges
+        ? placementPostEdges.rightPostInnerEdge - placementPostEdges.leftPostInnerEdge
+        : usesAdjustedAluminumBaseBay
+          ? bay.innerBayWidth
+          : meters(placement.visualScaleWidth || bay.innerBayWidth);
+      let renderedPlacement = placement;
+      let linkedShelfSourceBounds = null;
+      if (
+        series?.seriesId === "aluminum-base-supported"
+        && placement.linkedWallWideShelf
+      ) {
+        const sourceModel = group.children.find((child) => (
+          child.userData?.placementId === placement.sourcePlacementId
+        ));
+        const sourceLocalBox = sourceModel
+          ? getObjectBoxRelativeTo(sourceModel, group)
+          : null;
+        if (sourceLocalBox && !sourceLocalBox.isEmpty()) {
+          const linkedShelfHeight = sourceLocalBox.max.y;
+          renderedPlacement = {
+            ...placement,
+            heightFromFloor: toMm(linkedShelfHeight)
+          };
+          linkedShelfSourceBounds = {
+            sourcePlacementId: placement.sourcePlacementId,
+            sourceLocalBox: serializeBox(sourceLocalBox),
+            linkedShelfHeight: toMm(linkedShelfHeight),
+            clearance: 0
+          };
+        }
+      }
       report.bayPlacements.push({
-        placementId: placement.id,
+        placementId: renderedPlacement.id,
         wallId: wall.id,
         axis: wallAxis,
-        bayIndex: Number(placement.bayIndex),
+        bayIndex: Number(renderedPlacement.bayIndex),
         leftPostX: toMm(bay.leftX),
         rightPostX: toMm(bay.rightX),
         postCenterDistance: toMm(bay.postCenterDistance),
@@ -700,14 +913,18 @@ async function addWallRun(
         componentCutLength: placement.componentCutLength,
         visualScaleWidth: placement.visualScaleWidth,
         aluminumComponentPostEdges: serializeAluminumPostInnerEdges(aluminumComponentPostEdges),
+        aluminumBaseBackPanelPostEdges: serializeAluminumPostInnerEdges(aluminumBaseBackPanelPostEdges),
+        aluminumBaseWallWideShelfEdges: serializeAluminumPostInnerEdges(aluminumBaseWallWideShelfEdges),
         carbonComponentPostEdges: serializeAluminumPostInnerEdges(carbonComponentPostEdges),
-        componentCenterX: toMm(componentCenterX)
+        componentCenterX: toMm(componentCenterX),
+        componentWidth: toMm(componentWidth),
+        linkedShelfSourceBounds
       });
       await addPlacement(
         group,
-        placement,
+        renderedPlacement,
         componentCenterX,
-        meters(placement.visualScaleWidth || bay.innerBayWidth),
+        componentWidth,
         shelfDepth,
         config,
         design,
@@ -721,7 +938,18 @@ async function addWallRun(
         aluminumComponentPostEdges,
         carbonComponentPostEdges
       );
-    }));
+  };
+  if (series?.seriesId === "aluminum-base-supported") {
+    const orderedPlacements = [
+      ...wallPlacements.filter((placement) => !placement.linkedWallWideShelf),
+      ...wallPlacements.filter((placement) => placement.linkedWallWideShelf)
+    ];
+    for (const placement of orderedPlacements) {
+      await addWallPlacement(placement);
+    }
+  } else {
+    await Promise.all(wallPlacements.map(addWallPlacement));
+  }
 
   group.updateMatrixWorld(true);
 }
@@ -849,6 +1077,35 @@ function getAluminumPostInnerEdges(postLocalBoundsByIndex, bayIndex) {
   };
 }
 
+function getWallWideShelfEdges(postLocalBoundsByIndex, bayIndex, bayCount) {
+  const index = Number(bayIndex);
+  const firstPost = postLocalBoundsByIndex.get(index);
+  const secondPost = postLocalBoundsByIndex.get(index + 1);
+  if (!firstPost || !secondPost) return null;
+
+  const boundaryForPost = (post, postIndex, neighbor) => {
+    if (postIndex > 0 && postIndex < Number(bayCount)) return post.centerX;
+    return neighbor.centerX >= post.centerX ? post.maxX : post.minX;
+  };
+  const firstBoundary = boundaryForPost(firstPost, index, secondPost);
+  const secondBoundary = boundaryForPost(secondPost, index + 1, firstPost);
+  const leftPost = firstBoundary <= secondBoundary ? firstPost : secondPost;
+  const rightPost = leftPost === firstPost ? secondPost : firstPost;
+
+  return {
+    leftPostIndex: leftPost === firstPost ? index : index + 1,
+    rightPostIndex: leftPost === firstPost ? index + 1 : index,
+    leftPostCenterX: leftPost.centerX,
+    rightPostCenterX: rightPost.centerX,
+    leftPostMinX: leftPost.minX,
+    leftPostMaxX: leftPost.maxX,
+    rightPostMinX: rightPost.minX,
+    rightPostMaxX: rightPost.maxX,
+    leftPostInnerEdge: Math.min(firstBoundary, secondBoundary),
+    rightPostInnerEdge: Math.max(firstBoundary, secondBoundary)
+  };
+}
+
 function serializeAluminumPostInnerEdges(edges) {
   if (!edges) return null;
   return {
@@ -965,6 +1222,14 @@ async function addPlacement(
   group.add(model);
   group.updateMatrixWorld(true);
   model.updateMatrixWorld(true);
+  const aluminumBaseWoodShelfBoardAdjustment = series?.seriesId === "aluminum-base-supported"
+    && product?.sku === "TD-WOOD-SHELF"
+    ? expandAluminumBaseWoodShelfBoard(
+      model,
+      group,
+      Number(modelTransforms.woodShelfBoardExtensionMm) || 0
+    )
+    : null;
   const aluminumPostInnerEdgeAdjustment = series?.seriesId === "aluminum-post-wardrobe"
     && usesAluminumPostInnerEdgeAlignment(placement.componentType)
     ? fitAluminumComponentToPostEdges(model, group, aluminumComponentPostEdges)
@@ -983,6 +1248,36 @@ async function addPlacement(
       placement.componentType
     );
   }
+  const aluminumBaseWallAdjustment = series?.seriesId === "aluminum-base-supported"
+    && usesAluminumBaseComponentWallAlignment(placement.componentType)
+    ? alignAluminumBaseComponentToWall(
+      model,
+      group,
+      wall,
+      meters(Number(design.room?.width) || 0),
+      meters(Number(design.room?.depth) || 0),
+      Number(modelTransforms.componentWallClearanceMm) || 0
+    )
+    : null;
+  const aluminumBaseShelfLedDiagnostic = series?.seriesId === "aluminum-base-supported"
+    && (
+      product?.sku === "TD-WOOD-SHELF"
+      || product?.sku === "TD-006-2"
+    )
+    ? addAluminumBaseShelfLedStrip(
+      model,
+      group,
+      config.led === true,
+      product.sku === "TD-WOOD-SHELF" ? "woodShelf" : "glassShelf",
+      wall?.id,
+      placement.id
+    )
+    : null;
+  if (aluminumBaseShelfLedDiagnostic) {
+    report.aluminumBaseLedStripCounts[aluminumBaseShelfLedDiagnostic.componentKind] +=
+      aluminumBaseShelfLedDiagnostic.stripCount;
+    report.aluminumBaseLedDiagnostics.push(aluminumBaseShelfLedDiagnostic);
+  }
   const actualWidth = getObjectWidth(model);
   model.userData = {
     ...model.userData,
@@ -1000,9 +1295,13 @@ async function addPlacement(
     offsetZ: transform.offsetZ || 0,
     anchor: transform.anchor
   };
+  const finalBoundingBox = new THREE.Box3().setFromObject(model);
   report.componentDimensions.push({
     placementId: placement.id,
     componentType: placement.componentType,
+    productSku: product?.sku || placement.productSku || "",
+    modelPath: product?.modelPath || product?.glbAssetPath || "",
+    heightFromFloor: placement.heightFromFloor,
     postCenterDistance: placement.postCenterDistance,
     postProfileWidth: placement.postProfileWidth,
     innerBayWidth: placement.innerBayWidth,
@@ -1015,6 +1314,8 @@ async function addPlacement(
     clampedVisualWidth: toMm(visualWidth),
     usesSideWallPostInnerWidth: usesCarbonPostInnerWidthCompensation,
     aluminumPostInnerEdgeAdjustment,
+    aluminumBaseWoodShelfBoardAdjustment,
+    aluminumBaseWallAdjustment,
     originalBoundingBoxWidth: model.userData.originalBoundingBoxWidth,
     finalBoundingBoxWidth: toMm(actualWidth),
     actualDisplayWidth: toMm(actualWidth),
@@ -1033,7 +1334,8 @@ async function addPlacement(
       y: toMm(model.position.y),
       z: toMm(model.position.z)
     },
-    finalBoundingBoxCenter: serializeBox(new THREE.Box3().setFromObject(model))?.center,
+    finalBoundingBox: serializeBox(finalBoundingBox),
+    finalBoundingBoxCenter: serializeBox(finalBoundingBox)?.center,
     offsetX: transform.offsetX || 0,
     offsetZ: transform.offsetZ || 0,
     bayCenter: toMm(x)
@@ -1337,6 +1639,171 @@ function alignCarbonComponentToWall(model, group, wall, roomWidth, roomDepth, co
   model.updateMatrixWorld(true);
 }
 
+function alignAluminumBaseComponentToWall(
+  model,
+  group,
+  wall,
+  roomWidth,
+  roomDepth,
+  clearanceMm
+) {
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const beforeBox = new THREE.Box3().setFromObject(model);
+  if (beforeBox.isEmpty()) return null;
+
+  const wallThickness = 0.04;
+  const clearance = meters(clearanceMm);
+  let wallInnerSurface = null;
+  let wallSideBefore = null;
+  let targetWallSide = null;
+  let deltaWorldX = 0;
+  let deltaWorldZ = 0;
+
+  if (wall?.id === "back") {
+    wallInnerSurface = -roomDepth / 2 + wallThickness / 2;
+    wallSideBefore = beforeBox.min.z;
+    targetWallSide = wallInnerSurface + clearance;
+    deltaWorldZ = targetWallSide - wallSideBefore;
+  } else if (wall?.id === "left") {
+    wallInnerSurface = -roomWidth / 2;
+    wallSideBefore = beforeBox.min.x;
+    targetWallSide = wallInnerSurface + clearance;
+    deltaWorldX = targetWallSide - wallSideBefore;
+  } else if (wall?.id === "right") {
+    wallInnerSurface = roomWidth / 2;
+    wallSideBefore = beforeBox.max.x;
+    targetWallSide = wallInnerSurface - clearance;
+    deltaWorldX = targetWallSide - wallSideBefore;
+  } else {
+    return null;
+  }
+
+  translateObjectByWorldDelta(model, group, deltaWorldX, 0, deltaWorldZ);
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const afterBox = new THREE.Box3().setFromObject(model);
+  const wallSideAfter = wall.id === "back"
+    ? afterBox.min.z
+    : wall.id === "left"
+      ? afterBox.min.x
+      : afterBox.max.x;
+
+  return {
+    wallId: wall.id,
+    wallInnerSurface: toMm(wallInnerSurface),
+    wallSideBefore: toMm(wallSideBefore),
+    wallSideAfter: toMm(wallSideAfter),
+    targetWallSide: toMm(targetWallSide),
+    clearance: toMm(Math.abs(wallSideAfter - wallInnerSurface)),
+    deltaWorldX: toMm(deltaWorldX),
+    deltaWorldZ: toMm(deltaWorldZ)
+  };
+}
+
+function usesAluminumBaseComponentWallAlignment(componentType) {
+  return [
+    "woodShelf",
+    "glassShelf",
+    "singleRail",
+    "doubleRail",
+    "cabinet",
+    "jewelryBox",
+    "mixedStorage",
+    "trouserRack",
+    "pantsRack"
+  ].includes(componentType);
+}
+
+function expandAluminumBaseWoodShelfBoard(model, group, extensionPerSideMm) {
+  const extensionPerSide = meters(extensionPerSideMm);
+  if (extensionPerSide <= 0) return null;
+
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const boardMeshes = [];
+  const metalMeshes = [];
+  model.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    const materialNames = getMaterialNames(child);
+    const hasBoardMaterial = materialNames.some((name) => (
+      /(plywood|playwood|wood)/i.test(name) || name === "[Color M02]"
+    ));
+    const hasMetalMaterial = materialNames.some((name) => (
+      /^Metal_06_1K$/i.test(name) || name === "[Color M07]"
+    ));
+    if (hasBoardMaterial && !hasMetalMaterial) boardMeshes.push(child);
+    if (hasMetalMaterial) metalMeshes.push(child);
+  });
+  if (!boardMeshes.length) {
+    return {
+      matchedBoardMeshCount: 0,
+      matchedMetalMeshCount: metalMeshes.length,
+      extensionPerSide: extensionPerSideMm
+    };
+  }
+
+  const componentBeforeBox = getObjectBoxRelativeTo(model, group);
+  const boardBeforeBox = getObjectsBoxRelativeTo(boardMeshes, group);
+  const metalBeforeBox = getObjectsBoxRelativeTo(metalMeshes, group);
+  if (componentBeforeBox.isEmpty() || boardBeforeBox.isEmpty()) return null;
+
+  const componentCenterX = componentBeforeBox.getCenter(new THREE.Vector3()).x;
+  const boardBeforeCenterX = boardBeforeBox.getCenter(new THREE.Vector3()).x;
+  const boardBeforeWidth = boardBeforeBox.getSize(new THREE.Vector3()).x;
+  if (!boardBeforeWidth) return null;
+  const targetBoardWidth = boardBeforeWidth + extensionPerSide * 2;
+  const widthScale = targetBoardWidth / boardBeforeWidth;
+  const inverseGroupMatrix = new THREE.Matrix4().copy(group.matrixWorld).invert();
+
+  boardMeshes.forEach((mesh) => {
+    const geometry = mesh.geometry.clone();
+    const position = geometry.attributes.position;
+    if (!position) return;
+    const meshToGroup = new THREE.Matrix4().multiplyMatrices(inverseGroupMatrix, mesh.matrixWorld);
+    const groupToMesh = new THREE.Matrix4().copy(meshToGroup).invert();
+    const point = new THREE.Vector3();
+    for (let index = 0; index < position.count; index += 1) {
+      point.fromBufferAttribute(position, index).applyMatrix4(meshToGroup);
+      point.x = componentCenterX + (point.x - boardBeforeCenterX) * widthScale;
+      point.applyMatrix4(groupToMesh);
+      position.setXYZ(index, point.x, point.y, point.z);
+    }
+    position.needsUpdate = true;
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    if (geometry.attributes.normal) geometry.computeVertexNormals();
+    mesh.geometry = geometry;
+  });
+
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const componentAfterBox = getObjectBoxRelativeTo(model, group);
+  const boardAfterBox = getObjectsBoxRelativeTo(boardMeshes, group);
+  const metalAfterBox = getObjectsBoxRelativeTo(metalMeshes, group);
+  const boardAfterCenterX = boardAfterBox.getCenter(new THREE.Vector3()).x;
+  const boardAfterWidth = boardAfterBox.getSize(new THREE.Vector3()).x;
+
+  return {
+    matchedBoardMeshCount: boardMeshes.length,
+    matchedMetalMeshCount: metalMeshes.length,
+    boardMaterialNames: [...new Set(boardMeshes.flatMap(getMaterialNames))],
+    metalMaterialNames: [...new Set(metalMeshes.flatMap(getMaterialNames))],
+    extensionPerSide: extensionPerSideMm,
+    componentCenterX: toMm(componentCenterX),
+    boardCenterBeforeX: toMm(boardBeforeCenterX),
+    boardCenterAfterX: toMm(boardAfterCenterX),
+    boardWidthBefore: toMm(boardBeforeWidth),
+    boardWidthAfter: toMm(boardAfterWidth),
+    boardLeftExtension: toMm(boardBeforeBox.min.x - boardAfterBox.min.x),
+    boardRightExtension: toMm(boardAfterBox.max.x - boardBeforeBox.max.x),
+    componentBeforeBox: serializeBox(componentBeforeBox),
+    componentAfterBox: serializeBox(componentAfterBox),
+    metalBeforeBox: serializeBox(metalBeforeBox),
+    metalAfterBox: serializeBox(metalAfterBox)
+  };
+}
+
 function getCarbonComponentWallClearanceMm(wallId, componentType) {
   if (wallId === "back") {
     return componentType === "singleRail" || componentType === "doubleRail" ? 208 : 10;
@@ -1578,7 +2045,13 @@ async function createModelOrMissing(product, series, report, targetSize, label, 
 }
 
 export function loadModel(modelPath, series) {
-  const url = resolveSeriesAsset(series, modelPath);
+  const resolvedUrl = resolveSeriesAsset(series, modelPath);
+  const aluminumBaseSupportedModelVersion = series?.seriesId === "aluminum-base-supported"
+    ? aluminumBaseSupportedUpdatedModelVersions.get(modelPath)
+    : null;
+  const url = aluminumBaseSupportedModelVersion
+    ? `${resolvedUrl}?v=${aluminumBaseSupportedModelVersion}`
+    : resolvedUrl;
   if (!modelCache.has(url)) {
     modelCache.set(url, withTimeout(new Promise((resolve, reject) => {
       loader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
@@ -1706,6 +2179,180 @@ function addAluminumPostLedGlow(post, isLedEnabled, { connectionMode, postStyle 
     formula: connectionMode === "wall-mounted"
       ? "wall-mounted shaft bbox; local left=minX+ledWidth/2; local right=maxX-ledWidth/2; local z=(shaftMinZ+shaftMaxZ)/2"
       : "full post bbox; local left=minX+ledWidth/2; local right=maxX-ledWidth/2; local z=(minZ+maxZ)/2"
+  };
+}
+
+function createAluminumBaseLedMaterial(isLedEnabled) {
+  return new THREE.MeshStandardMaterial({
+    color: isLedEnabled ? 0xffffff : 0xcfcfc8,
+    emissive: isLedEnabled ? 0xf5fbff : 0x000000,
+    emissiveIntensity: isLedEnabled ? 8 : 0,
+    roughness: isLedEnabled ? 0.25 : 0.75,
+    metalness: 0,
+    transparent: !isLedEnabled,
+    opacity: isLedEnabled ? 1 : 0.75,
+    toneMapped: !isLedEnabled
+  });
+}
+
+function addAluminumBasePostLedStrip(post, group, isLedEnabled, wallId, postIndex) {
+  group.updateMatrixWorld(true);
+  post.updateMatrixWorld(true);
+  const postBox = getObjectBoxRelativeTo(post, group);
+  if (postBox.isEmpty()) return null;
+
+  const size = postBox.getSize(new THREE.Vector3());
+  const center = postBox.getCenter(new THREE.Vector3());
+  const stripWidth = isLedEnabled ? 0.014 : 0.012;
+  const stripDepth = 0.003;
+  const strip = new THREE.Mesh(
+    new THREE.BoxGeometry(stripWidth, size.y, stripDepth),
+    createAluminumBaseLedMaterial(isLedEnabled)
+  );
+  strip.name = "LED_STRIP_POST";
+  strip.position.set(center.x, center.y, postBox.max.z + stripDepth / 2);
+  strip.userData = {
+    programmaticLed: true,
+    ledType: "LED_STRIP_POST",
+    wallId,
+    postIndex
+  };
+  group.add(strip);
+  group.updateMatrixWorld(true);
+  strip.updateMatrixWorld(true);
+  const stripLocalBBox = serializeBox(getObjectBoxRelativeTo(strip, group));
+  const stripWorldBBox = serializeBox(new THREE.Box3().setFromObject(strip));
+  console.log("[aluminum-base-led] post strip world bbox", JSON.stringify(stripWorldBBox));
+
+  return {
+    ledType: "LED_STRIP_POST",
+    componentKind: "post",
+    wallId,
+    postIndex,
+    ledEnabled: isLedEnabled,
+    color: isLedEnabled ? "#FFFFFF" : "#CFCFC8",
+    emissive: isLedEnabled ? "#F5FBFF" : "#000000",
+    emissiveIntensity: isLedEnabled ? 8 : 0,
+    roughness: isLedEnabled ? 0.25 : 0.75,
+    opacity: isLedEnabled ? 1 : 0.75,
+    localBBox: stripLocalBBox,
+    worldBBox: stripWorldBBox
+  };
+}
+
+function findAluminumBaseShelfSupportMeshes(model, group) {
+  const candidates = [];
+  model.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    const materialNames = getMaterialNames(child);
+    if (!materialNames.some((name) => /(metal(?:_06)?|\[Color M07\]|灰色支撑件)/i.test(name))) return;
+    const localBox = getObjectBoxRelativeTo(child, group);
+    if (localBox.isEmpty()) return;
+    const size = localBox.getSize(new THREE.Vector3());
+    candidates.push({
+      mesh: child,
+      materialNames,
+      localBox,
+      worldBox: new THREE.Box3().setFromObject(child),
+      size
+    });
+  });
+
+  return candidates
+    .filter((candidate) => candidate.size.z > candidate.size.x)
+    .sort((a, b) => a.localBox.getCenter(new THREE.Vector3()).x
+      - b.localBox.getCenter(new THREE.Vector3()).x);
+}
+
+function addAluminumBaseShelfLedStrip(
+  model,
+  group,
+  isLedEnabled,
+  componentKind,
+  wallId,
+  placementId
+) {
+  if (model.name === "Missing Model") return null;
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const componentBox = getObjectBoxRelativeTo(model, group);
+  if (componentBox.isEmpty()) return null;
+
+  const supportMeshes = findAluminumBaseShelfSupportMeshes(model, group);
+  if (!supportMeshes.length) return null;
+
+  const componentCenterX = componentBox.getCenter(new THREE.Vector3()).x;
+  const stripPlacementWidth = 0.004;
+  const stripWidth = isLedEnabled ? 0.006 : stripPlacementWidth;
+  const stripHeight = 0.008;
+  const ledType = componentKind === "woodShelf"
+    ? "LED_STRIP_SHELF"
+    : "LED_STRIP_GLASS";
+  const strips = supportMeshes.map((support, supportIndex) => {
+    const supportCenter = support.localBox.getCenter(new THREE.Vector3());
+    const supportSize = support.localBox.getSize(new THREE.Vector3());
+    const side = supportCenter.x < componentCenterX ? "left" : "right";
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(stripWidth, stripHeight, supportSize.z),
+      createAluminumBaseLedMaterial(isLedEnabled)
+    );
+    strip.name = ledType;
+    strip.position.set(
+      side === "left"
+        ? support.localBox.min.x - stripPlacementWidth / 2
+        : support.localBox.max.x + stripPlacementWidth / 2,
+      supportCenter.y,
+      supportCenter.z
+    );
+    strip.userData = {
+      programmaticLed: true,
+      ledType,
+      wallId,
+      placementId,
+      supportIndex,
+      supportSide: side
+    };
+    group.add(strip);
+    return { strip, support, supportIndex, side };
+  });
+  group.updateMatrixWorld(true);
+  strips.forEach(({ strip }) => strip.updateMatrixWorld(true));
+
+  const supportDiagnostics = strips.map(({ strip, support, supportIndex, side }) => {
+    const supportWorldBBox = serializeBox(support.worldBox);
+    const stripLocalBBox = serializeBox(getObjectBoxRelativeTo(strip, group));
+    const stripWorldBBox = serializeBox(new THREE.Box3().setFromObject(strip));
+    console.log(
+      `[aluminum-base-led] ${componentKind} support ${supportIndex} bboxes`,
+      JSON.stringify({ supportWorldBBox, stripWorldBBox })
+    );
+    return {
+      supportIndex,
+      side,
+      meshName: support.mesh.name || "",
+      materialNames: support.materialNames,
+      supportLocalBBox: serializeBox(support.localBox),
+      supportWorldBBox,
+      stripLocalBBox,
+      stripWorldBBox
+    };
+  });
+
+  return {
+    ledType,
+    componentKind,
+    wallId,
+    placementId,
+    ledEnabled: isLedEnabled,
+    color: isLedEnabled ? "#FFFFFF" : "#CFCFC8",
+    emissive: isLedEnabled ? "#F5FBFF" : "#000000",
+    emissiveIntensity: isLedEnabled ? 8 : 0,
+    roughness: isLedEnabled ? 0.25 : 0.75,
+    opacity: isLedEnabled ? 1 : 0.75,
+    stripCount: strips.length,
+    sourceComponentBBox: serializeBox(componentBox),
+    supportIdentification: "material name Metal/Metal_06/[Color M07]/灰色支撑件 and bbox depth(z) > width(x)",
+    supports: supportDiagnostics
   };
 }
 
@@ -1930,6 +2577,12 @@ function fitObjectToBox(object, targetSize, transform) {
     };
     scaleByAxis[scaleAxis] *= targetSize.x / size[scaleAxis];
     object.scale.set(scaleByAxis.x, scaleByAxis.y, scaleByAxis.z);
+  } else if (resizeMode === "stretchWidthFixedDepth") {
+    object.scale.set(
+      object.scale.x * (targetSize.x / size.x),
+      object.scale.y,
+      object.scale.z * (targetSize.z / size.z)
+    );
   } else if (resizeMode === "stretchToBay") {
     const scaleByAxis = {
       x: object.scale.x,

@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=carbon-v2-visual-position-20260611-02";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -22,6 +22,9 @@ export function createInitialConfig() {
     wallOffset: "",
     layout: "I",
     uLayoutMode: "bottom-first",
+    uAsymmetricSideWalls: false,
+    leftWallLength: room.depth,
+    rightWallLength: room.depth,
     frameColor: "Silver Grey",
     panelColor: "Wood Brown",
     glassColor: "透明灰",
@@ -47,13 +50,27 @@ export function applyLayout(config, layout) {
 
 export function syncWallLengthsWithRoom(config, roomPatch) {
   const room = clampRoom({ ...config.room, ...roomPatch });
+  const usesAsymmetricUSideWalls = config.layout === "U"
+    && config.uAsymmetricSideWalls === true;
+  const leftWallLength = usesAsymmetricUSideWalls
+    ? getPositiveLength(config.leftWallLength, config.room?.depth)
+    : room.depth;
+  const rightWallLength = usesAsymmetricUSideWalls
+    ? getPositiveLength(config.rightWallLength, config.room?.depth)
+    : room.depth;
   const walls = {
     ...config.walls,
     back: { ...config.walls.back, length: room.width },
-    left: { ...config.walls.left, length: room.depth },
-    right: { ...config.walls.right, length: room.depth }
+    left: { ...config.walls.left, length: leftWallLength },
+    right: { ...config.walls.right, length: rightWallLength }
   };
-  return prunePlacements({ ...config, room, walls });
+  return prunePlacements({
+    ...config,
+    room,
+    leftWallLength: usesAsymmetricUSideWalls ? leftWallLength : room.depth,
+    rightWallLength: usesAsymmetricUSideWalls ? rightWallLength : room.depth,
+    walls
+  });
 }
 
 export function calculateDesign(config, data) {
@@ -61,15 +78,6 @@ export function calculateDesign(config, data) {
   const isAluminumPostWardrobe = seriesId === "aluminum-post-wardrobe";
   const cuttingRules = getCuttingRules(seriesId, data) || defaultCuttingRules;
   const bomCalculator = getBomCalculator(seriesId) || getBomCalculator(DEFAULT_SERIES_ID);
-  const room = clampRoom({
-    ...config.room,
-    height: isAluminumPostWardrobe
-      ? 3300
-      : getFixedRoomHeight(data?.settings, config.room?.height, cuttingRules)
-  }, cuttingRules);
-  const postHeight = isAluminumPostWardrobe
-    ? 3000
-    : getPostHeight(config, data?.settings);
   const productBySku = Object.fromEntries(data.products.map((product) => [product.sku, product]));
   const productsByType = data.products.reduce((map, product) => {
     if (!map[product.type]) map[product.type] = [];
@@ -77,12 +85,38 @@ export function calculateDesign(config, data) {
     return map;
   }, {});
   const productByType = Object.fromEntries(Object.entries(productsByType).map(([type, products]) => [type, products[0]]));
+  const resolvedPostHeight = data.series.resolvePostHeight?.({
+    config,
+    settings: data.settings,
+    products: data.products,
+    productByType
+  });
+  const requestedPostHeight = Number(resolvedPostHeight) > 0
+    ? Number(resolvedPostHeight)
+    : getPostHeight(config, data?.settings);
+  const room = clampRoom({
+    ...config.room,
+    height: isAluminumPostWardrobe
+      ? 3300
+      : Math.max(
+        requestedPostHeight,
+        getFixedRoomHeight(data?.settings, config.room?.height, cuttingRules)
+      )
+  }, cuttingRules);
+  const postHeight = isAluminumPostWardrobe
+    ? 3000
+    : requestedPostHeight;
   const activeWalls = getActiveWalls({ ...config, room }, cuttingRules);
   const rawPlacements = bomCalculator.createAutoPlacements({
     rawPlacements: config.placements,
     activeWalls,
     postHeight,
-    productByType
+    productByType,
+    productBySku,
+    productsByType,
+    rules: data.rules,
+    settings: data.settings,
+    config
   });
   const placements = normalizePlacements(rawPlacements, activeWalls, room.height)
     .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules))
@@ -123,6 +157,20 @@ export function calculateDesign(config, data) {
 
   placements.forEach((placement) => {
     const component = productBySku[placement.productSku] || productByType[placement.componentType];
+    if (typeof bomCalculator.addPlacementBom === "function") {
+      bomCalculator.addPlacementBom({
+        placement,
+        component,
+        activeWalls,
+        productBySku,
+        rules: data.rules,
+        settings: data.settings,
+        config,
+        bomMap,
+        addBom
+      });
+      return;
+    }
     if (component?.sellable) {
       addBom(
         bomMap,
@@ -193,23 +241,27 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
     .filter(([, wall]) => wall.enabled)
     .map(([id]) => {
       const isSideWall = id === "left" || id === "right";
-      const sourceLength = Math.max(
-        1,
-        Number(isSideWall ? config.room?.depth : config.room?.width)
-        || Number(config.walls[id]?.length || 0)
-      );
+      const sourceLength = isSideWall
+        ? getUSideWallSourceLength(config, id)
+        : getPositiveLength(config.room?.width, config.walls[id]?.length);
       const startOffset = hasBackWall && isSideWall && appliesSideWallAdjustment
         ? cuttingRules.sideWallLengthAdjustmentMm
           + Math.max(0, Number(cuttingRules.backWallInnerSurfaceInsetMm) || 0)
         : 0;
+      const sourceCenterOffset = isSideWall
+        ? (sourceLength - getPositiveLength(config.room?.depth, sourceLength)) / 2
+        : 0;
       return {
         id,
         sourceLength,
+        sourceCenterOffset,
         startOffset,
         endOffset: 0,
-        centerOffset: isSideWall && cuttingRules.centerSideWallAfterStartOffset
-          ? startOffset / 2
-          : 0,
+        centerOffset: sourceCenterOffset + (
+          isSideWall && cuttingRules.centerSideWallAfterStartOffset
+            ? startOffset / 2
+            : 0
+        ),
         reverseBayOrder: isSideWall
           && startOffset > 0
           && cuttingRules.sideWallLayoutStartsAtBackCorner
@@ -238,6 +290,8 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
       : generateULayout({
         mode: config.uLayoutMode,
         room: config.room,
+        leftWallLength: getUSideWallSourceLength(config, "left"),
+        rightWallLength: getUSideWallSourceLength(config, "right"),
         cornerOffset: config.cornerOffset
       });
   }
@@ -415,7 +469,7 @@ function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) 
         ...left,
         startOffset: 0,
         endOffset: 0,
-        centerOffset: 0,
+        centerOffset: left.sourceCenterOffset || 0,
         reverseBayOrder: true,
         backCornerAtStart: true,
         length: left.sourceLength
@@ -424,7 +478,7 @@ function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) 
         ...right,
         startOffset: 0,
         endOffset: 0,
-        centerOffset: 0,
+        centerOffset: right.sourceCenterOffset || 0,
         reverseBayOrder: false,
         backCornerAtStart: true,
         length: right.sourceLength
@@ -442,7 +496,9 @@ function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) 
   const orderIndex = new Map(["back", "left", "right"].map((wallId, index) => [wallId, index]));
   return wallPlans.map((plan) => ({
     ...plan,
-    centerOffset: plan.id === "back" ? 0 : plan.startOffset / 2,
+    centerOffset: plan.id === "back"
+      ? 0
+      : (plan.sourceCenterOffset || 0) + plan.startOffset / 2,
     reverseBayOrder: false,
     backCornerAtStart: plan.id === "right"
       ? true
@@ -468,24 +524,53 @@ function shouldInsetBackWallPostCenters(layout, wallId, cuttingRules) {
 export function generateULayout({
   mode = "bottom-first",
   room,
+  leftWallLength,
+  rightWallLength,
   cornerOffset = 300
 }) {
   const roomWidth = Math.max(1, Number(room?.width) || 1);
   const roomDepth = Math.max(1, Number(room?.depth) || 1);
+  const leftDepth = getPositiveLength(leftWallLength, roomDepth);
+  const rightDepth = getPositiveLength(rightWallLength, roomDepth);
+  const leftCenterOffset = (leftDepth - roomDepth) / 2;
+  const rightCenterOffset = (rightDepth - roomDepth) / 2;
   const requestedOffset = Math.max(0, Number(cornerOffset) || 0);
-  const safeOffset = Math.min(requestedOffset, Math.max(0, roomDepth - 1), Math.max(0, roomWidth / 2 - 1));
+  const backSafeOffset = Math.min(
+    requestedOffset,
+    Math.max(0, leftDepth - 1),
+    Math.max(0, rightDepth - 1),
+    Math.max(0, roomWidth / 2 - 1)
+  );
+  const leftSafeOffset = Math.min(requestedOffset, Math.max(0, leftDepth - 1));
+  const rightSafeOffset = Math.min(requestedOffset, Math.max(0, rightDepth - 1));
 
   if (mode === "side-first") {
     return [
-      { id: "left", sourceLength: roomDepth, startOffset: 0, endOffset: 0, length: roomDepth },
+      {
+        id: "left",
+        sourceLength: leftDepth,
+        sourceCenterOffset: leftCenterOffset,
+        centerOffset: leftCenterOffset,
+        startOffset: 0,
+        endOffset: 0,
+        length: leftDepth
+      },
       {
         id: "back",
         sourceLength: roomWidth,
-        startOffset: safeOffset,
-        endOffset: safeOffset,
-        length: Math.max(1, roomWidth - safeOffset * 2)
+        startOffset: backSafeOffset,
+        endOffset: backSafeOffset,
+        length: Math.max(1, roomWidth - backSafeOffset * 2)
       },
-      { id: "right", sourceLength: roomDepth, startOffset: 0, endOffset: 0, length: roomDepth }
+      {
+        id: "right",
+        sourceLength: rightDepth,
+        sourceCenterOffset: rightCenterOffset,
+        centerOffset: rightCenterOffset,
+        startOffset: 0,
+        endOffset: 0,
+        length: rightDepth
+      }
     ];
   }
 
@@ -493,19 +578,39 @@ export function generateULayout({
     { id: "back", sourceLength: roomWidth, startOffset: 0, endOffset: 0, length: roomWidth },
     {
       id: "left",
-      sourceLength: roomDepth,
-      startOffset: safeOffset,
+      sourceLength: leftDepth,
+      sourceCenterOffset: leftCenterOffset,
+      startOffset: leftSafeOffset,
       endOffset: 0,
-      length: Math.max(1, roomDepth - safeOffset)
+      centerOffset: leftCenterOffset + leftSafeOffset / 2,
+      length: Math.max(1, leftDepth - leftSafeOffset)
     },
     {
       id: "right",
-      sourceLength: roomDepth,
-      startOffset: safeOffset,
+      sourceLength: rightDepth,
+      sourceCenterOffset: rightCenterOffset,
+      startOffset: rightSafeOffset,
       endOffset: 0,
-      length: Math.max(1, roomDepth - safeOffset)
+      centerOffset: rightCenterOffset + rightSafeOffset / 2,
+      length: Math.max(1, rightDepth - rightSafeOffset)
     }
   ];
+}
+
+function getUSideWallSourceLength(config, wallId) {
+  const roomDepth = getPositiveLength(config.room?.depth, config.walls?.[wallId]?.length);
+  if (config.layout !== "U" || config.uAsymmetricSideWalls !== true) return roomDepth;
+  const configuredLength = wallId === "left"
+    ? config.leftWallLength
+    : config.rightWallLength;
+  return getPositiveLength(configuredLength, roomDepth);
+}
+
+function getPositiveLength(value, fallback = 1) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  const fallbackValue = Number(fallback);
+  return Number.isFinite(fallbackValue) && fallbackValue > 0 ? fallbackValue : 1;
 }
 
 function validateBayWidths({

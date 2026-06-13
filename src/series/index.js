@@ -20,6 +20,17 @@ import {
 } from "./carbon-steel-post-wardrobe-v2/cuttingRules.js?v=carbon-v2-visual-position-20260611-02";
 import { carbonSteelPostWardrobeV2ModelTransforms } from "./carbon-steel-post-wardrobe-v2/modelTransforms.js";
 import { carbonSteelPostWardrobeV2DisplayRules } from "./carbon-steel-post-wardrobe-v2/displayRules.js";
+import { aluminumBaseSupportedSeriesConfig } from "./aluminum-base-supported/series.config.js?v=hide-shelf-depth-ui-20260612-01";
+import { aluminumBaseSupportedBomCalculator } from "./aluminum-base-supported/bomCalculator.js?v=side-middle-posts-20260612-01";
+import {
+  aluminumBaseSupportedCuttingRules,
+  createAluminumBaseSupportedCuttingRules
+} from "./aluminum-base-supported/cuttingRules.js";
+import { aluminumBaseSupportedModelTransforms } from "./aluminum-base-supported/modelTransforms.js?v=wood-shelf-board-extension-20260613-01";
+import {
+  aluminumBaseSupportedDisplayRules,
+  createAluminumBaseSupportedDisplayRules
+} from "./aluminum-base-supported/displayRules.js";
 
 const seriesRegistry = new Map([
   [
@@ -63,6 +74,18 @@ const seriesRegistry = new Map([
       modelTransforms: null,
       displayRules: null
     }
+  ],
+  [
+    aluminumBaseSupportedSeriesConfig.seriesId,
+    {
+      config: aluminumBaseSupportedSeriesConfig,
+      bomCalculator: aluminumBaseSupportedBomCalculator,
+      cuttingRules: aluminumBaseSupportedCuttingRules,
+      createCuttingRules: createAluminumBaseSupportedCuttingRules,
+      modelTransforms: aluminumBaseSupportedModelTransforms,
+      displayRules: aluminumBaseSupportedDisplayRules,
+      createDisplayRules: createAluminumBaseSupportedDisplayRules
+    }
   ]
 ]);
 
@@ -86,8 +109,12 @@ export function getModelTransforms(seriesId) {
   return seriesRegistry.get(seriesId)?.modelTransforms || null;
 }
 
-export function getDisplayRules(seriesId) {
-  return seriesRegistry.get(seriesId)?.displayRules || null;
+export function getDisplayRules(seriesId, data = null) {
+  const entry = seriesRegistry.get(seriesId);
+  if (!entry) return null;
+  return data && entry.createDisplayRules
+    ? entry.createDisplayRules(data)
+    : entry.displayRules || null;
 }
 
 export function getEnabledSeriesConfigs() {

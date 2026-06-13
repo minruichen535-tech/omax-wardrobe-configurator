@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/carbon-steel-post-wardrobe", "destination": "/carbon-steel-post-wardrobe/index.html" },
+    { "source": "/carbon-steel-post-wardrobe/:path*", "destination": "/carbon-steel-post-wardrobe/index.html" },
     { "source": "/configurator/:path*", "destination": "/index.html" },
     { "source": "/admin/:path*", "destination": "/index.html" },
     { "source": "/((?!.*\\.).*)", "destination": "/index.html" }

@@ -1,8 +1,9 @@
-import { getSeriesConfig } from "../series/index.js?v=carbon-v2-visual-position-20260611-02";
+import { getSeriesConfig } from "../series/index.js?v=u-asymmetric-side-walls-20260613-01";
 
 const japaneseClosetConfig = getSeriesConfig("japanese-closet");
 const aluminumPostWardrobeConfig = getSeriesConfig("aluminum-post-wardrobe");
 const carbonSteelPostWardrobeV2Config = getSeriesConfig("carbon-steel-post-wardrobe-v2");
+const aluminumBaseSupportedConfig = getSeriesConfig("aluminum-base-supported");
 
 export const productSeries = {
   "open-closet": {
@@ -52,6 +53,12 @@ export const productSeries = {
     productPath: carbonSteelPostWardrobeV2Config.productsPath,
     imageRoot: carbonSteelPostWardrobeV2Config.imagePath,
     modelRoot: carbonSteelPostWardrobeV2Config.modelPath
+  },
+  "aluminum-base-supported": {
+    ...aluminumBaseSupportedConfig,
+    productPath: aluminumBaseSupportedConfig.productsPath,
+    imageRoot: aluminumBaseSupportedConfig.imagePath,
+    modelRoot: aluminumBaseSupportedConfig.modelPath
   }
 };
 

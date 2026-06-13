@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>碳钢立柱衣帽间配置器</title>
+    <link rel="stylesheet" href="/src/carbon-steel-post-wardrobe.css?v=placement-ui-20260611-01" />
+    <script type="importmap">
+      {
+        "imports": {
+          "xlsx": "https://esm.sh/xlsx@0.18.5",
+          "three": "https://esm.sh/three@0.165.0",
+          "three/addons/": "https://esm.sh/three@0.165.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <aside class="control-rail" aria-label="配置选项">
+          <header class="brand-block">
+            <div class="brand-mark">OM</div>
+            <div>
+              <p>OMAX WARDROBE</p>
+              <h2>碳钢立柱衣帽间</h2>
+              <small id="source-path"></small>
+            </div>
+          </header>
+
+          <section class="step-block">
+            <div class="step-title"><span>01</span><h3>房间与布局</h3></div>
+            <div class="field-grid">
+              <label class="field"><span>房间宽度</span><div><input id="room-width" type="number" value="3600" min="1" step="1" /><em>mm</em></div></label>
+              <label class="field"><span>房间深度</span><div><input id="room-depth" type="number" value="2800" min="1" step="1" /><em>mm</em></div></label>
+            </div>
+            <div class="control-label">布局</div>
+            <div id="layout-control" class="segmented-control layout-control">
+              <button type="button" class="active" data-layout="I">I 型后墙</button>
+              <button type="button" data-layout="L-left">L 型左墙</button>
+              <button type="button" data-layout="L-right">L 型右墙</button>
+              <button type="button" data-layout="U">U 型</button>
+            </div>
+            <div id="u-layout-control" class="u-layout-control" hidden>
+              <div class="control-label">U 型排布方式</div>
+              <div class="u-layout-mode-buttons">
+                <button type="button" class="active" data-u-layout-mode="back-first">
+                  <span class="u-layout-diagram back-first"><i class="left"></i><i class="back"></i><i class="right"></i></span>
+                  <strong>后墙优先</strong>
+                </button>
+                <button type="button" data-u-layout-mode="side-first">
+                  <span class="u-layout-diagram side-first"><i class="left"></i><i class="back"></i><i class="right"></i></span>
+                  <strong>侧墙优先</strong>
+                </button>
+              </div>
+            </div>
+            <div class="field-grid compact-fields">
+              <label class="field"><span>后墙组数</span><div><input id="bay-count" type="number" value="4" min="1" step="1" /><em>组</em></div></label>
+              <label id="side-bay-field" class="field" hidden><span>侧墙组数</span><div><input id="side-bay-count" type="number" value="3" min="1" step="1" /><em>组</em></div></label>
+            </div>
+            <div class="spec-strip">
+              <div><span>立柱宽度</span><strong><input id="post-width" type="number" value="20" readonly /> mm</strong></div>
+              <div><span>配件减尺</span><strong><input id="accessory-extra-cut" type="number" value="4" readonly /> mm</strong></div>
+            </div>
+            <div class="formula-strip">
+              <span>单组宽 <strong id="result-bay-width">-</strong> mm</span>
+              <span>配件宽 <strong id="result-bay-width-minus4">-</strong> mm</span>
+            </div>
+            <div class="sr-only" aria-hidden="true">
+              <span id="result-room-width"></span><span id="result-bay-count"></span>
+              <span id="result-post-width"></span><span id="result-accessory-extra-cut"></span>
+            </div>
+          </section>
+
+          <section class="step-block library-block">
+            <div class="step-title"><span>02</span><h3>组件库</h3></div>
+            <div class="color-row"><span>金属颜色</span><button class="black-swatch" type="button" aria-label="黑色" aria-pressed="true"></button></div>
+            <p class="helper-text">点击卡片加入当前墙面第一组，或拖入中间场景指定组。</p>
+            <div id="product-picker" class="component-library"></div>
+          </section>
+        </aside>
+
+        <section class="viewer-pane">
+          <header class="viewer-topline">
+            <div><p class="eyebrow">CARBON STEEL POST WARDROBE</p><h1>碳钢立柱配置器</h1></div>
+            <div class="viewer-metrics">
+              <div><span>墙面</span><strong id="wall-count">1 面</strong></div>
+              <div><span>组件</span><strong id="placement-count">0 件</strong></div>
+              <div><span>状态</span><strong id="status">正在读取 Excel...</strong></div>
+            </div>
+          </header>
+          <div class="scene-frame">
+            <div id="three-viewer" class="three-viewer" aria-label="3D 配置预览">
+              <div id="viewer-empty" class="viewer-empty"><strong>从左侧选择组件</strong><span>点击添加，或拖拽到任意跨内</span></div>
+              <div class="scene-formula"><span id="formula-bay-width">bayWidth = -</span><span id="formula-bay-width-minus4">accessoryWidth = -</span></div>
+            </div>
+          </div>
+          <details class="diagnostics-panel">
+            <summary>数据检查</summary>
+            <div class="diagnostics-content">
+              <div class="diagnostic-summary"><span>Products <strong id="products-count">-</strong></span><span>SKU <strong id="sku-count">-</strong></span><span>Rules <strong id="rules-count">-</strong></span></div>
+              <section><h3>Settings</h3><div id="settings-table" class="table-wrap"></div></section>
+              <section><h3>Products</h3><div id="products-table" class="table-wrap"></div></section>
+              <section><h3>Rules</h3><div id="rules-table" class="table-wrap"></div></section>
+            </div>
+          </details>
+        </section>
+
+        <aside class="quote-pane" aria-label="配置与报价">
+          <header class="quote-heading"><div><p class="eyebrow">CONFIGURATION</p><h2>配置与销售清单</h2></div><button id="clear-selected" type="button">清空</button></header>
+          <section class="quote-section current-section"><div class="panel-title"><h3>当前配置</h3><span>PLACEMENTS</span></div><div id="selected-items"></div></section>
+          <section class="quote-section"><div class="panel-title"><h3>报价 BOM</h3><span>QUOTE</span></div><div id="quote-bom" class="table-wrap bom-table"></div></section>
+          <section class="quote-section"><div class="panel-title"><h3>拣货 BOM</h3><span>PICK</span></div><div id="pick-bom" class="table-wrap bom-table"></div></section>
+          <div class="total-row"><span>预计合计</span><strong id="total-price">totalPrice = 0</strong></div>
+          <details id="warnings-panel" class="fold-panel" hidden><summary>Warnings</summary><ul id="warnings"></ul></details>
+          <details class="fold-panel"><summary>BOM 调试输出</summary><pre id="bom-debug"></pre></details>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/src/carbon-steel-post-wardrobe.js?v=placement-ui-20260611-01"></script>
+  </body>
+</html>

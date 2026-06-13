@@ -11,6 +11,7 @@ export const productFields = [
   "width",
   "depth",
   "height",
+  "heightRule",
   "sizeRule",
   "unitPrice",
   "unit",
@@ -217,6 +218,7 @@ function normalizeProduct(row) {
     width: numberOrBlank(row.width),
     depth: numberOrBlank(row.depth),
     height: row.height === "" || row.height == null ? "" : String(row.height),
+    heightRule: String(row.heightRule ?? row.HeightRule ?? "").trim(),
     sizeRule: String(
       row.sizeRule
       ?? [row.WidthRule, row.DepthRule].filter(Boolean).join(" ")
@@ -279,14 +281,21 @@ function parseKeyValueSheet(buffer, sheetNames, keyFields) {
 function normalizeRule(row) {
   const parentSku = String(row.parentSku ?? row.configType ?? row["主产品"] ?? "").trim();
   const childSku = String(row.childSku ?? row.requiredSku ?? row["SKU"] ?? row["自动生成SKU"] ?? "").trim();
+  const rawQuantity = row.quantity ?? row["数量"];
+  const numericQuantity = Number(rawQuantity);
   return {
     parentSku,
     childSku,
     configType: parentSku,
     requiredSku: childSku,
-    quantity: numberOrZero(row.quantity ?? row["数量"]),
+    quantity: rawQuantity !== "" && Number.isFinite(numericQuantity)
+      ? numericQuantity
+      : String(rawQuantity ?? "").trim(),
     condition: String(row.condition ?? "").trim(),
-    note: String(row.note ?? row["备注"] ?? "")
+    note: String(row.note ?? row["备注"] ?? ""),
+    placement: String(row.placement ?? "").trim(),
+    heightRule: String(row.heightRule ?? "").trim(),
+    dedupeKey: String(row.dedupeKey ?? "").trim()
   };
 }
 
