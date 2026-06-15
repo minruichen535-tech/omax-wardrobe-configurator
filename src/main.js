@@ -40,8 +40,7 @@ import {
   saveWorkbookOverride
 } from "./dataSource.js?v=wall-mounted-v2-20260613-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
-import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-storage-library-types-20260615-01";
-import { dashboardProducts } from "./dashboard/config/dashboardProducts.js?v=dashboard-products-20260615-01";
+import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-storage-library-types-20260615-01";
 import { WardrobeScene } from "./scene.js?v=wall-mounted-glass-led-direction-20260615-01";
 import { getCuttingRules, getDisplayRules } from "./series/index.js?v=wall-mounted-system-layout-rules-20260615-03";
 
@@ -75,24 +74,18 @@ function normalizeAluminumConnectionMode(value) {
 }
 
 function App() {
-  const isProductsRoute = location.pathname === "/" || /^\/products\/?$/.test(location.pathname);
   const routeInfo = useMemo(() => resolveRoute(), []);
   const isClientMode = location.pathname.startsWith("/client");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (isProductsRoute) return;
     if (!routeInfo.series) {
       setError(`未登记的产品系列：${routeInfo.seriesId}`);
       return;
     }
     loadWorkbookData(routeInfo.series).then(setData).catch((err) => setError(err.message));
-  }, [isProductsRoute, routeInfo.series, routeInfo.seriesId]);
-
-  if (isProductsRoute) {
-    return h(ProductCatalog);
-  }
+  }, [routeInfo.series, routeInfo.seriesId]);
 
   if (error) {
     return h("main", { className: "loading-state" },
@@ -111,32 +104,6 @@ function App() {
   return routeInfo.route === "admin"
     ? h(AdminApp, { data, setData })
     : h(ClientApp, { data, isClientMode });
-}
-
-function ProductCatalog() {
-  const products = dashboardProducts.filter((product) => productSeries[product.id]?.enabled === true);
-
-  return h("main", { className: "product-catalog" },
-    h("header", { className: "product-catalog-header" },
-      h("div", { className: "product-catalog-mark" }, "OM"),
-      h("div", null,
-        h("h1", null, "OMAX Wardrobe Configurator"),
-        h("p", null, "请选择产品系列")
-      )
-    ),
-    h("section", { className: "product-card-grid", "aria-label": "产品系列" },
-      products.map((product) =>
-        h("a", { className: "product-card", href: product.href, key: product.id },
-          h("div", { className: "product-card-content" },
-            h("h2", null, product.title),
-            h("h3", null, product.subtitle),
-            h("p", null, product.description)
-          ),
-          h("img", { className: "product-card-image", src: product.image, alt: product.title })
-        )
-      )
-    )
-  );
 }
 
 function ClientApp({ data, isClientMode = false }) {
