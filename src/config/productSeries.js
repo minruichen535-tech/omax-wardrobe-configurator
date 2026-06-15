@@ -1,9 +1,10 @@
-import { getSeriesConfig } from "../series/index.js?v=u-asymmetric-side-walls-20260613-01";
+import { getSeriesConfig } from "../series/index.js?v=wall-mounted-storage-library-types-20260615-01";
 
 const japaneseClosetConfig = getSeriesConfig("japanese-closet");
 const aluminumPostWardrobeConfig = getSeriesConfig("aluminum-post-wardrobe");
 const carbonSteelPostWardrobeV2Config = getSeriesConfig("carbon-steel-post-wardrobe-v2");
 const aluminumBaseSupportedConfig = getSeriesConfig("aluminum-base-supported");
+const wallMountedV2Config = getSeriesConfig("wall-mounted-v2");
 
 export const productSeries = {
   "open-closet": {
@@ -59,6 +60,12 @@ export const productSeries = {
     productPath: aluminumBaseSupportedConfig.productsPath,
     imageRoot: aluminumBaseSupportedConfig.imagePath,
     modelRoot: aluminumBaseSupportedConfig.modelPath
+  },
+  "wall-mounted-v2": {
+    ...wallMountedV2Config,
+    productPath: wallMountedV2Config.productsPath,
+    imageRoot: wallMountedV2Config.imagePath,
+    modelRoot: wallMountedV2Config.modelPath
   }
 };
 

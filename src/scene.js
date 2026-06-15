@@ -2,10 +2,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=u-asymmetric-side-walls-20260613-01";
+import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=wall-mounted-side-first-back-clearance-20260615-01";
 import { resolveSeriesAsset } from "./config/productSeries.js";
 import { theme } from "./config/theme.js?v=color-system-20260602-01";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=wall-mounted-system-layout-rules-20260615-03";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -212,6 +212,8 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
       glassShelf: 0
     },
     aluminumBaseLedDiagnostics: [],
+    wallMountedLedStripCount: 0,
+    wallMountedLedDiagnostics: [],
     roomWallDiagnostics: null,
     geometryPlaceholders: ["room-floor", "room-walls"]
   };
@@ -292,6 +294,8 @@ function publishModelReport(report, status) {
     ledGlowDiagnostics: report.ledGlowDiagnostics,
     aluminumBaseLedStripCounts: report.aluminumBaseLedStripCounts,
     aluminumBaseLedDiagnostics: report.aluminumBaseLedDiagnostics,
+    wallMountedLedStripCount: report.wallMountedLedStripCount,
+    wallMountedLedDiagnostics: report.wallMountedLedDiagnostics,
     roomWallDiagnostics: report.roomWallDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
   };
@@ -335,6 +339,10 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
     (rightWallDepth - depth) / 2
   );
   root.add(rightWall);
+  root.updateMatrixWorld(true);
+  const backWallBox = new THREE.Box3().setFromObject(backWall);
+  const leftWallBox = new THREE.Box3().setFromObject(leftWall);
+  const rightWallBox = new THREE.Box3().setFromObject(rightWall);
 
   const gridSize = Math.max(width, floorDepth);
   const grid = new THREE.GridHelper(gridSize, 12, theme.colors.walnut, theme.colors.divider);
@@ -353,17 +361,20 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
     },
     back: {
       lengthMm: Math.round(width * 1000),
-      axis: "worldX"
+      axis: "worldX",
+      innerSurfaceZMm: toMm(backWallBox.max.z)
     },
     left: {
       lengthMm: Math.round(leftWallDepth * 1000),
       axis: "worldZ",
-      centerZMm: Math.round(leftWall.position.z * 1000)
+      centerZMm: Math.round(leftWall.position.z * 1000),
+      innerSurfaceXMm: toMm(leftWallBox.max.x)
     },
     right: {
       lengthMm: Math.round(rightWallDepth * 1000),
       axis: "worldZ",
-      centerZMm: Math.round(rightWall.position.z * 1000)
+      centerZMm: Math.round(rightWall.position.z * 1000),
+      innerSurfaceXMm: toMm(rightWallBox.min.x)
     }
   };
 }
@@ -385,6 +396,7 @@ async function addWallRun(
   modelTransforms
 ) {
   const group = new THREE.Group();
+  const isWallMountedV2 = series?.seriesId === "wall-mounted-v2";
   const length = meters(wall.length);
   const shelfDepth = meters(Number(config.shelfDepth) || 450);
   const dropTargetDepth = 0.5;
@@ -404,11 +416,11 @@ async function addWallRun(
     );
   }
   if (wall.id === "left") {
-    group.rotation.y = Math.PI / 2;
+    group.rotation.set(0, Math.PI / 2, 0);
     group.position.set(-roomWidth / 2 + wallOffset, 0, wallCenterOffset);
   }
   if (wall.id === "right") {
-    group.rotation.y = -Math.PI / 2;
+    group.rotation.set(0, -Math.PI / 2, 0);
     group.position.set(roomWidth / 2 - wallOffset, 0, wallCenterOffset);
   }
   report.runtimeDebug.push({
@@ -421,7 +433,9 @@ async function addWallRun(
     wallOffsetMeters: wallOffset,
     wallCenterOffset: toMm(wallCenterOffset),
     reverseBayOrder: wall.reverseBayOrder === true,
+    groupRotationY: group.rotation.y,
     backCornerBayIndex: wall.backCornerBayIndex,
+    backCornerPostIndex: wall.backCornerPostIndex,
     openEndBayIndex: wall.openEndBayIndex,
     leftGroupX: wall.id === "left" ? toMm(group.position.x) : null,
     rightGroupX: wall.id === "right" ? toMm(group.position.x) : null,
@@ -479,11 +493,20 @@ async function addWallRun(
   for (const postPosition of postPositions) {
     const isWallRunEndPost = postPosition.index === 0
       || postPosition.index === postPositions.length - 1;
-    const wallPostProduct = series?.seriesId === "aluminum-base-supported"
-      ? isWallRunEndPost
-        ? aluminumBaseSidePostProduct
-        : aluminumBaseMiddlePostProduct
-      : selectedPostProduct;
+    const wallPostProduct = series?.resolveWallPostProduct?.({
+      isWallRunEndPost,
+      wallId: wall.id,
+      postIndex: postPosition.index,
+      productBySku: design.productBySku,
+      productByType: design.productByType,
+      defaultPostProduct: selectedPostProduct
+    }) || (
+      series?.seriesId === "aluminum-base-supported"
+        ? isWallRunEndPost
+          ? aluminumBaseSidePostProduct
+          : aluminumBaseMiddlePostProduct
+        : selectedPostProduct
+    );
     const post = await createModelOrMissing(
       wallPostProduct,
       series,
@@ -494,7 +517,11 @@ async function addWallRun(
       "post",
       modelTransforms
     );
-    if (wall.id === "right" && modelTransforms.post.rotateRightWallByPi) {
+    if (
+      !isWallMountedV2
+      && wall.id === "right"
+      && modelTransforms.post.rotateRightWallByPi
+    ) {
       post.rotation.y += Math.PI;
     }
     applyPostColor(post, config.frameColor);
@@ -510,7 +537,18 @@ async function addWallRun(
       series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.y : 0,
       series?.seriesId === "carbon-steel-post-wardrobe-v2" ? fittedPostOffset.z : 0
     );
-    post.userData = { ...post.userData, wallId: wall.id, postIndex: postPosition.index };
+    const wallMountedBackCornerPostIndex = isWallMountedV2
+      && config.layout === "U"
+      && config.uLayoutMode !== "side-first"
+      && (wall.id === "left" || wall.id === "right")
+      ? getSideBackCornerPostIndex(wall)
+      : null;
+    post.userData = {
+      ...post.userData,
+      wallId: wall.id,
+      postIndex: postPosition.index,
+      isBackCornerPost: postPosition.index === wallMountedBackCornerPostIndex
+    };
     post.userData.productSku = wallPostProduct?.sku || "";
     group.add(post);
     if (series?.seriesId === "aluminum-base-supported") {
@@ -748,6 +786,103 @@ async function addWallRun(
         post.updateMatrixWorld(true);
       }
     }
+    let wallMountedPostAlignment = null;
+    if (modelTransforms.post.alignBackFaceToWall === true) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const beforeWorldBox = new THREE.Box3().setFromObject(post);
+      let wallInnerSurface = null;
+      let postBackFace = null;
+      let deltaWorldX = 0;
+      let deltaWorldZ = 0;
+      if (wall.id === "back") {
+        wallInnerSurface = meters(report.roomWallDiagnostics?.back?.innerSurfaceZMm);
+        postBackFace = beforeWorldBox.min.z;
+        deltaWorldZ = wallInnerSurface - postBackFace;
+      } else if (wall.id === "left") {
+        wallInnerSurface = meters(report.roomWallDiagnostics?.left?.innerSurfaceXMm);
+        postBackFace = beforeWorldBox.min.x;
+        deltaWorldX = wallInnerSurface - postBackFace;
+      } else if (wall.id === "right") {
+        wallInnerSurface = meters(report.roomWallDiagnostics?.right?.innerSurfaceXMm);
+        postBackFace = beforeWorldBox.max.x;
+        deltaWorldX = wallInnerSurface - postBackFace;
+      }
+      if (
+        Number.isFinite(wallInnerSurface)
+        && (Math.abs(deltaWorldX) > 1e-12 || Math.abs(deltaWorldZ) > 1e-12)
+      ) {
+        translateObjectByWorldDelta(post, group, deltaWorldX, 0, deltaWorldZ);
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+      const afterWorldBox = new THREE.Box3().setFromObject(post);
+      wallMountedPostAlignment = {
+        wallInnerSurface: toMm(wallInnerSurface),
+        backFace: toMm(wall.id === "back"
+          ? afterWorldBox.min.z
+          : wall.id === "left"
+            ? afterWorldBox.min.x
+            : afterWorldBox.max.x),
+        frontFace: toMm(wall.id === "back"
+          ? afterWorldBox.max.z
+          : wall.id === "left"
+            ? afterWorldBox.max.x
+            : afterWorldBox.min.x),
+        deltaWorldX: toMm(deltaWorldX),
+        deltaWorldZ: toMm(deltaWorldZ)
+      };
+    }
+    if (modelTransforms.post.alignBackFaceToWall === true) {
+      group.updateMatrixWorld(true);
+      post.updateMatrixWorld(true);
+      const beforeRunBox = new THREE.Box3().setFromObject(post);
+      const targetWorld = localToWorld(group, postPosition.x, 0, 0);
+      const minRunPosition = Math.min(...postPositions.map((item) => item.x));
+      const maxRunPosition = Math.max(...postPositions.map((item) => item.x));
+      const isRunStartPost = Math.abs(postPosition.x - minRunPosition) < 1e-9;
+      const isRunEndPost = Math.abs(postPosition.x - maxRunPosition) < 1e-9;
+      const usesWallMountedSideFirstBackRun = isWallMountedV2
+        && config.layout === "U"
+        && config.uLayoutMode === "side-first"
+        && wall.id === "back";
+      let runDeltaWorldX = 0;
+      let runDeltaWorldZ = 0;
+      if (wall.id === "back") {
+        runDeltaWorldX = usesWallMountedSideFirstBackRun
+          ? targetWorld.x - beforeRunBox.getCenter(new THREE.Vector3()).x
+          : isRunStartPost
+            ? -roomWidth / 2 - beforeRunBox.min.x
+            : isRunEndPost
+              ? roomWidth / 2 - beforeRunBox.max.x
+              : targetWorld.x - beforeRunBox.getCenter(new THREE.Vector3()).x;
+      } else if (wall.id === "left" || wall.id === "right") {
+        const runEndA = localToWorld(group, -length / 2, 0, 0).z;
+        const runEndB = localToWorld(group, length / 2, 0, 0).z;
+        const runMinZ = Math.min(runEndA, runEndB);
+        const runMaxZ = Math.max(runEndA, runEndB);
+        const targetIsRunMin = Math.abs(targetWorld.z - runMinZ) < 1e-9;
+        const targetIsRunMax = Math.abs(targetWorld.z - runMaxZ) < 1e-9;
+        runDeltaWorldZ = targetIsRunMin
+          ? runMinZ - beforeRunBox.min.z
+          : targetIsRunMax
+            ? runMaxZ - beforeRunBox.max.z
+            : targetWorld.z - beforeRunBox.getCenter(new THREE.Vector3()).z;
+      }
+      if (Math.abs(runDeltaWorldX) > 1e-12 || Math.abs(runDeltaWorldZ) > 1e-12) {
+        translateObjectByWorldDelta(post, group, runDeltaWorldX, 0, runDeltaWorldZ);
+        group.updateMatrixWorld(true);
+        post.updateMatrixWorld(true);
+      }
+      const afterRunBox = new THREE.Box3().setFromObject(post);
+      wallMountedPostAlignment = {
+        ...wallMountedPostAlignment,
+        beforeRunBBox: serializeBox(beforeRunBox),
+        runDeltaWorldX: toMm(runDeltaWorldX),
+        runDeltaWorldZ: toMm(runDeltaWorldZ),
+        afterRunBBox: serializeBox(afterRunBox)
+      };
+    }
     if (
       series?.seriesId === "aluminum-post-wardrobe"
       || series?.seriesId === "carbon-steel-post-wardrobe-v2"
@@ -800,6 +935,7 @@ async function addWallRun(
       connectionMode: config.connectionMode || "wall-mounted",
       axis: wallAxis,
       postIndex: postPosition.index,
+      isBackCornerPost: post.userData.isBackCornerPost === true,
       localX: toMm(postPosition.x),
       visualLocalX: toMm(visualPostX),
       worldX: toMm(world.x),
@@ -812,7 +948,8 @@ async function addWallRun(
       finalBBoxMaxX: toMm(finalPostWorldBox.max.x),
       finalBBoxMinZ: toMm(finalPostWorldBox.min.z),
       finalBBoxMaxZ: toMm(finalPostWorldBox.max.z),
-      finalBBoxSize: serializeVectorMm(finalPostWorldBox.getSize(new THREE.Vector3()))
+      finalBBoxSize: serializeVectorMm(finalPostWorldBox.getSize(new THREE.Vector3())),
+      wallAlignment: wallMountedPostAlignment
     });
     if (debug) {
       group.add(createTextSprite(`P${postPosition.index}`, theme.colors.text, postPosition.x, postHeight + 0.12, 0));
@@ -918,14 +1055,20 @@ async function addWallRun(
       const placementPostEdges = aluminumBaseWallWideShelfEdges
         || aluminumBaseBackPanelPostEdges
         || carbonComponentPostEdges;
-      const componentCenterX = placementPostEdges
+      let componentCenterX = placementPostEdges
         ? (placementPostEdges.leftPostInnerEdge + placementPostEdges.rightPostInnerEdge) / 2
         : bay.centerX;
-      const componentWidth = aluminumBaseWallWideShelfEdges || aluminumBaseBackPanelPostEdges
+      let componentWidth = aluminumBaseWallWideShelfEdges || aluminumBaseBackPanelPostEdges
         ? placementPostEdges.rightPostInnerEdge - placementPostEdges.leftPostInnerEdge
         : usesAdjustedAluminumBaseBay
           ? bay.innerBayWidth
           : meters(placement.visualScaleWidth || bay.innerBayWidth);
+      if (
+        series?.seriesId === "wall-mounted-v2"
+      ) {
+        componentCenterX = bay.centerX;
+        componentWidth = Math.max(0.05, bay.rawBayWidth - meters(12));
+      }
       let renderedPlacement = placement;
       let linkedShelfSourceBounds = null;
       if (
@@ -1228,13 +1371,17 @@ async function addPlacement(
     product,
     series,
     report,
-    modelTransforms.targetSize(placement.componentType, visualWidth, depth),
+    modelTransforms.targetSize(placement.componentType, visualWidth, depth, product),
     name,
     transform,
     placement.componentType,
     modelTransforms
   );
   applyPlacementColor(model, placement.componentType, config.frameColor, modelTransforms, series?.seriesId);
+  const wallMountedSupportColorAdjustment = series?.seriesId === "wall-mounted-v2"
+    && ["woodShelf", "shoeShelf"].includes(placement.componentType)
+    ? applyWallMountedShelfSupportColor(model, config.frameColor)
+    : null;
   if (series?.seriesId === "aluminum-post-wardrobe") {
     applyAluminumMetalMaterialColor(model, config.frameColor);
   }
@@ -1276,6 +1423,128 @@ async function addPlacement(
   group.add(model);
   group.updateMatrixWorld(true);
   model.updateMatrixWorld(true);
+  let wallMountedComponentDepthAdjustment = null;
+  if (
+    series?.seriesId === "wall-mounted-v2"
+    && placement.componentType !== "backPanel"
+    && model.name !== "Missing Model"
+  ) {
+    const bayPostIndexes = new Set([
+      Number(placement.bayIndex),
+      Number(placement.bayIndex) + 1
+    ]);
+    const bayPosts = report.postCoordinates.filter((postCoordinate) => (
+      postCoordinate.wallId === wall?.id
+      && bayPostIndexes.has(Number(postCoordinate.postIndex))
+    ));
+    if (bayPosts.length === 2) {
+      const beforeWorldBox = new THREE.Box3().setFromObject(model);
+      let postFrontFace = null;
+      let componentBackFaceBefore = null;
+      let deltaWorldX = 0;
+      let deltaWorldZ = 0;
+      if (wall.id === "back") {
+        postFrontFace = Math.max(...bayPosts.map((post) => meters(post.finalBBoxMaxZ)));
+        componentBackFaceBefore = beforeWorldBox.min.z;
+        deltaWorldZ = postFrontFace - componentBackFaceBefore;
+      } else if (wall.id === "left") {
+        postFrontFace = Math.max(...bayPosts.map((post) => meters(post.finalBBoxMaxX)));
+        componentBackFaceBefore = beforeWorldBox.min.x;
+        deltaWorldX = postFrontFace - componentBackFaceBefore;
+      } else if (wall.id === "right") {
+        postFrontFace = Math.min(...bayPosts.map((post) => meters(post.finalBBoxMinX)));
+        componentBackFaceBefore = beforeWorldBox.max.x;
+        deltaWorldX = postFrontFace - componentBackFaceBefore;
+      }
+      if (
+        Number.isFinite(postFrontFace)
+        && (Math.abs(deltaWorldX) > 1e-12 || Math.abs(deltaWorldZ) > 1e-12)
+      ) {
+        translateObjectByWorldDelta(model, group, deltaWorldX, 0, deltaWorldZ);
+        group.updateMatrixWorld(true);
+        model.updateMatrixWorld(true);
+      }
+      const afterWorldBox = new THREE.Box3().setFromObject(model);
+      const componentBackFaceAfter = wall.id === "back"
+        ? afterWorldBox.min.z
+        : wall.id === "left"
+          ? afterWorldBox.min.x
+          : afterWorldBox.max.x;
+      wallMountedComponentDepthAdjustment = {
+        wallId: wall.id,
+        postIndexes: Array.from(bayPostIndexes),
+        postFrontFace: toMm(postFrontFace),
+        componentBackFaceBefore: toMm(componentBackFaceBefore),
+        componentBackFaceAfter: toMm(componentBackFaceAfter),
+        gapBefore: toMm(wall.id === "right"
+          ? postFrontFace - componentBackFaceBefore
+          : componentBackFaceBefore - postFrontFace),
+        gapAfter: toMm(wall.id === "right"
+          ? postFrontFace - componentBackFaceAfter
+          : componentBackFaceAfter - postFrontFace),
+        deltaWorldX: toMm(deltaWorldX),
+        deltaWorldZ: toMm(deltaWorldZ)
+      };
+    }
+  }
+  let wallMountedSideBackPanelAdjustment = null;
+  if (
+    series?.seriesId === "wall-mounted-v2"
+    && placement.componentType === "backPanel"
+    && (wall?.id === "left" || wall?.id === "right")
+  ) {
+    const beforeWorldBox = new THREE.Box3().setFromObject(model);
+    const roomWidth = meters(Number(design.room?.width) || 0);
+    const postDepth = Number(modelTransforms.post?.targetDepth) || 0.025;
+    const overlap = meters(Number(modelTransforms.backPanel?.sideWallPostOverlapMm) || 0);
+    const targetWallSideX = wall.id === "left"
+      ? -roomWidth / 2 + postDepth - overlap
+      : roomWidth / 2 - postDepth + overlap;
+    const deltaWorldX = wall.id === "left"
+      ? targetWallSideX - beforeWorldBox.min.x
+      : targetWallSideX - beforeWorldBox.max.x;
+    if (Math.abs(deltaWorldX) > 1e-12) {
+      translateObjectByWorldDelta(model, group, deltaWorldX);
+      group.updateMatrixWorld(true);
+      model.updateMatrixWorld(true);
+    }
+    const afterWorldBox = new THREE.Box3().setFromObject(model);
+    wallMountedSideBackPanelAdjustment = {
+      wallId: wall.id,
+      overlap: toMm(overlap),
+      targetWallSideX: toMm(targetWallSideX),
+      deltaWorldX: toMm(deltaWorldX),
+      beforeWorldBBox: serializeBox(beforeWorldBox),
+      afterWorldBBox: serializeBox(afterWorldBox)
+    };
+  }
+  let wallMountedBackPanelDepthAdjustment = null;
+  if (
+    series?.seriesId === "wall-mounted-v2"
+    && placement.componentType === "backPanel"
+    && wall?.id === "back"
+  ) {
+    const beforeWorldBox = new THREE.Box3().setFromObject(model);
+    const backPostFrontZ = Math.max(
+      ...report.postCoordinates
+        .filter((postCoordinate) => postCoordinate.wallId === "back")
+        .map((postCoordinate) => meters(postCoordinate.finalBBoxMaxZ))
+    );
+    const deltaWorldZ = backPostFrontZ - beforeWorldBox.min.z;
+    if (Number.isFinite(deltaWorldZ) && Math.abs(deltaWorldZ) > 1e-12) {
+      translateObjectByWorldDelta(model, group, 0, 0, deltaWorldZ);
+      group.updateMatrixWorld(true);
+      model.updateMatrixWorld(true);
+    }
+    const afterWorldBox = new THREE.Box3().setFromObject(model);
+    wallMountedBackPanelDepthAdjustment = {
+      backPostFrontZ: toMm(backPostFrontZ),
+      panelBackFaceBeforeZ: toMm(beforeWorldBox.min.z),
+      panelBackFaceAfterZ: toMm(afterWorldBox.min.z),
+      deltaWorldZ: toMm(deltaWorldZ),
+      gap: toMm(afterWorldBox.min.z - backPostFrontZ)
+    };
+  }
   const aluminumBaseWoodShelfBoardAdjustment = series?.seriesId === "aluminum-base-supported"
     && product?.sku === "TD-WOOD-SHELF"
     ? expandAluminumBaseWoodShelfBoard(
@@ -1313,6 +1582,21 @@ async function addPlacement(
       Number(modelTransforms.componentWallClearanceMm) || 0
     )
     : null;
+  const wallMountedLedDiagnostic = series?.seriesId === "wall-mounted-v2"
+    && ["woodShelf", "shoeShelf", "glassShelf"].includes(placement.componentType)
+    ? addWallMountedShelfLedStrips(
+      model,
+      group,
+      config.led === true,
+      placement.componentType,
+      wall?.id,
+      placement.id
+    )
+    : null;
+  if (wallMountedLedDiagnostic) {
+    report.wallMountedLedStripCount += wallMountedLedDiagnostic.stripCount;
+    report.wallMountedLedDiagnostics.push(wallMountedLedDiagnostic);
+  }
   const aluminumBaseShelfLedDiagnostic = series?.seriesId === "aluminum-base-supported"
     && (
       product?.sku === "TD-WOOD-SHELF"
@@ -1349,11 +1633,22 @@ async function addPlacement(
     offsetZ: transform.offsetZ || 0,
     anchor: transform.anchor
   };
+  if (
+    series?.seriesId === "wall-mounted-v2"
+    && placement.componentType === "backPanel"
+    && config.layout === "U"
+    && config.uLayoutMode !== "side-first"
+    && (wall?.id === "left" || wall?.id === "right")
+  ) {
+    model.userData.isBackCornerBackPanel =
+      Number(placement.bayIndex) === getSideBackCornerBayIndex(wall);
+  }
   const finalBoundingBox = new THREE.Box3().setFromObject(model);
   report.componentDimensions.push({
     placementId: placement.id,
     componentType: placement.componentType,
     productSku: product?.sku || placement.productSku || "",
+    isBackCornerBackPanel: model.userData.isBackCornerBackPanel === true,
     modelPath: product?.modelPath || product?.glbAssetPath || "",
     heightFromFloor: placement.heightFromFloor,
     postCenterDistance: placement.postCenterDistance,
@@ -1370,6 +1665,11 @@ async function addPlacement(
     aluminumPostInnerEdgeAdjustment,
     aluminumBaseWoodShelfBoardAdjustment,
     aluminumBaseWallAdjustment,
+    wallMountedSupportColorAdjustment,
+    wallMountedLedDiagnostic,
+    wallMountedComponentDepthAdjustment,
+    wallMountedSideBackPanelAdjustment,
+    wallMountedBackPanelDepthAdjustment,
     originalBoundingBoxWidth: model.userData.originalBoundingBoxWidth,
     finalBoundingBoxWidth: toMm(actualWidth),
     actualDisplayWidth: toMm(actualWidth),
@@ -1600,6 +1900,13 @@ function getWoodTopEdgeDiagnostic(placement, wall, worldBox, room) {
 function getSideBackCornerBayIndex(wall) {
   if (Number.isInteger(wall?.backCornerBayIndex)) return wall.backCornerBayIndex;
   return wall?.id === "left" ? Number(wall?.bayCount || 1) - 1 : 0;
+}
+
+function getSideBackCornerPostIndex(wall) {
+  if (Number.isInteger(wall?.backCornerPostIndex)) return wall.backCornerPostIndex;
+  return getSideBackCornerBayIndex(wall) === 0
+    ? 0
+    : Number(wall?.postCount || Number(wall?.bayCount || 0) + 1) - 1;
 }
 
 function getSideOpenEndBayIndex(wall) {
@@ -2141,6 +2448,265 @@ function applyPostColor(object, frameColor) {
   applyModelColor(object, getFrameColor(frameColor), { metalness: 0.45, roughness: 0.32 });
 }
 
+function isWallMountedShelfSupportMaterial(material) {
+  return /(?:metal|bracket|support|gray|M07)/i.test(material?.name || "");
+}
+
+function applyWallMountedShelfSupportColor(model, frameColor) {
+  const frameColorValue = getFrameColor(frameColor);
+  const meshNames = [];
+  const materialNames = new Set();
+  model.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    let matched = false;
+    const nextMaterials = materials.map((material) => {
+      if (!isWallMountedShelfSupportMaterial(material)) return material;
+      matched = true;
+      materialNames.add(material.name || "");
+      const next = material.clone();
+      if (next.color) next.color.set(frameColorValue);
+      if ("metalness" in next) next.metalness = 0.45;
+      if ("roughness" in next) next.roughness = 0.32;
+      return next;
+    });
+    if (matched) meshNames.push(child.name || "");
+    child.material = Array.isArray(child.material) ? nextMaterials : nextMaterials[0];
+  });
+  return {
+    frameColor,
+    color: `#${new THREE.Color(frameColorValue).getHexString().toUpperCase()}`,
+    meshNames,
+    materialNames: Array.from(materialNames)
+  };
+}
+
+function createWallMountedLedMaterial(isLedEnabled) {
+  return new THREE.MeshStandardMaterial({
+    color: isLedEnabled ? 0xffffff : 0xcfcfc8,
+    emissive: isLedEnabled ? 0xf4faff : 0x000000,
+    emissiveIntensity: isLedEnabled ? 8 : 0,
+    roughness: isLedEnabled ? 0.25 : 0.75,
+    metalness: 0,
+    transparent: !isLedEnabled,
+    opacity: isLedEnabled ? 1 : 0.75,
+    toneMapped: !isLedEnabled
+  });
+}
+
+function getPrincipalAxis(points) {
+  const center = points.reduce(
+    (sum, point) => sum.add(point),
+    new THREE.Vector3()
+  ).multiplyScalar(1 / points.length);
+  const covariance = new THREE.Matrix3().set(
+    0, 0, 0,
+    0, 0, 0,
+    0, 0, 0
+  );
+  const elements = covariance.elements;
+  points.forEach((point) => {
+    const offset = point.clone().sub(center);
+    elements[0] += offset.x * offset.x;
+    elements[1] += offset.x * offset.y;
+    elements[2] += offset.x * offset.z;
+    elements[3] += offset.y * offset.x;
+    elements[4] += offset.y * offset.y;
+    elements[5] += offset.y * offset.z;
+    elements[6] += offset.z * offset.x;
+    elements[7] += offset.z * offset.y;
+    elements[8] += offset.z * offset.z;
+  });
+  let axis = new THREE.Vector3(0, 0, 1);
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    axis.applyMatrix3(covariance).normalize();
+  }
+  if (axis.z < 0) axis.negate();
+  const projections = points.map((point) => point.dot(axis));
+  const minProjection = Math.min(...projections);
+  const maxProjection = Math.max(...projections);
+  const centerProjection = center.dot(axis);
+  center.addScaledVector(axis, (minProjection + maxProjection) / 2 - centerProjection);
+  return {
+    axis,
+    center,
+    length: maxProjection - minProjection
+  };
+}
+
+function getWallMountedSupports(model, group) {
+  const points = [];
+  const inverseReferenceMatrix = new THREE.Matrix4().copy(group.matrixWorld).invert();
+  model.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    if (!materials.some(isWallMountedShelfSupportMaterial)) return;
+    const position = child.geometry.getAttribute("position");
+    if (!position) return;
+    for (let index = 0; index < position.count; index += 1) {
+      const point = new THREE.Vector3()
+        .fromBufferAttribute(position, index)
+        .applyMatrix4(child.matrixWorld)
+        .applyMatrix4(inverseReferenceMatrix);
+      points.push(point);
+    }
+  });
+  if (!points.length) return [];
+
+  const fullBox = new THREE.Box3().setFromPoints(points);
+  const fullSize = fullBox.getSize(new THREE.Vector3());
+  const sideBandWidth = Math.max(0.02, fullSize.x * 0.18);
+  const leftLimit = fullBox.min.x + sideBandWidth;
+  const rightLimit = fullBox.max.x - sideBandWidth;
+  const leftPoints = points.filter((point) => point.x <= leftLimit);
+  const rightPoints = points.filter((point) => point.x >= rightLimit);
+
+  return [leftPoints, rightPoints]
+    .filter((sidePoints) => sidePoints.length)
+    .map((sidePoints) => ({
+      box: new THREE.Box3().setFromPoints(sidePoints),
+      ...getPrincipalAxis(sidePoints)
+    }));
+}
+
+function getBoxProjectionRange(box, axis) {
+  const center = box.getCenter(new THREE.Vector3());
+  const halfSize = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+  const centerProjection = center.dot(axis);
+  const radius = Math.abs(axis.x) * halfSize.x
+    + Math.abs(axis.y) * halfSize.y
+    + Math.abs(axis.z) * halfSize.z;
+  return {
+    min: centerProjection - radius,
+    max: centerProjection + radius
+  };
+}
+
+function addWallMountedShelfLedStrips(
+  model,
+  group,
+  isLedEnabled,
+  componentType,
+  wallId,
+  placementId
+) {
+  if (model.name === "Missing Model") return null;
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const componentBox = getObjectBoxRelativeTo(model, group);
+  if (componentBox.isEmpty()) return null;
+
+  const supports = getWallMountedSupports(model, group);
+  if (!supports.length) return null;
+  const stripThickness = 0.006;
+  const strips = [];
+
+  supports.forEach((support, index) => {
+    const stripLength = Math.max(0.01, support.length);
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(stripThickness, stripThickness, stripLength),
+      createWallMountedLedMaterial(isLedEnabled)
+    );
+    strip.name = componentType === "glassShelf"
+      ? "WALL_MOUNTED_LED_STRIP_GLASS"
+      : componentType === "shoeShelf"
+        ? "WALL_MOUNTED_LED_STRIP_SHOE"
+        : "WALL_MOUNTED_LED_STRIP_WOOD";
+    strip.position.copy(support.center);
+    strip.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1),
+      support.axis
+    );
+    if (componentType === "glassShelf") {
+      group.add(strip);
+      group.updateMatrixWorld(true);
+      strip.updateMatrixWorld(true);
+      const supportFrontNormalWorld = new THREE.Vector3(index === 0 ? -1 : 1, 0, 0)
+        .applyQuaternion(group.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+      const supportWorldBox = support.box.clone().applyMatrix4(group.matrixWorld);
+      const stripWorldBox = new THREE.Box3().setFromObject(strip);
+      const supportProjection = getBoxProjectionRange(supportWorldBox, supportFrontNormalWorld);
+      const stripProjection = getBoxProjectionRange(stripWorldBox, supportFrontNormalWorld);
+      const worldOffset = supportProjection.max - stripProjection.min;
+      translateObjectByWorldDelta(
+        strip,
+        group,
+        supportFrontNormalWorld.x * worldOffset,
+        supportFrontNormalWorld.y * worldOffset,
+        supportFrontNormalWorld.z * worldOffset
+      );
+      strip.updateMatrixWorld(true);
+    }
+    strip.userData = {
+      programmaticLed: true,
+      ledType: strip.name,
+      wallId,
+      placementId,
+      supportSide: index === 0 ? "left" : "right"
+    };
+    if (strip.parent !== group) group.add(strip);
+    strips.push(strip);
+  });
+
+  group.updateMatrixWorld(true);
+  strips.forEach((strip) => strip.updateMatrixWorld(true));
+  return {
+    componentType,
+    wallId,
+    placementId,
+    ledEnabled: isLedEnabled,
+    stripCount: strips.length,
+    color: isLedEnabled ? "#FFFFFF" : "#CFCFC8",
+    emissive: isLedEnabled ? "#F4FAFF" : "#000000",
+    emissiveIntensity: isLedEnabled ? 8 : 0,
+    roughness: isLedEnabled ? 0.25 : 0.75,
+    opacity: isLedEnabled ? 1 : 0.75,
+    lightType: "none",
+    componentBBox: serializeBox(componentBox),
+    supports: supports.map((support) => ({
+      bbox: serializeBox(support.box),
+      center: serializeVectorMm(support.center),
+      axis: serializeVector(support.axis),
+      length: toMm(support.length)
+    })),
+    strips: strips.map((strip, index) => {
+      const stripBox = getObjectBoxRelativeTo(strip, group);
+      const supportBox = supports[index].box;
+      const supportFront = index === 0 ? supportBox.min.x : supportBox.max.x;
+      const stripBack = index === 0 ? stripBox.max.x : stripBox.min.x;
+      const supportFrontNormalWorld = new THREE.Vector3(index === 0 ? -1 : 1, 0, 0)
+        .applyQuaternion(group.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+      const supportWorldBox = supportBox.clone().applyMatrix4(group.matrixWorld);
+      const stripWorldBox = new THREE.Box3().setFromObject(strip);
+      const supportWorldProjection = getBoxProjectionRange(supportWorldBox, supportFrontNormalWorld);
+      const stripWorldProjection = getBoxProjectionRange(stripWorldBox, supportFrontNormalWorld);
+      return {
+        name: strip.name,
+        localBBox: serializeBox(stripBox),
+        worldBBox: serializeBox(stripWorldBox),
+        localPosition: serializeVectorMm(strip.position),
+        localRotationDegrees: serializeEulerDegrees(strip.rotation),
+        worldPosition: serializeVectorMm(strip.getWorldPosition(new THREE.Vector3())),
+        worldRotationDegrees: serializeEulerDegrees(
+          new THREE.Euler().setFromQuaternion(strip.getWorldQuaternion(new THREE.Quaternion()))
+        ),
+        supportFrontNormalWorld: serializeVector(supportFrontNormalWorld),
+        supportFront: toMm(supportFront),
+        stripBack: toMm(stripBack),
+        supportGap: toMm(index === 0
+          ? supportFront - stripBack
+          : stripBack - supportFront),
+        worldSupportFront: toMm(supportWorldProjection.max),
+        worldStripBack: toMm(stripWorldProjection.min),
+        worldSupportGap: toMm(stripWorldProjection.min - supportWorldProjection.max),
+        supportSide: strip.userData.supportSide
+      };
+    })
+  };
+}
+
 function addAluminumPostLedGlow(post, isLedEnabled, { connectionMode, postStyle } = {}) {
   post.updateMatrixWorld(true);
   const localBox = getObjectBoxRelativeTo(post, post);
@@ -2503,6 +3069,22 @@ function serializeVectorMm(vector) {
     x: toMm(vector.x),
     y: toMm(vector.y),
     z: toMm(vector.z)
+  };
+}
+
+function serializeVector(vector) {
+  return {
+    x: Number(vector.x.toFixed(6)),
+    y: Number(vector.y.toFixed(6)),
+    z: Number(vector.z.toFixed(6))
+  };
+}
+
+function serializeEulerDegrees(euler) {
+  return {
+    x: Number(THREE.MathUtils.radToDeg(euler.x).toFixed(3)),
+    y: Number(THREE.MathUtils.radToDeg(euler.y).toFixed(3)),
+    z: Number(THREE.MathUtils.radToDeg(euler.z).toFixed(3))
   };
 }
 

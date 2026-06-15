@@ -54,6 +54,14 @@ export async function loadWorkbookData(series) {
   const cuttingRules = parseFormulaSheet(productsBuffer, ["CuttingRules"], ["sku", "componentType"]);
   const layoutRules = parseFormulaSheet(productsBuffer, ["LayoutRules"], ["ruleKey"]);
   const projectConfig = parseKeyValueSheet(productsBuffer, ["ProjectConfig"], ["configKey", "key"]);
+  const validation = validateWorkbookData(products, rules);
+  if (
+    validation.duplicateSkus.length
+    || validation.missingRuleSkus.length
+    || validation.circularBomPaths.length
+  ) {
+    console.warn("Workbook validation issues.", validation);
+  }
   return {
     products,
     rules,
@@ -61,6 +69,7 @@ export async function loadWorkbookData(series) {
     cuttingRules,
     layoutRules,
     projectConfig,
+    validation,
     workbookStats: {
       productCount: products.length,
       ruleCount: rules.length,
@@ -69,6 +78,56 @@ export async function loadWorkbookData(series) {
     },
     source: "xlsx",
     series
+  };
+}
+
+function validateWorkbookData(products, rules) {
+  const skuCounts = new Map();
+  products.forEach((product) => {
+    const sku = String(product.sku || "").trim();
+    if (sku) skuCounts.set(sku, (skuCounts.get(sku) || 0) + 1);
+  });
+  const productSkus = new Set(skuCounts.keys());
+  const missingRuleSkus = unique(rules.flatMap((rule) => {
+    const parentSku = String(rule.parentSku || "").trim();
+    const childSku = String(rule.childSku || "").trim();
+    return [
+      parentSku && parentSku.toUpperCase() !== "SYSTEM" && !productSkus.has(parentSku)
+        ? parentSku
+        : "",
+      childSku && !productSkus.has(childSku) ? childSku : ""
+    ];
+  }).filter(Boolean));
+  const graph = new Map();
+  rules.forEach((rule) => {
+    const parentSku = String(rule.parentSku || "").trim();
+    const childSku = String(rule.childSku || "").trim();
+    if (!productSkus.has(parentSku) || !productSkus.has(childSku)) return;
+    if (!graph.has(parentSku)) graph.set(parentSku, []);
+    graph.get(parentSku).push(childSku);
+  });
+  const circularBomPaths = [];
+  const visited = new Set();
+  const active = new Set();
+  const visit = (sku, path) => {
+    if (active.has(sku)) {
+      const cycleStart = path.indexOf(sku);
+      circularBomPaths.push([...path.slice(cycleStart), sku]);
+      return;
+    }
+    if (visited.has(sku)) return;
+    active.add(sku);
+    (graph.get(sku) || []).forEach((childSku) => visit(childSku, [...path, sku]));
+    active.delete(sku);
+    visited.add(sku);
+  };
+  productSkus.forEach((sku) => visit(sku, []));
+  return {
+    duplicateSkus: [...skuCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([sku]) => sku),
+    missingRuleSkus,
+    circularBomPaths
   };
 }
 
@@ -336,6 +395,10 @@ function splitOptions(value) {
     .split(/[|,，、；;\/\\]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function unique(values) {
+  return [...new Set(values)];
 }
 
 function numberOrZero(value) {

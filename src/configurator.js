@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=wall-mounted-storage-library-types-20260615-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -124,7 +124,8 @@ export function calculateDesign(config, data) {
       const product = bomCalculator.resolvePlacementProduct?.({
         placement,
         productsByType,
-        productByType
+        productByType,
+        config
       }) || productByType[placement.componentType];
       return product ? { ...placement, productSku: product.sku } : placement;
     });
@@ -280,7 +281,10 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
     const uWallCornerOffset = config.uLayoutMode === "side-first"
       && Number.isFinite(Number(cuttingRules.uSideFirstBackWallCornerOffsetMm))
       ? Number(cuttingRules.uSideFirstBackWallCornerOffsetMm)
-      : cuttingRules.sideWallLengthAdjustmentMm;
+      : config.uLayoutMode !== "side-first"
+        && Number.isFinite(Number(cuttingRules.uBackFirstSideWallCornerOffsetMm))
+        ? Number(cuttingRules.uBackFirstSideWallCornerOffsetMm)
+        : cuttingRules.sideWallLengthAdjustmentMm;
     wallPlans = cuttingRules.preservesExistingUWallGeometry
       ? getJapaneseUWallPlans(
         standardWallPlans,
@@ -361,18 +365,30 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         && typeof cuttingRules.getSideWallBackCornerPostInsetMm === "function"
         ? Math.max(0, Number(cuttingRules.getSideWallBackCornerPostInsetMm(config)) || 0)
         : 0;
-      const startPostCenterInset = postCenterInset + (plan.backCornerAtStart === true
-        ? backCornerPostInset
-        : 0);
-      const endPostCenterInset = postCenterInset + (plan.backCornerAtStart === false
-        ? backCornerPostInset
-        : 0);
+      const sideFirstBackWallBoundaryCenterInset = config.layout === "U"
+        && config.uLayoutMode === "side-first"
+        && id === "back"
+        && Number.isFinite(Number(cuttingRules.uSideFirstBackWallBoundaryClearanceMm))
+        ? Math.max(0, Number(cuttingRules.uSideFirstBackWallBoundaryClearanceMm))
+          + cuttingRules.postProfileWidthMm / 2
+        : 0;
+      const startPostCenterInset = sideFirstBackWallBoundaryCenterInset || (
+        postCenterInset + (plan.backCornerAtStart === true
+          ? backCornerPostInset
+          : 0)
+      );
+      const endPostCenterInset = sideFirstBackWallBoundaryCenterInset || (
+        postCenterInset + (plan.backCornerAtStart === false
+          ? backCornerPostInset
+          : 0)
+      );
       const postCenterSpan = Math.max(1, length - startPostCenterInset - endPostCenterInset);
       const plannedBayWidthTotal = bayWidths.reduce((sum, width) => sum + width, 0);
       const postCenterBayWidths = (
         shouldInsetPostCenters
         || usesSideBoundaryInset
         || backCornerPostInset > 0
+        || sideFirstBackWallBoundaryCenterInset > 0
       ) && plannedBayWidthTotal > 0
         ? bayWidths.map((width) => width * postCenterSpan / plannedBayWidthTotal)
         : bayWidths;
@@ -389,6 +405,7 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
           || usesVariableBayWidths
           || canUseCustomBayWidths
           || backCornerPostInset > 0
+          || sideFirstBackWallBoundaryCenterInset > 0
           ? Math.max(1, measuredPostCenterDistance - cuttingRules.postProfileWidthMm)
           : factoryInnerBayWidth;
         return {
@@ -422,6 +439,11 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
           ? 0
           : plan.backCornerAtStart === false
             ? bayCount - 1
+            : null,
+        backCornerPostIndex: plan.backCornerAtStart === true
+          ? 0
+          : plan.backCornerAtStart === false
+            ? bayCount
             : null,
         openEndBayIndex: plan.backCornerAtStart === true
           ? bayCount - 1
@@ -494,18 +516,26 @@ function getJapaneseUWallPlans(wallPlans, mode = "back-first", fixedOffset = 0) 
   }
 
   const orderIndex = new Map(["back", "left", "right"].map((wallId, index) => [wallId, index]));
-  return wallPlans.map((plan) => ({
-    ...plan,
-    centerOffset: plan.id === "back"
-      ? 0
-      : (plan.sourceCenterOffset || 0) + plan.startOffset / 2,
-    reverseBayOrder: false,
-    backCornerAtStart: plan.id === "right"
-      ? true
-      : plan.id === "left"
-        ? false
-        : null
-  })).sort((a, b) => (
+  return wallPlans.map((plan) => {
+    const isSideWall = plan.id === "left" || plan.id === "right";
+    const startOffset = isSideWall ? offset : plan.startOffset;
+    return {
+      ...plan,
+      startOffset,
+      centerOffset: plan.id === "back"
+        ? 0
+        : (plan.sourceCenterOffset || 0) + startOffset / 2,
+      reverseBayOrder: false,
+      backCornerAtStart: plan.id === "right"
+        ? true
+        : plan.id === "left"
+          ? false
+          : null,
+      length: isSideWall
+        ? Math.max(1, plan.sourceLength - startOffset)
+        : plan.length
+    };
+  }).sort((a, b) => (
     (orderIndex.get(a.id) ?? order.length) - (orderIndex.get(b.id) ?? order.length)
   ));
 }

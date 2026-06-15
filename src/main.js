@@ -29,7 +29,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=u-asymmetric-side-walls-20260613-01";
+} from "./configurator.js?v=wall-mounted-side-first-back-clearance-20260615-01";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -38,11 +38,11 @@ import {
   parseProductFile,
   parseRulesFile,
   saveWorkbookOverride
-} from "./dataSource.js?v=carbon-v2-model-20260611-01";
+} from "./dataSource.js?v=wall-mounted-v2-20260613-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
-import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=u-asymmetric-side-walls-20260613-01";
-import { WardrobeScene } from "./scene.js?v=u-asymmetric-room-surfaces-20260613-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=u-asymmetric-side-walls-20260613-01";
+import { productSeries, resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-storage-library-types-20260615-01";
+import { WardrobeScene } from "./scene.js?v=wall-mounted-glass-led-direction-20260615-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=wall-mounted-system-layout-rules-20260615-03";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
@@ -979,7 +979,7 @@ function groupBomItems(bom, displayRules) {
   return Array.from(map.values())
     .map((group) => ({
       ...group,
-      items: group.items.slice().sort((a, b) => normalizeSortOrder(a.sortOrder) - normalizeSortOrder(b.sortOrder) || String(a.sku).localeCompare(String(b.sku)))
+      items: group.items.slice().sort(compareBomItems)
     }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
 }
@@ -1056,7 +1056,7 @@ async function createClientProductListSheet(workbook, bom, design, config, serie
   ];
 
   sheet.mergeCells("A1:J1");
-  sheet.getCell("A1").value = "日式衣帽间产品清单";
+  sheet.getCell("A1").value = `${series?.name || "衣帽间"}产品清单`;
   sheet.mergeCells("A2:E2");
   sheet.getCell("A2").value = `系列：${series?.name || ""}`;
   sheet.mergeCells("F2:J2");
@@ -1149,7 +1149,7 @@ async function createStandardQuotationSheet(workbook, bom, design, config, serie
   ];
 
   sheet.mergeCells("A1:L1");
-  sheet.getCell("A1").value = "日式衣帽间（经销商价）";
+  sheet.getCell("A1").value = `${series?.name || "衣帽间"}（经销商价）`;
   sheet.mergeCells("A2:F2");
   sheet.getCell("A2").value = "供方：佛山市奥美斯五金制品有限公司";
   sheet.mergeCells("G2:L2");
@@ -1516,8 +1516,17 @@ function formatExportDate(date) {
 }
 
 function normalizeSortOrder(value) {
+  if (value === "" || value == null || String(value).trim() === "") {
+    return Number.POSITIVE_INFINITY;
+  }
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 999999;
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function compareBomItems(left, right) {
+  return normalizeSortOrder(left.sortOrder) - normalizeSortOrder(right.sortOrder)
+    || String(left.bomGroup || "").localeCompare(String(right.bomGroup || ""), "zh-CN")
+    || String(left.sku || "").localeCompare(String(right.sku || ""));
 }
 
 function AdminApp({ data, setData }) {

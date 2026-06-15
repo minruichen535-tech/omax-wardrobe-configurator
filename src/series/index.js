@@ -31,6 +31,17 @@ import {
   aluminumBaseSupportedDisplayRules,
   createAluminumBaseSupportedDisplayRules
 } from "./aluminum-base-supported/displayRules.js";
+import { wallMountedV2SeriesConfig } from "./wall-mounted-v2/series.config.js?v=storage-library-types-20260615-01";
+import { wallMountedV2BomCalculator } from "./wall-mounted-v2/bomCalculator.js?v=system-layout-rules-20260615-03";
+import {
+  wallMountedV2CuttingRules,
+  createWallMountedV2CuttingRules
+} from "./wall-mounted-v2/cuttingRules.js?v=side-first-back-clearance-20260615-01";
+import { wallMountedV2ModelTransforms } from "./wall-mounted-v2/modelTransforms.js?v=component-width-20260615-01";
+import {
+  wallMountedV2DisplayRules,
+  createWallMountedV2DisplayRules
+} from "./wall-mounted-v2/displayRules.js?v=storage-library-types-20260615-01";
 
 const seriesRegistry = new Map([
   [
@@ -85,6 +96,18 @@ const seriesRegistry = new Map([
       modelTransforms: aluminumBaseSupportedModelTransforms,
       displayRules: aluminumBaseSupportedDisplayRules,
       createDisplayRules: createAluminumBaseSupportedDisplayRules
+    }
+  ],
+  [
+    wallMountedV2SeriesConfig.seriesId,
+    {
+      config: wallMountedV2SeriesConfig,
+      bomCalculator: wallMountedV2BomCalculator,
+      cuttingRules: wallMountedV2CuttingRules,
+      createCuttingRules: createWallMountedV2CuttingRules,
+      modelTransforms: wallMountedV2ModelTransforms,
+      displayRules: wallMountedV2DisplayRules,
+      createDisplayRules: createWallMountedV2DisplayRules
     }
   ]
 ]);
