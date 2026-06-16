@@ -15,7 +15,6 @@ const nestedFastenerParentSkus = new Set([
 const depthSizedAccessorySkus = new Set([
   "JP-TOP-BRACKET",
   "JP-SHELF-BRACKET",
-  "JP-HORIZONTAL-RAIL",
   "JP-CORNER-BRACKET"
 ]);
 

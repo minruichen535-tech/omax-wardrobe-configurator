@@ -3,7 +3,7 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=ai-planner-analysis-layout-20260616-01";
+} from "./planRules.js?v=ai-planner-weighted-analysis-20260616-01";
 
 const state = {
   step: 0,
