@@ -89,38 +89,15 @@ body {
 .customer-brand {
   display: inline-flex;
   align-items: center;
-  gap: 13px;
-  color: #fff;
   text-decoration: none;
 }
 
-.customer-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.05em;
-}
-
-.customer-brand strong,
-.customer-brand small {
+.customer-brand-logo {
   display: block;
-}
-
-.customer-brand strong {
-  font-size: 19px;
-  line-height: 1;
-  letter-spacing: 0.22em;
-}
-
-.customer-brand small {
-  margin-top: 7px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 8px;
-  letter-spacing: 0.2em;
+  width: auto;
+  height: 44px;
+  max-width: min(300px, 64vw);
+  object-fit: contain;
 }
 
 .hero-content {
@@ -238,8 +215,7 @@ body {
     padding: 22px 20px;
   }
 
-  .customer-brand-mark {
-    width: 40px;
+  .customer-brand-logo {
     height: 40px;
   }
 

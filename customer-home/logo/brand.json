@@ -1,0 +1,7 @@
+{
+  "brandNameCn": "璞舍高定家居",
+  "brandNameEn": "purenest",
+  "seriesName": "日式衣帽间",
+  
+
+}
