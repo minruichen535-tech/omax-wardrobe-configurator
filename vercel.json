@@ -2,7 +2,18 @@
   "rewrites": [
     { "source": "/carbon-steel-post-wardrobe", "destination": "/carbon-steel-post-wardrobe/index.html" },
     { "source": "/carbon-steel-post-wardrobe/:path*", "destination": "/carbon-steel-post-wardrobe/index.html" },
-    { "source": "/configurator/:path*", "destination": "/index.html" },
+    { "source": "/configurator", "destination": "/configurator/index.html" },
+    { "source": "/configurator/japanese-closet", "destination": "/configurator/japanese-closet/index.html" },
+    { "source": "/configurator/japanese-closet/", "destination": "/configurator/japanese-closet/index.html" },
+    { "source": "/configurator/aluminum-post-wardrobe", "destination": "/configurator/aluminum-post-wardrobe/index.html" },
+    { "source": "/configurator/aluminum-post-wardrobe/", "destination": "/configurator/aluminum-post-wardrobe/index.html" },
+    { "source": "/configurator/carbon-steel-post-wardrobe-v2", "destination": "/configurator/carbon-steel-post-wardrobe-v2/index.html" },
+    { "source": "/configurator/carbon-steel-post-wardrobe-v2/", "destination": "/configurator/carbon-steel-post-wardrobe-v2/index.html" },
+    { "source": "/configurator/aluminum-base-supported", "destination": "/configurator/aluminum-base-supported/index.html" },
+    { "source": "/configurator/aluminum-base-supported/", "destination": "/configurator/aluminum-base-supported/index.html" },
+    { "source": "/configurator/wall-mounted-v2", "destination": "/configurator/wall-mounted-v2/index.html" },
+    { "source": "/configurator/wall-mounted-v2/", "destination": "/configurator/wall-mounted-v2/index.html" },
+    { "source": "/configurator/:path*", "destination": "/configurator/index.html" },
     { "source": "/admin/:path*", "destination": "/index.html" },
     { "source": "/((?!.*\\.).*)", "destination": "/index.html" }
   ]

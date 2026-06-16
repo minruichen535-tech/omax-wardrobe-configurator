@@ -1,3 +1,15 @@
+/configurator /configurator/index.html 200
+/configurator/ /configurator/index.html 200
+/configurator/japanese-closet /configurator/japanese-closet/index.html 200
+/configurator/japanese-closet/ /configurator/japanese-closet/index.html 200
+/configurator/aluminum-post-wardrobe /configurator/aluminum-post-wardrobe/index.html 200
+/configurator/aluminum-post-wardrobe/ /configurator/aluminum-post-wardrobe/index.html 200
+/configurator/carbon-steel-post-wardrobe-v2 /configurator/carbon-steel-post-wardrobe-v2/index.html 200
+/configurator/carbon-steel-post-wardrobe-v2/ /configurator/carbon-steel-post-wardrobe-v2/index.html 200
+/configurator/aluminum-base-supported /configurator/aluminum-base-supported/index.html 200
+/configurator/aluminum-base-supported/ /configurator/aluminum-base-supported/index.html 200
+/configurator/wall-mounted-v2 /configurator/wall-mounted-v2/index.html 200
+/configurator/wall-mounted-v2/ /configurator/wall-mounted-v2/index.html 200
 /client/* /client/index.html 200
 /configurator/* /configurator/index.html 200
 /* /index.html 200

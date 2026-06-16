@@ -840,6 +840,14 @@ function PlacementEditor({ placement, design, updatePlacement, removePlacement, 
   const name = getComponentName(placement.componentType, design.productByType, cuttingRules);
   const product = design.productByType[placement.componentType];
   const heightLocked = placement.heightLocked || product?.heightLocked;
+  const minHeight = 0;
+  const maxHeight = Number(design.room.height) || 0;
+  const commitHeight = (value) => {
+    const parsed = parseIntegerInput(value);
+    if (parsed == null) return;
+    const heightFromFloor = clampValue(parsed, minHeight, maxHeight);
+    updatePlacement(placement.id, { heightFromFloor });
+  };
   return h("div", { className: "height-editor" },
     h("div", null,
       h("strong", null, name),
@@ -854,9 +862,16 @@ function PlacementEditor({ placement, design, updatePlacement, removePlacement, 
         max: design.room.height,
         step: 10,
         value: placement.heightFromFloor,
-        onChange: (event) => updatePlacement(placement.id, { heightFromFloor: Number(event.target.value) })
+        onChange: (event) => commitHeight(event.target.value)
       }),
-      h("strong", null, `离地 ${placement.heightFromFloor} mm`)
+      h("strong", null, `离地 ${placement.heightFromFloor} mm`),
+      h(PlacementHeightNumberInput, {
+        value: placement.heightFromFloor,
+        min: minHeight,
+        max: maxHeight,
+        step: 10,
+        onCommit: commitHeight
+      })
     ),
     cuttingRules.fixedModuleTypes.includes(placement.componentType) && h("label", { className: "range-field" },
       h("span", null, "标准尺寸"),
@@ -882,6 +897,50 @@ function PlacementEditor({ placement, design, updatePlacement, removePlacement, 
         onClick: () => updatePlacement(placement.id, { bayIndex: placement.bayIndex + 1 })
       }, "下一跨"),
       h("button", { type: "button", onClick: () => removePlacement(placement.id) }, "删除")
+    )
+  );
+}
+
+function PlacementHeightNumberInput({ value, min, max, step, onCommit }) {
+  const [draftValue, setDraftValue] = useState(String(value ?? ""));
+
+  useEffect(() => {
+    setDraftValue(String(value ?? ""));
+  }, [value]);
+
+  const commitDraft = () => {
+    const parsed = parseIntegerInput(draftValue);
+    if (parsed == null) {
+      setDraftValue(String(value ?? ""));
+      return;
+    }
+    const clamped = clampValue(parsed, min, max);
+    setDraftValue(String(clamped));
+    onCommit(clamped);
+  };
+
+  return h("label", { className: "height-number-field" },
+    h("span", null, "高度"),
+    h("div", { className: "height-number-input" },
+      h("input", {
+        type: "number",
+        min,
+        max,
+        step,
+        value: draftValue,
+        onChange: (event) => {
+          const nextValue = event.target.value;
+          if (/^\d*$/.test(nextValue)) setDraftValue(nextValue);
+        },
+        onKeyDown: (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitDraft();
+          }
+        },
+        onBlur: commitDraft
+      }),
+      h("em", null, "mm")
     )
   );
 }

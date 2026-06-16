@@ -824,6 +824,37 @@ button {
   accent-color: var(--primary);
 }
 
+.height-number-field {
+  display: grid;
+  gap: 6px;
+}
+
+.height-number-input {
+  display: flex;
+  align-items: center;
+  max-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input);
+  overflow: hidden;
+}
+
+.height-number-input input {
+  width: 100%;
+  height: 38px;
+  border: 0;
+  padding: 0 10px;
+  background: transparent;
+  outline: none;
+}
+
+.height-number-input em {
+  padding-right: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
 .placement-editor-actions {
   display: flex;
   gap: 8px;

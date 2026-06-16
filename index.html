@@ -3,19 +3,45 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>奥美斯衣帽间配置器</title>
-    <link rel="stylesheet" href="/src/dashboard/dashboard.css?v=dashboard-split-20260615-01" />
-    <script type="importmap">
-      {
-        "imports": {
-          "react": "https://esm.sh/react@18.3.1",
-          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client"
-        }
-      }
-    </script>
+    <meta name="description" content="奥美斯全屋收纳空间设计" />
+    <title>奥美斯 | 理想收纳空间</title>
+    <link rel="preload" as="image" href="/src/customer-home/images/tlz-01.png" />
+    <link rel="stylesheet" href="/src/customer-home/customer-home.css?v=customer-home-sequence-20260615-01" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/dashboard/dashboard-main.js?v=dashboard-split-20260615-01"></script>
+    <main class="customer-home">
+      <div class="hero-slides" aria-hidden="true">
+        <img class="hero-slide is-active" src="/src/customer-home/images/tlz-01.png" alt="" />
+        <img class="hero-slide" alt="" />
+      </div>
+      <div class="hero-shade" aria-hidden="true"></div>
+
+      <header class="customer-header">
+        <a class="customer-brand" href="/" aria-label="奥美斯首页">
+          <span class="customer-brand-mark">OM</span>
+          <span>
+            <strong>OMAX</strong>
+            <small>WARDROBE SYSTEM</small>
+          </span>
+        </a>
+      </header>
+
+      <section class="hero-content" aria-labelledby="hero-title">
+        <p class="hero-kicker">空间设计 · 收纳美学</p>
+        <h1 id="hero-title">打造属于你的理想收纳空间</h1>
+        <p class="hero-subtitle">Design Your Ideal Space</p>
+        <a class="hero-action" href="/ai-planner">
+          <span>START DESIGN</span>
+          <span class="hero-action-arrow" aria-hidden="true">→</span>
+        </a>
+      </section>
+
+      <div class="hero-progress" aria-hidden="true">
+        <span class="hero-count">01</span>
+        <span class="hero-progress-track"><i></i></span>
+        <span>10</span>
+      </div>
+    </main>
+    <script type="module" src="/src/customer-home/customer-home.js?v=customer-home-sequence-20260615-01"></script>
   </body>
 </html>
