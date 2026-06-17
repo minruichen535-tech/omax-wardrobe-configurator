@@ -2,10 +2,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=wall-mounted-side-first-back-clearance-20260615-01";
-import { resolveSeriesAsset } from "./config/productSeries.js";
-import { theme } from "./config/theme.js?v=color-system-20260602-01";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=wall-mounted-system-layout-rules-20260615-03";
+import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=cache-20260617-01";
+import { resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260617-01";
+import { theme } from "./config/theme.js?v=cache-20260617-01";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=cache-20260617-01";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -2411,7 +2411,7 @@ export function loadModel(modelPath, series) {
     ? aluminumBaseSupportedUpdatedModelVersions.get(modelPath)
     : null;
   const url = aluminumBaseSupportedModelVersion
-    ? `${resolvedUrl}?v=${aluminumBaseSupportedModelVersion}`
+    ? `${resolvedUrl}${resolvedUrl.includes("?") ? "&" : "?"}v=${aluminumBaseSupportedModelVersion}`
     : resolvedUrl;
   if (!modelCache.has(url)) {
     modelCache.set(url, withTimeout(new Promise((resolve, reject) => {

@@ -1,4 +1,4 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=wall-mounted-storage-library-types-20260615-01";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=cache-20260617-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);

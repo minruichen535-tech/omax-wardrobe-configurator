@@ -1,4 +1,12 @@
-import { getSeriesConfig } from "../series/index.js?v=wall-mounted-storage-library-types-20260615-01";
+import { getSeriesConfig } from "../series/index.js?v=cache-20260617-01";
+
+export const assetCacheVersion = "20260617";
+
+export function withAssetVersion(url, version = assetCacheVersion) {
+  if (!url || /^(data:|https?:\/\/)/i.test(url)) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}v=${version}`;
+}
 
 const japaneseClosetConfig = getSeriesConfig("japanese-closet");
 const aluminumPostWardrobeConfig = getSeriesConfig("aluminum-post-wardrobe");
@@ -86,9 +94,9 @@ export function resolveSeriesAsset(series, assetPath) {
   if (!assetPath) return "";
   if (/^(data:|https?:\/\/|\/)/i.test(assetPath)) return assetPath;
   const normalized = assetPath.replace(/^\.?\//, "");
-  if (normalized.startsWith("products/")) return `/${normalized}`;
+  if (normalized.startsWith("products/")) return withAssetVersion(`/${normalized}`);
   if (/^[^/\\]+\.(glb|gltf)$/i.test(normalized) && series.modelRoot) {
-    return `/${series.modelRoot}/${normalized}`;
+    return withAssetVersion(`/${series.modelRoot}/${normalized}`);
   }
-  return `/${series.assetRoot}/${normalized}`;
+  return withAssetVersion(`/${series.assetRoot}/${normalized}`);
 }

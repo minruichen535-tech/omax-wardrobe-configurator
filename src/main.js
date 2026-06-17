@@ -29,7 +29,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=wall-mounted-side-first-back-clearance-20260615-01";
+} from "./configurator.js?v=cache-20260617-01";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -38,11 +38,11 @@ import {
   parseProductFile,
   parseRulesFile,
   saveWorkbookOverride
-} from "./dataSource.js?v=wall-mounted-v2-20260613-01";
-import { applyTheme, swatchColors } from "./config/theme.js?v=color-system-20260602-01";
-import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-storage-library-types-20260615-01";
-import { WardrobeScene } from "./scene.js?v=wall-mounted-glass-led-direction-20260615-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=wall-mounted-system-layout-rules-20260615-03";
+} from "./dataSource.js?v=cache-20260617-01";
+import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260617-01";
+import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260617-01";
+import { WardrobeScene } from "./scene.js?v=cache-20260617-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=cache-20260617-01";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
@@ -1869,7 +1869,7 @@ async function loadBrandInfo(urls) {
   const [url] = candidates;
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("GET", `${url}?v=${Date.now()}`);
+    request.open("GET", `${url}${url.includes("?") ? "&" : "?"}v=${Date.now()}`);
     request.onload = () => {
       if (request.status < 200 || request.status >= 300) {
         resolve(null);

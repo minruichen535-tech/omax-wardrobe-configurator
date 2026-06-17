@@ -1,6 +1,6 @@
 const heroImages = Array.from(
   { length: 10 },
-  (_, index) => `/src/customer-home/images/hero/tlz-${String(index + 1).padStart(2, "0")}.png`
+  (_, index) => `/src/customer-home/images/hero/tlz-${String(index + 1).padStart(2, "0")}.png?v=20260617`
 );
 
 const frameDuration = 3000;

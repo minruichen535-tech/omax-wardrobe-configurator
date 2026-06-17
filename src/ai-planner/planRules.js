@@ -55,8 +55,8 @@ const wardrobeItemBaseRangeByUsers = {
   },
   "3人": {
     "短衣": { min: 100, max: 130, unit: "件" },
-    "长衣": { min: 25, max: 35, unit: "件" },
-    "裤子": { min: 35, max: 45, unit: "条" },
+    "长衣": { min: 30, max: 45, unit: "件" },
+    "裤子": { min: 40, max: 55, unit: "条" },
     "鞋子": { min: 45, max: 60, unit: "双" },
     "包包": { min: 10, max: 18, unit: "个" }
   },
@@ -265,6 +265,11 @@ function getWeightedDemands(answers) {
     .sort((a, b) => b.weight - a.weight || a.name.localeCompare(b.name, "zh-CN"));
 }
 
+function getPrimaryZoneKey(answers) {
+  return Object.entries(calculateRelevantZones(answers))
+    .sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+}
+
 function add(selected, keys, value) {
   return keys.reduce((sum, key) => sum + (selected.has(key) ? value : 0), 0);
 }
@@ -293,13 +298,13 @@ export function estimateItemCounts(answers) {
   const selected = new Set(getSelectedDemands(answers));
   const weights = getDemandWeights(answers);
   if (!["衣帽间", "主卧衣柜"].includes(answers.spaceUse)) return [];
-  const counts = wardrobeItemBaseRangeByUsers[answers.people] || wardrobeItemBaseRangeByUsers["2人"];
-  return Object.keys(counts)
+  return getSelectedDemands(answers)
     .filter((name) => selected.has(name))
     .map((name) => ({
       name,
-      value: getWeightedItemEstimate(name, answers.people, Number(weights[name]) || 1)
-    }));
+      value: getDemandItemEstimate(name, answers, Number(weights[name]) || 1)
+    }))
+    .filter((item) => item.value);
 }
 
 export function getWeightedItemEstimate(itemName, users = "2人", weight = 1) {
@@ -322,6 +327,279 @@ function formatRange(range) {
 
 function roundToFive(value) {
   return Math.round(value / 5) * 5;
+}
+
+function getDemandItemEstimate(itemName, answers, weight = 1) {
+  const wardrobeEstimate = getWeightedItemEstimate(itemName, answers.people, weight);
+  if (wardrobeEstimate) return wardrobeEstimate;
+  const normalizedWeight = Math.max(1, Math.min(3, Number(weight) || 1));
+  const fallbackRanges = {
+    "首饰": [
+      { min: 1, max: 2, unit: "组" },
+      { min: 2, max: 3, unit: "组" },
+      { min: 3, max: 5, unit: "组" }
+    ],
+    "被褥": [
+      { min: 2, max: 3, unit: "床" },
+      { min: 3, max: 4, unit: "床" },
+      { min: 4, max: 6, unit: "床" }
+    ],
+    "行李箱": [
+      { min: 3, max: 5, unit: "个" },
+      { min: 4, max: 6, unit: "个" },
+      { min: 5, max: 8, unit: "个" }
+    ],
+    "展示收藏": [
+      { min: 8, max: 12, unit: "件" },
+      { min: 12, max: 18, unit: "件" },
+      { min: 18, max: 30, unit: "件" }
+    ],
+    "鞋子收纳": [
+      { min: 12, max: 20, unit: "双" },
+      { min: 20, max: 32, unit: "双" },
+      { min: 32, max: 48, unit: "双" }
+    ],
+    "外套挂放": [
+      { min: 4, max: 6, unit: "件" },
+      { min: 6, max: 10, unit: "件" },
+      { min: 10, max: 16, unit: "件" }
+    ],
+    "包包放置": [
+      { min: 3, max: 5, unit: "个" },
+      { min: 5, max: 8, unit: "个" },
+      { min: 8, max: 12, unit: "个" }
+    ],
+    "雨伞收纳": [
+      { min: 2, max: 4, unit: "把" },
+      { min: 4, max: 6, unit: "把" },
+      { min: 6, max: 10, unit: "把" }
+    ],
+    "钥匙杂物": [
+      { min: 1, max: 2, unit: "组" },
+      { min: 2, max: 3, unit: "组" },
+      { min: 3, max: 4, unit: "组" }
+    ],
+    "展示摆件": [
+      { min: 4, max: 8, unit: "件" },
+      { min: 8, max: 14, unit: "件" },
+      { min: 14, max: 22, unit: "件" }
+    ],
+    "摆件": [
+      { min: 6, max: 10, unit: "件" },
+      { min: 10, max: 18, unit: "件" },
+      { min: 18, max: 28, unit: "件" }
+    ],
+    "收藏品": [
+      { min: 8, max: 12, unit: "件" },
+      { min: 12, max: 20, unit: "件" },
+      { min: 20, max: 36, unit: "件" }
+    ],
+    "书籍": [
+      { min: 80, max: 120, unit: "本" },
+      { min: 120, max: 200, unit: "本" },
+      { min: 200, max: 320, unit: "本" }
+    ],
+    "酒具": [
+      { min: 8, max: 12, unit: "件" },
+      { min: 12, max: 20, unit: "件" },
+      { min: 20, max: 32, unit: "件" }
+    ],
+    "茶具": [
+      { min: 6, max: 10, unit: "件" },
+      { min: 10, max: 16, unit: "件" },
+      { min: 16, max: 24, unit: "件" }
+    ],
+    "包包展示": [
+      { min: 3, max: 5, unit: "个" },
+      { min: 5, max: 8, unit: "个" },
+      { min: 8, max: 12, unit: "个" }
+    ],
+    "综合展示": [
+      { min: 4, max: 6, unit: "组" },
+      { min: 6, max: 9, unit: "组" },
+      { min: 9, max: 12, unit: "组" }
+    ],
+    "文件": [
+      { min: 4, max: 8, unit: "组" },
+      { min: 8, max: 12, unit: "组" },
+      { min: 12, max: 18, unit: "组" }
+    ],
+    "电子设备": [
+      { min: 2, max: 4, unit: "件" },
+      { min: 4, max: 6, unit: "件" },
+      { min: 6, max: 10, unit: "件" }
+    ],
+    "综合收纳": [
+      { min: 4, max: 6, unit: "组" },
+      { min: 6, max: 10, unit: "组" },
+      { min: 10, max: 16, unit: "组" }
+    ]
+  };
+  const range = fallbackRanges[itemName]?.[normalizedWeight - 1];
+  return range ? formatRange(range) : "已选择";
+}
+
+export function buildZoneCards(answers, ratios = calculateRelevantZones(answers)) {
+  const labels = getRatioLabels(answers.spaceUse);
+  const weights = getDemandWeights(answers);
+  const cardsByZone = new Map();
+  Object.entries(ratios).forEach(([zoneKey, percent]) => {
+    const presentation = getZonePresentation(zoneKey);
+    cardsByZone.set(zoneKey, {
+      zoneName: labels[zoneKey] || zoneKey,
+      percent,
+      colorKey: zoneKey,
+      color: presentation.color,
+      items: []
+    });
+  });
+
+  getSelectedDemands(answers).forEach((itemName) => {
+    const zoneKey = (itemZoneScoreMap[itemName] || [])
+      .map(([key]) => key)
+      .find((key) => cardsByZone.has(key));
+    if (!zoneKey) return;
+    cardsByZone.get(zoneKey).items.push({
+      label: itemName,
+      estimate: getDemandItemEstimate(itemName, answers, Number(weights[itemName]) || 1)
+    });
+  });
+
+  return Array.from(cardsByZone.values()).filter((card) => card.items.length);
+}
+
+export function buildDemandPersona(answers) {
+  const weightedDemands = getWeightedDemands(answers);
+  const primaryDemand = weightedDemands[0]?.name || "";
+  const secondaryDemands = weightedDemands.slice(1, 3).map((item) => item.name);
+  const primaryZone = getPrimaryZoneKey(answers);
+  const traits = getUsageTraits(answers, weightedDemands, primaryZone);
+
+  return {
+    focus: formatDemandFocus(primaryDemand, primaryZone),
+    secondary: secondaryDemands.length
+      ? secondaryDemands.map(formatDemandFocus).join(" / ")
+      : "需求相对集中",
+    layout: getRecommendedLayout(answers, primaryZone, weightedDemands),
+    usageTrait: traits.join("，"),
+    summary: generatePersonaSummary(answers, weightedDemands, traits)
+  };
+}
+
+function formatDemandFocus(name, zoneKey = "") {
+  const focusMap = {
+    "长衣": "长衣收纳",
+    "短衣": "短衣收纳",
+    "裤子": "裤装收纳",
+    "鞋子": "鞋履收纳",
+    "鞋子收纳": "鞋履收纳",
+    "包包": "包包收纳",
+    "包包放置": "包包收纳",
+    "包包展示": "包包展示",
+    "首饰": "首饰收纳",
+    "被褥": "换季被褥",
+    "行李箱": "行李箱存放",
+    "展示收藏": "展示收藏",
+    "展示摆件": "展示陈列",
+    "摆件": "摆件陈列",
+    "收藏品": "收藏展示",
+    "综合展示": "综合展示",
+    "外套挂放": "外套挂放",
+    "雨伞收纳": "雨伞收纳",
+    "钥匙杂物": "随手小物",
+    "书籍": "书籍收纳",
+    "文件": "文件管理",
+    "电子设备": "设备收纳",
+    "综合收纳": "综合收纳"
+  };
+  const zoneFallback = {
+    hanging: "衣物分类",
+    trouser: "裤装收纳",
+    shoe: "鞋履收纳",
+    bag: "包包收纳",
+    jewelry: "首饰收纳",
+    bedding: "换季被褥",
+    luggage: "行李箱存放",
+    display: "展示收藏",
+    handy: "随手物品",
+    glassShelf: "展示层板",
+    closedStorage: "封闭收纳",
+    lighting: "灯光氛围",
+    books: "书籍收纳",
+    files: "文件管理",
+    cabinet: "柜体收纳"
+  };
+  return focusMap[name] || zoneFallback[zoneKey] || "综合收纳";
+}
+
+function getRecommendedLayout(answers, primaryZone, weightedDemands) {
+  const selected = new Set(weightedDemands.map((item) => item.name));
+  const layoutType = answers.dimensions?.layoutType || "I型";
+  if (layoutType === "L型") {
+    if (answers.spaceUse === "玄关收纳") return "转角鞋柜 + 随手物品区";
+    if (answers.spaceUse === "客厅展示") return "转角展示层板 + 柜体收纳";
+    if (answers.spaceUse === "书房收纳") return "转角书架 + 文件柜";
+    return "转角挂衣 + 转角层板";
+  }
+  if (layoutType === "U型") {
+    return "环绕式收纳 + 家庭共享";
+  }
+  if (answers.spaceUse === "玄关收纳") {
+    if (selected.has("鞋子收纳")) return "开放鞋架 + 挂衣区";
+    if (selected.has("钥匙杂物")) return "鞋柜 + 杂物区";
+    return "展示架 + 换鞋区";
+  }
+  if (answers.spaceUse === "客厅展示") {
+    return primaryZone === "closedStorage"
+      ? "展示层板 + 封闭收纳"
+      : "开放展示 + 局部柜体";
+  }
+  if (answers.spaceUse === "书房收纳") {
+    if (selected.has("文件")) return "书架层板 + 文件抽屉";
+    if (primaryZone === "display") return "展示层板 + 封闭柜";
+    return "开放书架 + 柜体收纳";
+  }
+  if (primaryZone === "display") return "展示区 + 收纳区";
+  if (selected.has("首饰") || primaryZone === "jewelry") return "开放挂衣 + 抽屉组合";
+  return "开放挂衣 + 层板展示";
+}
+
+function getUsageTraits(answers, weightedDemands, primaryZone) {
+  const selected = new Set(weightedDemands.map((item) => item.name));
+  const dimensions = answers.dimensions || {};
+  const traits = [];
+  if (["3人", "4人以上"].includes(answers.people) || dimensions.layoutType === "U型") traits.push("家庭共享收纳");
+  if (
+    primaryZone === "display"
+    || weightedDemands.some((item) => ["展示收藏", "展示摆件", "摆件", "收藏品", "综合展示", "包包展示"].includes(item.name) && item.weight >= 2)
+  ) {
+    traits.push("偏重展示与陈列");
+  }
+  if (selected.has("被褥") || selected.has("行李箱")) traits.push("偏重换季储物");
+  if (["长衣", "短衣", "裤子", "外套挂放"].some((name) => selected.has(name))) {
+    traits.push("偏重衣物分类管理");
+  }
+  if (Number(dimensions.height) > 2700) traits.push("适合增加顶部储物");
+  if (!traits.length && answers.spaceUse === "玄关收纳") traits.push("偏重日常快速取用");
+  if (!traits.length && answers.spaceUse === "书房收纳") traits.push("偏重分类整理与安静使用");
+  if (!traits.length) traits.push("偏重视觉展示与日常取用");
+  return traits.slice(0, 2);
+}
+
+function generatePersonaSummary(answers, weightedDemands, traits) {
+  const primary = weightedDemands[0]?.name || "综合收纳";
+  const secondary = weightedDemands.slice(1, 3).map((item) => item.name);
+  const peopleText = ["3人", "4人以上"].includes(answers.people)
+    ? "多人共用"
+    : answers.people
+      ? `${answers.people}使用`
+      : "当前空间";
+  const secondaryText = secondary.length
+    ? `${secondary.join("与")}作为辅助需求`
+    : "其他收纳需求相对克制";
+  const traitText = traits.join("，");
+  const dimensionNote = getDimensionPlanningNote(answers.dimensions);
+  return `${peopleText}下，您的收纳习惯更偏向${formatDemandFocus(primary)}，${secondaryText}。整体空间适合采用${getRecommendedLayout(answers, getPrimaryZoneKey(answers), weightedDemands)}的规划方式，形成${traitText}的使用体验。${dimensionNote}`;
 }
 
 export function getHeightRecommendations(answers) {
@@ -385,10 +663,6 @@ export function getZonePresentation(key) {
 
 export function generateAnalysisText(answers) {
   const weightedDemands = getWeightedDemands(answers);
-  const zones = Object.entries(calculateRelevantZones(answers))
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([key]) => getRatioLabels(answers.spaceUse)[key] || key);
   const demandText = weightedDemands.length ? weightedDemands.map((item) => item.name).join("、") : "综合收纳";
   const topDemand = weightedDemands[0]?.name;
   const secondDemand = weightedDemands[1]?.name;
@@ -397,15 +671,15 @@ export function generateAnalysisText(answers) {
     ? `${topDemand}需求${topLevel}${secondDemand ? `，其次是${secondDemand}` : ""}`
     : "综合收纳需求较均衡";
   if (answers.spaceUse === "玄关收纳") {
-    return `系统判断：${priorityText}。玄关需求集中在${demandText}，建议优先保证${zones.join("、")}，让进出门高频动作更顺手。`;
+    return `${priorityText}。玄关需求集中在${demandText}。`;
   }
   if (answers.spaceUse === "客厅展示") {
-    return `系统判断：${priorityText}。展示需求集中在${demandText}，建议用${zones.join("、")}形成层次，并控制封闭收纳比例。`;
+    return `${priorityText}。展示需求集中在${demandText}。`;
   }
   if (answers.spaceUse === "书房收纳") {
-    return `系统判断：${priorityText}。书房需求集中在${demandText}，建议优先规划${zones.join("、")}，兼顾取用效率和视觉整洁。`;
+    return `${priorityText}。书房需求集中在${demandText}。`;
   }
-  return `系统判断：${priorityText}。您的主要需求集中在${demandText}，建议优先保证${zones.join("、")}，并预留部分层板区用于换季衣物。`;
+  return `${priorityText}。主要需求集中在${demandText}。`;
 }
 
 function item(name, text) {
@@ -448,13 +722,15 @@ export function recommendSystem({ spaceUse = "", budget = "", demands = [] }) {
 }
 
 export function buildPlanRecommendation(answers) {
-  const dimensions = answers.dimensions || { width: 3600, depth: 2800 };
+  const dimensions = { width: 3600, depth: 2800, height: 2700, layoutType: "I型", ...(answers.dimensions || {}) };
   const demands = getSelectedDemands(answers);
   const budget = answers.budget || "8,000 - 12,000";
   const budgetRange = parseBudgetRange(budget);
   const areaFactor = Math.max(0.82, Math.min(1.42, (dimensions.width * dimensions.depth) / 10080000));
   const demandProfile = calculateDemandProfile(answers);
   const itemCounts = estimateItemCounts(answers);
+  const zoneCards = buildZoneCards(answers, demandProfile);
+  const demandPersona = buildDemandPersona(answers);
   const heightRecommendations = getHeightRecommendations(answers);
   const functionZones = getFunctionZoneRecommendations(answers);
   const analysisText = generateAnalysisText(answers);
@@ -475,6 +751,8 @@ export function buildPlanRecommendation(answers) {
     demandProfile,
     demandRatios: demandProfile,
     itemCounts,
+    zoneCards,
+    demandPersona,
     heightRecommendations,
     functionZones,
     analysisText,
@@ -493,32 +771,51 @@ function createSummaries(answers) {
   const demands = weightedDemands.map((item) => item.name);
   const demandText = demands.slice(0, 4).join("、") || "综合需求";
   const priorityText = buildPrioritySummary(weightedDemands, spaceType);
+  const dimensionText = getDimensionSummaryText(answers.dimensions);
   if (spaceType === "玄关收纳") {
     return {
-      basic: `${priorityText}，以高频玄关收纳为主，控制基础配置。`,
-      balanced: `${priorityText}，增加随手抽屉、包包区和雨伞位置，让玄关更顺手。`,
-      complete: `围绕${demandText}强化鞋层板、挂衣区、随手抽屉、包包区与展示区。`
+      basic: `${priorityText}，以高频玄关收纳为主，控制基础配置。${dimensionText}`,
+      balanced: `${priorityText}，增加随手抽屉、包包区和雨伞位置，让玄关更顺手。${dimensionText}`,
+      complete: `围绕${demandText}强化鞋层板、挂衣区、随手抽屉、包包区与展示区。${dimensionText}`
     };
   }
   if (spaceType === "客厅展示") {
     return {
-      basic: `${priorityText}，保留开放层板和局部柜体收纳，控制整体投入。`,
-      balanced: `${priorityText}，结合玻璃层板、灯光和开放展示，让展示更有层次。`,
-      complete: `围绕${demandText}配置玻璃层板、灯光、开放层板、柜体收纳和展示摆件区。`
+      basic: `${priorityText}，保留开放层板和局部柜体收纳，控制整体投入。${dimensionText}`,
+      balanced: `${priorityText}，结合玻璃层板、灯光和开放展示，让展示更有层次。${dimensionText}`,
+      complete: `围绕${demandText}配置玻璃层板、灯光、开放层板、柜体收纳和展示摆件区。${dimensionText}`
     };
   }
   if (spaceType === "书房收纳") {
     return {
-      basic: `${priorityText}，以书架层板和基础封闭柜为主，保证文件与书籍容量。`,
-      balanced: `${priorityText}，增加文件抽屉和展示层板，兼顾办公与阅读。`,
-      complete: `围绕${demandText}配置书架层板、文件抽屉、封闭柜和展示层板。`
+      basic: `${priorityText}，以书架层板和基础封闭柜为主，保证文件与书籍容量。${dimensionText}`,
+      balanced: `${priorityText}，增加文件抽屉和展示层板，兼顾办公与阅读。${dimensionText}`,
+      complete: `围绕${demandText}配置书架层板、文件抽屉、封闭柜和展示层板。${dimensionText}`
     };
   }
   return {
-    basic: `${priorityText}，保留核心挂衣区、层板区和基础鞋包收纳。`,
-    balanced: `${priorityText}，平衡挂衣区、层板区、抽屉、鞋包与首饰盒，适合日常使用。`,
-    complete: `围绕${demandText}强化挂衣区、层板区、抽屉、鞋包和首饰盒。`
+    basic: `${priorityText}，保留核心挂衣区、层板区和基础鞋包收纳。${dimensionText}`,
+    balanced: `${priorityText}，平衡挂衣区、层板区、抽屉、鞋包与首饰盒，适合日常使用。${dimensionText}`,
+    complete: `围绕${demandText}强化挂衣区、层板区、抽屉、鞋包和首饰盒。${dimensionText}`
   };
+}
+
+function getDimensionPlanningNote(dimensions = {}) {
+  const notes = [];
+  if (dimensions.layoutType === "L型") notes.push("转角区域建议优先用于连续层板或转角挂衣。");
+  if (dimensions.layoutType === "U型") notes.push("U型空间适合形成环绕式分区与家庭共享动线。");
+  if (Number(dimensions.height) > 2700) notes.push("层高较充足，可增加顶部储物区。");
+  if (Number(dimensions.height) > 0 && Number(dimensions.height) < 2400) notes.push("层高偏低，建议减少高位储物比例。");
+  return notes.length ? notes.join("") : "";
+}
+
+function getDimensionSummaryText(dimensions = {}) {
+  const notes = [];
+  if (dimensions.layoutType === "L型") notes.push("布局上优先考虑转角挂衣与转角层板。");
+  if (dimensions.layoutType === "U型") notes.push("布局上优先考虑环绕式收纳与家庭共享分区。");
+  if (Number(dimensions.height) > 2700) notes.push("高度条件支持增加顶部储物区。");
+  if (Number(dimensions.height) > 0 && Number(dimensions.height) < 2400) notes.push("高度偏低，减少高位储物推荐。");
+  return notes.length ? notes.join("") : "";
 }
 
 function buildPrioritySummary(weightedDemands, spaceType = "") {

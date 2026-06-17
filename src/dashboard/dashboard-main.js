@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { dashboardProducts } from "./config/dashboardProducts.js?v=dashboard-webp-20260615-01";
+import { dashboardProducts } from "./config/dashboardProducts.js?v=cache-20260617-01";
 
 const h = React.createElement;
 

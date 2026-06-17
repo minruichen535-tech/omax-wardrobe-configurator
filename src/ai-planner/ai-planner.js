@@ -3,7 +3,7 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=ai-planner-weighted-analysis-20260616-01";
+} from "./planRules.js?v=cache-20260617-01";
 
 const state = {
   step: 0,
@@ -19,16 +19,66 @@ const answerContent = document.querySelector(".answer-content");
 const currentProgress = document.querySelector(".progress-current");
 const progressLine = document.querySelector(".planner-progress i");
 const backButton = document.querySelector(".back-button");
+const iconRoot = "/customer-home/icons/";
+const iconVersion = "20260617";
+const analysisLoadingMessages = [
+  { delay: 0, text: "正在识别空间类型..." },
+  { delay: 2000, text: "正在计算收纳需求..." },
+  { delay: 4000, text: "正在生成专属方案..." }
+];
+const layoutOptions = [
+  { value: "I型", title: "I型", subtitle: "单面布局", sketch: "│" },
+  { value: "L型", title: "L型", subtitle: "转角布局", sketch: "└" },
+  { value: "U型", title: "U型", subtitle: "三面布局", sketch: "└─┘" }
+];
+let analysisLoadingTimers = [];
+const optionIconMap = {
+  "1人": "one-people.png",
+  "2人": "two-people.png",
+  "3人": "three-people.png",
+  "4人以上": "four people.png",
+  "长衣": "long-cloth.png",
+  "短衣": "short-cloth.png",
+  "裤子": "trousers.png",
+  "鞋子": "shoes.png",
+  "包包": "bags.png",
+  "首饰": "jewelry.png",
+  "被褥": "bedding.png",
+  "行李箱": "luggage.png",
+  "展示收藏": "display.png",
+  "鞋子收纳": "shoes.png",
+  "外套挂放": "coat.png",
+  "包包放置": "bags.png",
+  "雨伞收纳": "umbrella.png",
+  "钥匙杂物": "keys.png",
+  "展示摆件": "decor.png",
+  "摆件": "decor.png",
+  "收藏品": "collectibles.png",
+  "书籍": "book.png",
+  "酒具": "    barware.png",
+  "茶具": "tea-set.png",
+  "包包展示": "bags.png",
+  "综合展示": "display.png",
+  "文件": "general-storage.png",
+  "电子设备": "electronics.png",
+  "综合收纳": "general-storage.png"
+};
 
 function getCurrentQuestions() {
   return getQuestionFlow(state.answers.spaceUse);
 }
 
+function clearAnalysisLoadingTimers() {
+  analysisLoadingTimers.forEach((timer) => window.clearTimeout(timer));
+  analysisLoadingTimers = [];
+}
+
 function renderQuestion(direction = "forward") {
+  clearAnalysisLoadingTimers();
   const questions = getCurrentQuestions();
   const question = questions[state.step];
   shell.dataset.direction = direction;
-  shell.classList.remove("is-changing", "is-analysis", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-lead", "is-submitted");
   void shell.offsetWidth;
   shell.classList.add("is-changing");
 
@@ -50,15 +100,19 @@ function renderQuestion(direction = "forward") {
 
 function renderOptions(question) {
   const list = document.createElement("div");
-  list.className = "answer-options";
+  const usesPeopleIcons = question.key === "people";
+  list.className = `answer-options${usesPeopleIcons ? " people-options" : ""}`;
 
   question.options.forEach((option, index) => {
+    const iconPath = usesPeopleIcons ? getOptionIconPath(option) : "";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "answer-option";
+    button.className = `answer-option${iconPath ? " people-option has-option-icon" : ""}`;
     button.style.setProperty("--option-index", index);
     button.dataset.selected = state.answers[question.key] === option ? "true" : "false";
-    button.innerHTML = `<span>${String(index + 1).padStart(2, "0")}</span><strong>${option}</strong><i>→</i>`;
+    button.innerHTML = iconPath
+      ? `<img class="option-icon people-icon" src="${iconPath}" alt="" loading="lazy" /><strong>${option}</strong>`
+      : `<span>${String(index + 1).padStart(2, "0")}</span><strong>${option}</strong><i>→</i>`;
     button.addEventListener("click", () => selectOption(question.key, option, button));
     list.appendChild(button);
   });
@@ -82,9 +136,10 @@ function renderMultiOptions(question) {
   list.className = "answer-options multi-options";
 
   question.options.forEach((option, index) => {
+    const iconPath = getOptionIconPath(option);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "answer-option";
+    button.className = `answer-option${iconPath ? " has-option-icon" : ""}`;
     const weight = weights[option] || (selected.has(option) ? 1 : 0);
     const color = getDemandColor(option);
     button.style.setProperty("--option-index", index);
@@ -93,9 +148,9 @@ function renderMultiOptions(question) {
     button.dataset.weight = String(weight);
     button.innerHTML = `
       <span>${String(index + 1).padStart(2, "0")}</span>
+      ${iconPath ? `<img class="option-icon demand-icon" src="${iconPath}" alt="" loading="lazy" />` : ""}
       <strong>${option}</strong>
-      <em class="weight-blocks" aria-hidden="true">${Array.from({ length: weight }, () => "<b></b>").join("")}</em>
-      <i>${weight > 0 ? "+" : ""}</i>
+      <em class="weight-blocks" aria-hidden="true">${renderWeightBlocks(weight)}</em>
     `;
     button.addEventListener("click", () => {
       const currentWeight = Number(weights[option]) || 0;
@@ -123,8 +178,7 @@ function renderMultiOptions(question) {
       state.answers[directionKey] = { ...directions };
       button.dataset.selected = nextWeight > 0 ? "true" : "false";
       button.dataset.weight = String(nextWeight);
-      button.querySelector("i").textContent = nextWeight > 0 ? "+" : "";
-      button.querySelector(".weight-blocks").innerHTML = Array.from({ length: nextWeight }, () => "<b></b>").join("");
+      button.querySelector(".weight-blocks").innerHTML = renderWeightBlocks(nextWeight);
     });
     list.appendChild(button);
   });
@@ -145,6 +199,19 @@ function renderMultiOptions(question) {
   answerContent.appendChild(wrapper);
 }
 
+function renderWeightBlocks(weight) {
+  const activeCount = Math.max(0, Math.min(3, Number(weight) || 0));
+  return Array.from({ length: 3 }, (_, index) => (
+    `<b data-active="${index < activeCount ? "true" : "false"}"></b>`
+  )).join("");
+}
+
+function getOptionIconPath(option) {
+  const fileName = optionIconMap[option];
+  if (!fileName) return "";
+  return `${iconRoot}${encodeURI(fileName)}?v=${iconVersion}`;
+}
+
 function getDemandColor(option) {
   if (["长衣", "短衣", "外套挂放"].includes(option)) return "#b96052";
   if (["裤子"].includes(option)) return "#e98645";
@@ -157,6 +224,7 @@ function getDemandColor(option) {
 
 function renderDimensions(question) {
   const values = state.answers[question.key] || {};
+  const selectedLayout = values.layoutType || "I型";
   const form = document.createElement("form");
   form.className = "dimension-form";
   form.innerHTML = `
@@ -168,6 +236,24 @@ function renderDimensions(question) {
       <span>DEPTH / 深度</span>
       <div><input name="depth" type="number" min="600" max="20000" inputmode="numeric" placeholder="2800" value="${values.depth || ""}" /><em>mm</em></div>
     </label>
+    <label>
+      <span>HEIGHT / 高度</span>
+      <div><input name="height" type="number" min="1800" max="5000" inputmode="numeric" placeholder="2700" value="${values.height || 2700}" /><em>mm</em></div>
+    </label>
+    <fieldset class="layout-selector">
+      <legend>空间布局</legend>
+      <p>请选择空间的基本布局形式</p>
+      <div class="layout-options">
+        ${layoutOptions.map((layout) => `
+          <label class="layout-option">
+            <input type="radio" name="layoutType" value="${layout.value}" ${selectedLayout === layout.value ? "checked" : ""} />
+            <span class="layout-sketch">${layout.sketch}</span>
+            <strong>${layout.title}</strong>
+            <em>${layout.subtitle}</em>
+          </label>
+        `).join("")}
+      </div>
+    </fieldset>
     <button class="dimension-next" type="submit">尺寸确认 <i>→</i></button>
   `;
   form.addEventListener("submit", (event) => {
@@ -175,8 +261,10 @@ function renderDimensions(question) {
     const data = new FormData(form);
     const width = Number(data.get("width"));
     const depth = Number(data.get("depth"));
-    if (!width || !depth) return;
-    state.answers[question.key] = { width, depth };
+    const height = Number(data.get("height")) || 2700;
+    const layoutType = data.get("layoutType") || "I型";
+    if (!width || !depth || !height) return;
+    state.answers[question.key] = { width, depth, height, layoutType };
     nextStep();
   });
   answerContent.appendChild(form);
@@ -203,20 +291,55 @@ function nextStep() {
     renderQuestion("forward");
     return;
   }
-  renderAnalysis();
+  renderAnalysisLoading();
 }
 
-function renderAnalysis() {
+function renderAnalysisLoading() {
+  clearAnalysisLoadingTimers();
   state.recommendation = buildPlanRecommendation(state.answers);
+  shell.classList.remove("is-changing", "is-analysis", "is-results", "is-lead", "is-submitted");
+  shell.classList.add("is-analysis-loading", "is-changing");
+  currentProgress.textContent = "AI";
+  progressLine.style.transform = "scaleX(1)";
+  backButton.disabled = false;
+  title.textContent = "正在分析您的收纳需求";
+  note.textContent = "我们会根据空间尺寸、使用人数、收纳物品和预算，为您生成更适合的配置方向。";
+
+  answerContent.innerHTML = `
+    <div class="analysis-loading-card">
+      <span class="analysis-loading-spinner" aria-hidden="true"></span>
+      <p class="analysis-loading-text">${analysisLoadingMessages[0].text}</p>
+    </div>
+  `;
+
+  const loadingText = answerContent.querySelector(".analysis-loading-text");
+  analysisLoadingMessages.slice(1).forEach((message) => {
+    analysisLoadingTimers.push(window.setTimeout(() => {
+      loadingText.classList.add("is-switching");
+      analysisLoadingTimers.push(window.setTimeout(() => {
+        loadingText.textContent = message.text;
+        loadingText.classList.remove("is-switching");
+      }, 220));
+    }, message.delay));
+  });
+  analysisLoadingTimers.push(window.setTimeout(() => {
+    clearAnalysisLoadingTimers();
+    renderAnalysis({ fadeIn: true });
+  }, 5000));
+}
+
+function renderAnalysis({ fadeIn = false } = {}) {
+  clearAnalysisLoadingTimers();
+  state.recommendation = state.recommendation || buildPlanRecommendation(state.answers);
   const {
     dimensions,
     demandRatios,
     demands,
-    itemCounts,
-    analysisText
+    zoneCards,
+    demandPersona
   } = state.recommendation;
   const labels = getRatioLabels(state.answers.spaceUse);
-  shell.classList.remove("is-changing", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-analysis");
   currentProgress.textContent = "AI";
   progressLine.style.transform = "scaleX(1)";
@@ -225,18 +348,18 @@ function renderAnalysis() {
   note.textContent = "我们会根据空间尺寸、使用人数、收纳物品和预算，为您生成更适合的配置方向。";
 
   answerContent.innerHTML = `
-    <div class="analysis-card">
+    <div class="analysis-card${fadeIn ? " is-fade-in" : ""}">
       ${renderReportSection("基础信息", `
         <div class="analysis-grid">
-          <p><small>空间类型 / 尺寸</small><strong>${state.answers.spaceUse || "定制空间"} / ${dimensions.width} × ${dimensions.depth}mm</strong></p>
-          <p><small>使用人数</small><strong>${state.answers.people || state.answers.style || "待确认"}</strong></p>
+          <p><small>空间类型 / 尺寸</small><strong>${state.answers.spaceUse || "定制空间"} / ${dimensions.layoutType || "I型"} / ${dimensions.width} × ${dimensions.depth} × ${dimensions.height || 2700}mm</strong></p>
+          <p><small>使用人数</small><strong class="analysis-icon-value">${renderInlineIconText(state.answers.people || state.answers.style || "待确认")}</strong></p>
           <p><small>预算区间</small><strong>${state.answers.budget || "待确认"}</strong></p>
-          <p><small>主要需求</small><strong>${demands.length ? demands.join("、") : "综合收纳"}</strong></p>
+          <p><small>主要需求</small><strong>${demands.length ? renderDemandChips(demands) : "综合收纳"}</strong></p>
         </div>
       `)}
-      ${itemCounts.length ? renderReportSection("主要物品估算", renderInfoCards(itemCounts)) : ""}
-      ${Object.keys(demandRatios).length ? renderReportSection("推荐功能区比例", renderStackedRatioBar(demandRatios, labels)) : ""}
-      <p class="analysis-insight">${analysisText || buildInsight(demandRatios, demands, labels)}</p>
+      ${renderReportSection("AI需求画像", renderDemandPersona(demandPersona))}
+      ${zoneCards.length ? renderReportSection("收纳物品估算", renderZoneCards(zoneCards)) : ""}
+      ${Object.keys(demandRatios).length ? renderReportSection("功能区比例", renderStackedRatioBar(demandRatios, labels)) : ""}
       <div class="analysis-actions">
         <button class="analysis-back" type="button">← 返回上一题</button>
         <button class="dimension-next analysis-next" type="button">查看方案 <i>→</i></button>
@@ -251,8 +374,9 @@ function renderAnalysis() {
 }
 
 function renderResults() {
+  clearAnalysisLoadingTimers();
   const recommendation = state.recommendation || buildPlanRecommendation(state.answers);
-  shell.classList.remove("is-changing", "is-analysis", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-lead", "is-submitted");
   shell.classList.add("is-results");
   currentProgress.textContent = "方案";
   progressLine.style.transform = "scaleX(1)";
@@ -263,7 +387,7 @@ function renderResults() {
   answerContent.innerHTML = `
     <div class="result-intro">
       <span>${state.answers.spaceUse || "定制空间"}</span>
-      <span>${recommendation.dimensions.width} × ${recommendation.dimensions.depth} mm</span>
+      <span>${recommendation.dimensions.layoutType || "I型"} / ${recommendation.dimensions.width} × ${recommendation.dimensions.depth} × ${recommendation.dimensions.height || 2700} mm</span>
       <span>${recommendation.demands.length ? recommendation.demands.join("、") : "综合收纳"}</span>
     </div>
     <div class="result-plans">
@@ -295,8 +419,9 @@ function renderPlanCard(plan, recommendation) {
 }
 
 function renderLeadForm(plan) {
+  clearAnalysisLoadingTimers();
   state.selectedPlan = plan;
-  shell.classList.remove("is-changing", "is-analysis", "is-results", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-submitted");
   shell.classList.add("is-lead");
   currentProgress.textContent = "确认";
   progressLine.style.transform = "scaleX(1)";
@@ -332,7 +457,8 @@ function renderLeadForm(plan) {
 }
 
 function renderSubmitted() {
-  shell.classList.remove("is-changing", "is-analysis", "is-results", "is-lead");
+  clearAnalysisLoadingTimers();
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-lead");
   shell.classList.add("is-submitted");
   currentProgress.textContent = "完成";
   title.textContent = "已收到您的方案需求";
@@ -355,16 +481,6 @@ function renderReportSection(titleText, content) {
       <h2>${titleText}</h2>
       ${content}
     </section>
-  `;
-}
-
-function renderInfoCards(items) {
-  return `
-    <div class="analysis-card-grid">
-      ${items.map((item) => `
-        <p><small>${item.name}</small><strong>${item.value || item.text}</strong></p>
-      `).join("")}
-    </div>
   `;
 }
 
@@ -403,26 +519,117 @@ function renderStackedRatioBar(ratios, labels = {}) {
           </span>
         `).join("")}
       </div>
-      <div class="stacked-ratio-legend">
-        ${entries.map((entry) => `
-          <p style="--zone-color:${entry.presentation.color}">
-            <i></i>
-            <span><strong>${entry.label} ${entry.value}%</strong><em>${entry.presentation.description}</em></span>
-          </p>
-        `).join("")}
-      </div>
     </div>
   `;
 }
 
-function buildInsight(ratios, demands, labels = {}) {
-  const top = Object.entries(ratios).sort((a, b) => b[1] - a[1]).slice(0, 2)
-    .map(([key]) => labels[key] || key).join("与");
-  const demandText = demands.length ? demands.join("、") : "综合收纳";
-  return `系统判断：您的主要需求集中在${demandText}，建议优先强化${top}，并预留后续调整空间。`;
+function renderDemandPersona(persona) {
+  const items = [
+    ["收纳重心", persona?.focus || "综合收纳", getReportIconPaths(persona?.focus)],
+    ["次要需求", persona?.secondary || "需求相对集中", getReportIconPaths(persona?.secondary)],
+    ["推荐布局", persona?.layout || "开放收纳 + 局部封闭", []],
+    ["使用特征", persona?.usageTrait || "偏重日常取用", getReportIconPaths(persona?.usageTrait)]
+  ];
+  return `
+    <div class="persona-report">
+      <div class="persona-grid">
+        ${items.map(([label, value, iconPaths]) => `
+          <p><small>${label}</small><strong>${renderPersonaValue(value, iconPaths)}</strong></p>
+        `).join("")}
+      </div>
+      <p class="persona-summary">${persona?.summary || ""}</p>
+    </div>
+  `;
+}
+
+function renderZoneCards(cards = []) {
+  if (!cards.length) return "";
+  return `
+    <div class="zone-card-grid">
+      ${cards.map((card) => `
+        <article class="zone-card" style="--zone-color:${card.color}">
+          <small><i></i>${card.zoneName} ${card.percent}%</small>
+          <strong>${card.items.map((item) => renderZoneItem(item)).join("")}</strong>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderDemandChips(demands = []) {
+  return `
+    <span class="demand-chip-list">
+      ${demands.map((demand) => `
+        <span class="demand-chip">${renderInlineIconText(demand)}</span>
+      `).join("")}
+    </span>
+  `;
+}
+
+function renderInlineIconText(text) {
+  const iconPath = getReportIconPath(text);
+  return `${iconPath ? `<img class="report-icon" src="${iconPath}" alt="" loading="lazy" />` : ""}<span>${text}</span>`;
+}
+
+function renderPersonaValue(value, iconPaths = []) {
+  const validIcons = iconPaths.filter(Boolean);
+  return `
+    <span class="persona-value">
+      ${validIcons.length ? `<span class="persona-icons">${validIcons.map((iconPath) => `<img class="report-icon" src="${iconPath}" alt="" loading="lazy" />`).join("")}</span>` : ""}
+      <span>${value}</span>
+    </span>
+  `;
+}
+
+function renderZoneItem(item) {
+  return `
+    <span class="zone-item">
+      ${renderInlineIconText(`${item.label} ${item.estimate}`)}
+    </span>
+  `;
+}
+
+function getReportIconPaths(text = "") {
+  const parts = String(text).split(/[、/，\s]+/).filter(Boolean);
+  const icons = parts.map(getReportIconPath).filter(Boolean);
+  return [...new Set(icons)];
+}
+
+function getReportIconPath(text = "") {
+  const value = String(text);
+  if (["1人", "2人", "3人", "4人以上"].includes(value)) return getOptionIconPath(value);
+  if (value.includes("收藏品")) return getOptionIconPath("收藏品");
+  if (value.includes("酒具")) return getOptionIconPath("酒具");
+  if (value.includes("茶具")) return getOptionIconPath("茶具");
+  if (value.includes("书籍") || value.includes("书架")) return getOptionIconPath("书籍");
+  if (value.includes("文件")) return getOptionIconPath("文件");
+  if (value.includes("电子设备")) return getOptionIconPath("电子设备");
+  if (value.includes("钥匙") || value.includes("随手")) return getOptionIconPath("钥匙杂物");
+  if (value.includes("雨伞")) return getOptionIconPath("雨伞收纳");
+  if (value.includes("外套")) return getOptionIconPath("外套挂放");
+  if (value.includes("短衣")) return getOptionIconPath("短衣");
+  if (value.includes("长衣") || value.includes("挂衣") || value.includes("衣物")) return getOptionIconPath("长衣");
+  if (value.includes("裤")) return getOptionIconPath("裤子");
+  if (value.includes("鞋")) return getOptionIconPath("鞋子");
+  if (value.includes("包")) return getOptionIconPath("包包");
+  if (value.includes("首饰") || value.includes("抽屉")) return getOptionIconPath("首饰");
+  if (value.includes("被褥") || value.includes("换季")) return getOptionIconPath("被褥");
+  if (value.includes("行李箱") || value.includes("大件")) return getOptionIconPath("行李箱");
+  if (value.includes("摆件")) return getOptionIconPath("摆件");
+  if (value.includes("综合收纳")) return getOptionIconPath("综合收纳");
+  if (value.includes("展示") || value.includes("收藏") || value.includes("陈列")) {
+    return getOptionIconPath("展示收藏");
+  }
+  return "";
 }
 
 backButton.addEventListener("click", () => {
+  if (shell.classList.contains("is-analysis-loading")) {
+    clearAnalysisLoadingTimers();
+    state.step = getCurrentQuestions().length - 1;
+    renderQuestion("back");
+    return;
+  }
   if (shell.classList.contains("is-submitted") || shell.classList.contains("is-lead")) {
     renderResults();
     return;
