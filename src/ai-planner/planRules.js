@@ -1,3 +1,22 @@
+import { PLAN_LEVELS } from "../rules/commonRules.js?v=closet-rules-preview-20260621-11";
+import {
+  buildPlanRuleOutput,
+  calculateDemandZoneLengths,
+  calculateDemandZoneProfile,
+  estimateDemandItems,
+  getClosetRules,
+  getPlanPriceFromRules,
+  getPlanTier,
+  getZoneUiKeyForDemand
+} from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
+import { getZoneInstallationHeight } from "../rules/storageStandards.js?v=closet-rules-preview-20260621-11";
+import {
+  generateCandidatePlans,
+  getLastCandidateEngineStats,
+  getShelfGapDiagnostics,
+  selectRecommendedCandidates
+} from "./candidatePlanEngine.js?v=wall-mounted-placement-rules-20260621-04";
+
 const budgetOptions = ["3,000以下", "3,000 - 5,000", "5,000 - 8,000", "8,000 - 12,000", "12,000 - 18,000", "18,000+"];
 
 const budgetRanges = {
@@ -36,65 +55,6 @@ const zonePresentation = {
   books: { color: zoneColors.shelf, description: "用于承载主要书籍容量。" },
   files: { color: zoneColors.drawer, description: "适合文件抽屉或封闭柜分类存放。" },
   cabinet: { color: zoneColors.bulky, description: "用于综合收纳和视觉整洁。" }
-};
-
-const wardrobeItemBaseRangeByUsers = {
-  "1人": {
-    "短衣": { min: 35, max: 45, unit: "件" },
-    "长衣": { min: 8, max: 12, unit: "件" },
-    "裤子": { min: 10, max: 15, unit: "条" },
-    "鞋子": { min: 15, max: 25, unit: "双" },
-    "包包": { min: 3, max: 6, unit: "个" }
-  },
-  "2人": {
-    "短衣": { min: 70, max: 90, unit: "件" },
-    "长衣": { min: 15, max: 25, unit: "件" },
-    "裤子": { min: 20, max: 30, unit: "条" },
-    "鞋子": { min: 30, max: 45, unit: "双" },
-    "包包": { min: 6, max: 12, unit: "个" }
-  },
-  "3人": {
-    "短衣": { min: 100, max: 130, unit: "件" },
-    "长衣": { min: 30, max: 45, unit: "件" },
-    "裤子": { min: 40, max: 55, unit: "条" },
-    "鞋子": { min: 45, max: 60, unit: "双" },
-    "包包": { min: 10, max: 18, unit: "个" }
-  },
-  "4人以上": {
-    "短衣": { min: 130, unit: "件", openEnded: true },
-    "长衣": { min: 35, unit: "件", openEnded: true },
-    "裤子": { min: 45, unit: "条", openEnded: true },
-    "鞋子": { min: 60, unit: "双", openEnded: true },
-    "包包": { min: 18, unit: "个", openEnded: true }
-  }
-};
-
-const itemZoneScoreMap = {
-  "长衣": [["hanging", 26]],
-  "短衣": [["hanging", 24]],
-  "裤子": [["trouser", 18]],
-  "鞋子": [["shoe", 18]],
-  "包包": [["bag", 16]],
-  "首饰": [["jewelry", 14]],
-  "被褥": [["bedding", 16]],
-  "行李箱": [["luggage", 16]],
-  "展示收藏": [["display", 18]],
-  "鞋子收纳": [["shoe", 24]],
-  "外套挂放": [["hanging", 20]],
-  "包包放置": [["handy", 12], ["display", 8]],
-  "雨伞收纳": [["handy", 12]],
-  "钥匙杂物": [["handy", 14]],
-  "展示摆件": [["display", 16]],
-  "摆件": [["display", 18], ["lighting", 8]],
-  "收藏品": [["display", 20], ["glassShelf", 12], ["lighting", 8]],
-  "书籍": [["closedStorage", 16], ["books", 22]],
-  "酒具": [["glassShelf", 18], ["lighting", 10]],
-  "茶具": [["glassShelf", 18], ["lighting", 10]],
-  "包包展示": [["display", 16], ["lighting", 8]],
-  "综合展示": [["display", 14], ["closedStorage", 10]],
-  "文件": [["files", 20]],
-  "电子设备": [["files", 12], ["cabinet", 12]],
-  "综合收纳": [["cabinet", 18]]
 };
 
 const firstQuestion = {
@@ -229,22 +189,14 @@ export function calculateDemandProfile(answers) {
 }
 
 export function calculateRelevantZones(answers) {
-  const weights = getDemandWeights(answers);
-  const scores = {};
-  Object.entries(weights).forEach(([itemName, weight]) => {
-    const numericWeight = Number(weight) || 0;
-    if (numericWeight <= 0) return;
-    (itemZoneScoreMap[itemName] || []).forEach(([zoneKey, score]) => {
-      scores[zoneKey] = (scores[zoneKey] || 0) + score * numericWeight;
-    });
-  });
-  return normalizeRelevant(Object.entries(scores));
+  return calculateDemandZoneProfile(getDemandWeights(answers), answers.people || "1人");
 }
 
 function getSelectedDemands(answers) {
   if (Array.isArray(answers.demands)) return answers.demands;
-  if (answers.demands && typeof answers.demands === "object") {
-    return Object.entries(answers.demands)
+  const weights = getDemandWeights(answers);
+  if (weights && typeof weights === "object") {
+    return Object.entries(weights)
       .filter(([, weight]) => Number(weight) > 0)
       .map(([key]) => key);
   }
@@ -255,7 +207,7 @@ function getDemandWeights(answers) {
   if (answers.demands && !Array.isArray(answers.demands) && typeof answers.demands === "object") {
     return answers.demands;
   }
-  return answers.demandsWeights || {};
+  return answers.demandsWeights || answers.needWeights || {};
 }
 
 function getWeightedDemands(answers) {
@@ -295,29 +247,12 @@ function normalizeRelevant(entries) {
 }
 
 export function estimateItemCounts(answers) {
-  const selected = new Set(getSelectedDemands(answers));
-  const weights = getDemandWeights(answers);
-  if (!["衣帽间", "主卧衣柜"].includes(answers.spaceUse)) return [];
-  return getSelectedDemands(answers)
-    .filter((name) => selected.has(name))
-    .map((name) => ({
-      name,
-      value: getDemandItemEstimate(name, answers, Number(weights[name]) || 1)
-    }))
-    .filter((item) => item.value);
+  return estimateDemandItems(getDemandWeights(answers), answers.people || "1人")
+    .map((item) => ({ name: item.label, value: item.estimate }));
 }
 
 export function getWeightedItemEstimate(itemName, users = "2人", weight = 1) {
-  const baseRange = wardrobeItemBaseRangeByUsers[users]?.[itemName] || wardrobeItemBaseRangeByUsers["2人"]?.[itemName];
-  if (!baseRange) return "";
-  const normalizedWeight = Math.max(1, Math.min(3, Number(weight) || 1));
-  if (normalizedWeight === 1) return formatRange(baseRange);
-  const minFactor = normalizedWeight === 2 ? 1.15 : 1.35;
-  const maxFactor = normalizedWeight === 2 ? 1.25 : 1.5;
-  if (baseRange.openEnded) {
-    return `${roundToFive(baseRange.min * minFactor)}${baseRange.unit}以上`;
-  }
-  return `${roundToFive(baseRange.min * minFactor)}-${roundToFive(baseRange.max * maxFactor)}${baseRange.unit}`;
+  return estimateDemandItems({ [itemName]: weight }, users)[0]?.estimate || "";
 }
 
 function formatRange(range) {
@@ -330,8 +265,8 @@ function roundToFive(value) {
 }
 
 function getDemandItemEstimate(itemName, answers, weight = 1) {
-  const wardrobeEstimate = getWeightedItemEstimate(itemName, answers.people, weight);
-  if (wardrobeEstimate) return wardrobeEstimate;
+  const unifiedEstimate = getWeightedItemEstimate(itemName, answers.people || "1人", weight);
+  if (unifiedEstimate) return unifiedEstimate;
   const normalizedWeight = Math.max(1, Math.min(3, Number(weight) || 1));
   const fallbackRanges = {
     "首饰": [
@@ -455,13 +390,11 @@ export function buildZoneCards(answers, ratios = calculateRelevantZones(answers)
   });
 
   getSelectedDemands(answers).forEach((itemName) => {
-    const zoneKey = (itemZoneScoreMap[itemName] || [])
-      .map(([key]) => key)
-      .find((key) => cardsByZone.has(key));
+    const zoneKey = getZoneUiKeyForDemand(itemName);
     if (!zoneKey) return;
     cardsByZone.get(zoneKey).items.push({
       label: itemName,
-      estimate: getDemandItemEstimate(itemName, answers, Number(weights[itemName]) || 1)
+      estimate: estimateDemandItems({ [itemName]: Number(weights[itemName]) || 1 }, answers.people || "1人")[0]?.estimate || ""
     });
   });
 
@@ -603,47 +536,15 @@ function generatePersonaSummary(answers, weightedDemands, traits) {
 }
 
 export function getHeightRecommendations(answers) {
-  const selected = new Set(getSelectedDemands(answers));
-  const spaceType = answers.spaceUse;
-  if (spaceType === "玄关收纳") {
-    return [
-      selected.has("鞋子收纳") && item("鞋层板", "层间距 160-220mm，可按常穿鞋 / 换季鞋分区。"),
-      selected.has("外套挂放") && item("短挂区", "建议净高 900-1100mm。"),
-      selected.has("包包放置") && item("包包区", "建议开放层板或抽屉组合，高度 300-450mm。"),
-      selected.has("雨伞收纳") && item("雨伞区", "建议预留窄高区或底部竖放区。"),
-      selected.has("钥匙杂物") && item("随手物品区", "建议设置小抽屉或随手置物层。"),
-      selected.has("行李箱") && item("行李箱区", "建议底部大件区，高度 600-800mm。"),
-      selected.has("展示摆件") && item("展示区", "建议开放展示格或灯光层板。")
-    ].filter(Boolean);
-  }
-  if (spaceType === "客厅展示") {
-    return [
-      hasAny(selected, ["摆件", "收藏品"]) && item("开放展示层板", "摆件 / 收藏品建议层间距 300-450mm。"),
-      selected.has("书籍") && item("书籍层板", "建议层板净高 280-350mm。"),
-      hasAny(selected, ["酒具", "茶具"]) && item("酒具 / 茶具区", "建议玻璃层板或开放层板，搭配灯光。"),
-      selected.has("包包展示") && item("包包展示区", "建议层板净高 300-450mm。"),
-      selected.has("综合展示") && item("综合展示区", "建议开放层板 + 局部柜体收纳组合。")
-    ].filter(Boolean);
-  }
-  if (spaceType === "书房收纳") {
-    return [
-      selected.has("书籍") && item("书籍区", "建议层板净高 280-350mm。"),
-      selected.has("文件") && item("文件区", "建议抽屉或封闭柜，净高 320-380mm。"),
-      selected.has("电子设备") && item("电子设备区", "建议预留开放层板及走线空间。"),
-      hasAny(selected, ["收藏品", "摆件"]) && item("展示区", "建议展示层板或玻璃层板。"),
-      selected.has("综合收纳") && item("综合收纳区", "建议层板 + 抽屉 + 封闭柜组合。")
-    ].filter(Boolean);
-  }
-  return [
-    selected.has("短衣") && item("短衣区", "建议净高 900-1100mm。"),
-    selected.has("长衣") && item("长衣区", "建议净高 1300-1500mm。"),
-    selected.has("裤子") && item("裤架区", "建议净高 650-800mm。"),
-    selected.has("鞋子") && item("鞋层板", "建议层间距 160-220mm。"),
-    selected.has("包包") && item("包包区", "建议净高 300-450mm。"),
-    selected.has("被褥") && item("被褥区", "建议净高 400-600mm。"),
-    selected.has("行李箱") && item("行李箱区", "建议净高 600-800mm。"),
-    selected.has("首饰") && item("首饰区", "建议搭配抽屉或首饰盒，高度 900-1100mm。")
-  ].filter(Boolean);
+  const roomHeight = answers.dimensions?.height || 2700;
+  return calculateDemandZoneLengths(getDemandWeights(answers), answers.people || "1人")
+    .map((zone) => {
+      const recommendedHeight = getZoneInstallationHeight(zone.zoneType, roomHeight);
+      return recommendedHeight == null
+        ? null
+        : item(zone.label, `推荐安装高度 ${recommendedHeight}mm。`);
+    })
+    .filter(Boolean);
 }
 
 export function getFunctionZoneRecommendations(answers) {
@@ -710,6 +611,275 @@ function getZoneText(spaceType, key) {
 
 export function generatePlans(answers) {
   return buildPlanRecommendation(answers).plans;
+}
+
+export function getPlanPriceRange(budgetRange = "", planType = "basic") {
+  const price = getPlanPriceFromRules(budgetRange, planType);
+  return [price.min, price.max];
+}
+
+export function getPlanPrice(budgetRange = "", planType = "basic") {
+  return getPlanPriceFromRules(budgetRange, planType).price;
+}
+
+export function generateRecommendedPlans(answers = {}) {
+  const weightedDemands = getWeightedDemands(answers);
+  const candidates = generateCandidatePlans(answers, getClosetRules());
+  return selectRecommendedCandidates(candidates, answers).map((candidate) => {
+    const tier = getPlanTier(candidate.planType);
+    return {
+      planType: candidate.planType,
+      planName: tier.planName,
+      planPrice: candidate.estimatedPrice,
+      planPreview: null,
+      planCapacityCoverage: `可满足约 ${Math.round(tier.coverage * 100)}%${candidate.planType === "premium" ? "+" : ""} 收纳需求`,
+      planCapacity: candidate.estimatedCapacity,
+      planFeatures: candidate.zones,
+      planReason: `${weightedDemands.slice(0, 3).map((item) => item.name).join("、") || "综合收纳"}按候选方案评分生成。`,
+      configPreset: candidate.configPreset,
+      candidatePlanId: candidate.planId,
+      candidateScores: candidate.scores,
+      candidateDebug: {
+        bayCount: candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 0,
+        zoneDistribution: countDebugValues(candidate.placements, "zoneType"),
+        componentCount: countDebugValues(
+          candidate.placements.filter((placement) => placement.componentType),
+          "componentType"
+        ),
+        placementCount: candidate.placements.length,
+        shelfGaps: getShelfGapDiagnostics(candidate.placements),
+        estimatedPrice: candidate.estimatedPrice,
+        estimatedCapacity: candidate.estimatedCapacity,
+        rejectedReason: candidate.rejectReason || null
+      }
+    };
+  });
+}
+
+export function getCandidatePlanDebugStats() {
+  return getLastCandidateEngineStats();
+}
+
+function countDebugValues(items, key) {
+  return items.reduce((result, item) => {
+    const value = item?.[key];
+    if (value) result[value] = (result[value] || 0) + 1;
+    return result;
+  }, {});
+}
+
+function buildRecommendedPlanFeatures(planType, answers, weightedDemands) {
+  const selected = new Set(weightedDemands.map((item) => item.name));
+  const topDemands = weightedDemands.slice(0, planType === "basic" ? 1 : planType === "value" ? 2 : 5).map((item) => item.name);
+  const features = [];
+
+  if (["衣帽间", "主卧衣柜"].includes(answers.spaceUse)) {
+    if (hasAny(selected, ["长衣", "短衣"]) || !weightedDemands.length) features.push("挂衣杆分区");
+    features.push(planType === "basic" ? "基础层板" : "加密层板");
+  } else if (answers.spaceUse === "玄关收纳") {
+    features.push("鞋层板分区");
+    if (planType !== "basic") features.push("随手抽屉");
+  } else if (answers.spaceUse === "客厅展示") {
+    features.push(planType === "basic" ? "开放展示层板" : "展示模块组合");
+  } else if (answers.spaceUse === "书房收纳") {
+    features.push("书架层板");
+    if (planType !== "basic") features.push("文件抽屉");
+  }
+
+  topDemands.forEach((demand) => {
+    demandFeatures(demand, planType).forEach((feature) => pushUnique(features, feature));
+  });
+
+  if (planType === "value") {
+    pushUnique(features, "抽屉或柜体组合");
+    if (supportsLighting(answers.selectedProductSystem) && shouldAddLighting(selected)) pushUnique(features, "局部灯光");
+  }
+  if (planType === "premium") {
+    if (supportsGlassShelf(answers.selectedProductSystem)) pushUnique(features, "玻璃层板");
+    if (supportsLighting(answers.selectedProductSystem)) pushUnique(features, "灯光系统");
+    if (selected.has("首饰")) pushUnique(features, "首饰盒");
+    if (selected.has("裤子")) pushUnique(features, "裤架");
+    pushUnique(features, "柜体组合");
+    pushUnique(features, "抽屉加强");
+  }
+
+  return features.slice(0, 4);
+}
+
+function demandFeatures(demand, planType) {
+  const premium = planType === "premium";
+  const value = planType === "value";
+  const map = {
+    "长衣": [premium || value ? "长衣挂放加强" : "长衣挂放区"],
+    "短衣": [premium || value ? "短衣挂放加强" : "短衣挂放区"],
+    "裤子": [premium || value ? "裤架" : "裤装挂放区"],
+    "鞋子": [premium || value ? "鞋区加强" : "鞋层板"],
+    "鞋子收纳": [premium || value ? "鞋区加强" : "鞋层板"],
+    "包包": [premium ? "包包展示区" : "包包层板"],
+    "包包放置": [premium ? "包包展示区" : "包包层板"],
+    "包包展示": [premium ? "包包展示区" : "包包层板"],
+    "首饰": [premium ? "首饰盒" : value ? "首饰抽屉" : "浅抽屉预留"],
+    "被褥": [premium || value ? "大件储物加强" : "被褥储物区"],
+    "行李箱": [premium || value ? "大件储物加强" : "行李箱储物位"],
+    "展示收藏": [premium ? "玻璃层板展示" : "开放展示层板"],
+    "展示摆件": [premium ? "灯光展示区" : "开放展示层板"],
+    "摆件": [premium ? "灯光展示区" : "开放展示层板"],
+    "收藏品": [premium ? "玻璃层板展示" : "开放展示层板"],
+    "综合展示": [premium ? "展示 + 柜体组合" : "开放展示层板"],
+    "酒具": [premium ? "玻璃层板 + 灯光" : "开放展示层板"],
+    "茶具": [premium ? "玻璃层板 + 灯光" : "开放展示层板"],
+    "书籍": [premium || value ? "加密书架层板" : "书架层板"],
+    "文件": [premium || value ? "文件抽屉" : "封闭文件区"],
+    "电子设备": [premium || value ? "设备开放格 + 走线" : "设备开放格"],
+    "综合收纳": [premium || value ? "柜体组合" : "基础柜体"]
+  };
+  return map[demand] || [`${demand}分区`];
+}
+
+function getPlanCapacityCoverage(planType) {
+  if (planType === "basic") return "可满足约 70% 核心收纳需求";
+  if (planType === "value") return "可满足约 85% 日常收纳需求";
+  return "可满足约 95%+ 完整收纳需求";
+}
+
+function buildPlanCapacity(planType, answers, weightedDemands) {
+  const capacityFactor = planType === "basic" ? 0.72 : planType === "value" ? 0.9 : 1.12;
+  const selected = weightedDemands.length
+    ? weightedDemands.slice(0, planType === "basic" ? 2 : planType === "value" ? 3 : 5)
+    : [{ name: fallbackCapacityItem(answers), weight: 1 }];
+  return selected.map(({ name, weight }) => ({
+    label: name,
+    estimate: getPlanCapacityEstimate(name, answers, weight, capacityFactor)
+  })).filter((item) => item.estimate);
+}
+
+function fallbackCapacityItem(answers) {
+  if (answers.spaceUse === "玄关收纳") return "鞋子收纳";
+  if (answers.spaceUse === "客厅展示") return "综合展示";
+  if (answers.spaceUse === "书房收纳") return "书籍";
+  return "短衣";
+}
+
+function getPlanCapacityEstimate(itemName, answers, weight, capacityFactor) {
+  const demandEstimate = getDemandItemEstimate(itemName, answers, Number(weight) || 1);
+  const parsed = parseEstimateRange(demandEstimate);
+  if (!parsed) return demandEstimate;
+  const min = Math.max(1, roundCapacity(parsed.min * capacityFactor, parsed.unit));
+  const max = Math.max(min, roundCapacity(parsed.max * capacityFactor, parsed.unit));
+  return `约 ${min}-${max}${parsed.unit}`;
+}
+
+function parseEstimateRange(value) {
+  const match = String(value || "").match(/(\d+)(?:-(\d+))?([^0-9\s]+)?/);
+  if (!match) return null;
+  const min = Number(match[1]);
+  const max = Number(match[2] || match[1]);
+  const unit = match[3] || "";
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return { min, max, unit };
+}
+
+function roundCapacity(value, unit) {
+  const step = unit === "本" ? 10 : unit === "件" || unit === "双" || unit === "条" ? 5 : 1;
+  return Math.max(step, Math.round(value / step) * step);
+}
+
+function buildRecommendedPlanReason(planType, answers, weightedDemands) {
+  const top = weightedDemands[0]?.name || "综合收纳";
+  if (planType === "basic") return `优先围绕${top}配置，减少展示和灯光类投入，控制整体价格。`;
+  if (planType === "value") return `在${top}基础上补足次要需求，增加抽屉、层板或局部展示，适合多数家庭。`;
+  return `尽量覆盖已选择需求，强化柜体、抽屉、灯光和展示模块，形成更完整的定制效果。`;
+}
+
+function buildConfigPreset(planType, answers, demandRatios, selectedProductSystem, planOutput) {
+  const quantities = planOutput.componentQuantities;
+  const hangingRods = Number(quantities.singleRail || 0) + Number(quantities.doubleRail || 0);
+  const shelves = Number(quantities.woodShelf || 0);
+  const glassShelves = Number(quantities.glassShelf || 0);
+  const cabinets = Number(quantities.cabinet || 0);
+  const jewelryBoxes = Number(quantities.jewelryBox || 0);
+  const trouserRacks = Number(quantities.trouserRack || 0);
+  const roomHeight = answers.dimensions?.height || 2700;
+  const lighting = planType === "basic"
+    ? false
+    : supportsLighting(selectedProductSystem)
+      && (planType === "premium" || (planOutput.lighting && getBudgetUpperBound(answers.budget) >= planOutput.minBudgetForLighting))
+      ? true
+      : false;
+  return {
+    productSystemId: selectedProductSystem?.id || "",
+    spaceType: answers.spaceUse || "",
+    layoutType: answers.dimensions?.layoutType || "I型",
+    planType,
+    roomWidth: answers.dimensions?.width || 3600,
+    roomDepth: answers.dimensions?.depth || 2800,
+    roomHeight,
+    demandRatios,
+    componentQuantities: quantities,
+    reservedZones: planOutput.reservedZones,
+    zoneRequirements: planOutput.zones.map((zone) => ({
+      zoneType: zone.zoneType,
+      itemType: zone.itemType,
+      demandQuantity: zone.quantity,
+      demandWeight: zone.weight,
+      preferredComponent: zone.componentType,
+      allowedComponents: zone.allowedComponents,
+      quantity: zone.requiredUnits,
+      heightFromFloor: zone.railHeights?.[0] || getZoneInstallationHeight(zone.zoneType, roomHeight),
+      clearHeight: zone.clearHeight,
+      idealClearHeight: zone.idealClearHeight,
+      exclusiveBay: zone.exclusiveBay,
+      railHeights: zone.railHeights,
+      priorityIndex: zone.priorityIndex
+    })),
+    installationHeights: {
+      shelf: getZoneInstallationHeight("bagZone", roomHeight),
+      hangingRod: getZoneInstallationHeight("shortHangZone", roomHeight),
+      cabinet: getZoneInstallationHeight("generalStorageZone", roomHeight),
+      glassShelf: getZoneInstallationHeight("displayZone", roomHeight),
+      jewelryBox: getZoneInstallationHeight("jewelryZone", roomHeight),
+      trouserRack: getZoneInstallationHeight("trouserZone", roomHeight),
+      mixedStorage: getZoneInstallationHeight("jewelryZone", roomHeight)
+    },
+    shelfLevel: planType === "basic" ? "basic" : planType === "value" ? "medium" : "high",
+    shelves,
+    hangingRods,
+    drawers: 0,
+    cabinets,
+    glassShelves,
+    lighting,
+    jewelryBox: jewelryBoxes > 0,
+    jewelryBoxCount: jewelryBoxes,
+    trouserRack: trouserRacks > 0,
+    trouserRackCount: trouserRacks
+  };
+}
+
+function hasDisplayDemand(selected) {
+  return hasAny(selected, ["展示收藏", "展示摆件", "摆件", "收藏品", "综合展示", "酒具", "茶具", "包包展示"]);
+}
+
+function shouldAddLighting(selected) {
+  return hasDisplayDemand(selected) || hasAny(selected, ["收藏品", "酒具", "茶具"]);
+}
+
+function supportsLighting(productSystem) {
+  return ["aluminum-base-supported", "wall-mounted-v2"].includes(productSystem?.id || "");
+}
+
+function getBudgetUpperBound(budgetRange) {
+  if (budgetRange === "3,000以下") return 3000;
+  if (budgetRange === "18,000+") return Infinity;
+  const values = String(budgetRange || "").match(/[\d,]+/g)?.map((value) => Number(value.replace(/,/g, ""))) || [];
+  return values[values.length - 1] || 0;
+}
+
+function supportsGlassShelf(productSystem) {
+  return !["japanese-closet", "carbon-steel-post-wardrobe-v2"].includes(productSystem?.id || "");
+}
+
+function pushUnique(list, itemName) {
+  if (itemName && !list.includes(itemName)) list.push(itemName);
 }
 
 export function recommendSystem({ spaceUse = "", budget = "", demands = [] }) {

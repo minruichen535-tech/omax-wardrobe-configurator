@@ -1,14 +1,18 @@
 import {
   buildPlanRecommendation,
+  generateRecommendedPlans,
+  getCandidatePlanDebugStats,
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=cache-20260617-01";
+} from "./planRules.js?v=wall-mounted-placement-rules-20260621-04";
+import { loadClosetRules } from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
 
 const state = {
   step: 0,
   answers: {},
   recommendation: null,
+  selectedProductSystem: null,
   selectedPlan: null
 };
 
@@ -31,7 +35,15 @@ const layoutOptions = [
   { value: "L型", title: "L型", subtitle: "转角布局", sketch: "└" },
   { value: "U型", title: "U型", subtitle: "三面布局", sketch: "└─┘" }
 ];
+const recommendedPlanTypes = ["basic", "value", "premium"];
+const recommendedPlanFallbacks = {
+  basic: { planName: "基础实用款", planCapacityCoverage: "基础方案候选暂未生成" },
+  value: { planName: "高性价比款", planCapacityCoverage: "性价比方案候选暂未生成" },
+  premium: { planName: "高配理想款", planCapacityCoverage: "高配方案候选暂未生成" }
+};
 let analysisLoadingTimers = [];
+let activePlanPreviewCleanup = null;
+let planCardPreviewCleanups = [];
 const optionIconMap = {
   "1人": "one-people.png",
   "2人": "two-people.png",
@@ -64,6 +76,44 @@ const optionIconMap = {
   "综合收纳": "general-storage.png"
 };
 
+const productSystems = [
+  {
+    id: "japanese-closet",
+    name: "铝日式立柱衣柜",
+    image: "Japaness-Closet.png",
+    description: "极简日式风格，开放展示与收纳结合，适合卧室与衣帽间空间。",
+    features: ["开放挂衣", "木层板", "抽屉组合", "灯光系统可选"]
+  },
+  {
+    id: "aluminum-post-wardrobe",
+    name: "铝立柱衣柜",
+    image: "Aluminum-Post-Wardrob.png",
+    description: "自由组合能力强，兼顾展示与收纳。",
+    features: ["开放挂衣", "玻璃层板", "柜体组合", "灯光系统"]
+  },
+  {
+    id: "carbon-steel-post-wardrobe-v2",
+    name: "碳钢立柱衣柜",
+    image: "Carbon-Steel-Post-Wardrobe.png",
+    description: "高性价比方案，结构简洁耐用。",
+    features: ["开放挂衣", "层板收纳", "鞋区组合", "灵活扩展"]
+  },
+  {
+    id: "aluminum-base-supported",
+    name: "铝托底式衣柜",
+    image: "Aluminum-Base-Supported.png",
+    description: "更强承重能力，适合多功能收纳空间。",
+    features: ["展示收纳", "抽屉组合", "柜体扩展", "综合收纳"]
+  },
+  {
+    id: "wall-mounted-v2",
+    name: "铝壁挂式衣柜",
+    image: "Wall Mounted .png.png",
+    description: "悬浮视觉效果，高端定制感更强。",
+    features: ["悬挂收纳", "柜体组合", "灯光系统", "极简视觉"]
+  }
+];
+
 function getCurrentQuestions() {
   return getQuestionFlow(state.answers.spaceUse);
 }
@@ -73,12 +123,18 @@ function clearAnalysisLoadingTimers() {
   analysisLoadingTimers = [];
 }
 
+function clearPlanCardPreviews() {
+  planCardPreviewCleanups.forEach((cleanup) => cleanup?.());
+  planCardPreviewCleanups = [];
+}
+
 function renderQuestion(direction = "forward") {
   clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
   const questions = getCurrentQuestions();
   const question = questions[state.step];
   shell.dataset.direction = direction;
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
   void shell.offsetWidth;
   shell.classList.add("is-changing");
 
@@ -209,6 +265,11 @@ function renderWeightBlocks(weight) {
 function getOptionIconPath(option) {
   const fileName = optionIconMap[option];
   if (!fileName) return "";
+  return getIconAssetPath(fileName);
+}
+
+function getIconAssetPath(fileName) {
+  if (!fileName) return "";
   return `${iconRoot}${encodeURI(fileName)}?v=${iconVersion}`;
 }
 
@@ -274,6 +335,7 @@ function selectOption(key, option, button) {
   if (key === "spaceUse" && state.answers.spaceUse !== option) {
     state.answers = { spaceUse: option };
     state.recommendation = null;
+    state.selectedProductSystem = null;
     state.selectedPlan = null;
   } else {
     state.answers[key] = option;
@@ -296,10 +358,11 @@ function nextStep() {
 
 function renderAnalysisLoading() {
   clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
   state.recommendation = buildPlanRecommendation(state.answers);
-  shell.classList.remove("is-changing", "is-analysis", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-analysis-loading", "is-changing");
-  currentProgress.textContent = "AI";
+  currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
   title.textContent = "正在分析您的收纳需求";
@@ -330,6 +393,7 @@ function renderAnalysisLoading() {
 
 function renderAnalysis({ fadeIn = false } = {}) {
   clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
   state.recommendation = state.recommendation || buildPlanRecommendation(state.answers);
   const {
     dimensions,
@@ -339,9 +403,9 @@ function renderAnalysis({ fadeIn = false } = {}) {
     demandPersona
   } = state.recommendation;
   const labels = getRatioLabels(state.answers.spaceUse);
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-analysis");
-  currentProgress.textContent = "AI";
+  currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
   title.textContent = "正在分析您的收纳需求";
@@ -357,12 +421,12 @@ function renderAnalysis({ fadeIn = false } = {}) {
           <p><small>主要需求</small><strong>${demands.length ? renderDemandChips(demands) : "综合收纳"}</strong></p>
         </div>
       `)}
-      ${renderReportSection("AI需求画像", renderDemandPersona(demandPersona))}
+      ${renderReportSection("需求画像", renderDemandPersona(demandPersona))}
       ${zoneCards.length ? renderReportSection("收纳物品估算", renderZoneCards(zoneCards)) : ""}
       ${Object.keys(demandRatios).length ? renderReportSection("功能区比例", renderStackedRatioBar(demandRatios, labels)) : ""}
       <div class="analysis-actions">
         <button class="analysis-back" type="button">← 返回上一题</button>
-        <button class="dimension-next analysis-next" type="button">查看方案 <i>→</i></button>
+        <button class="dimension-next analysis-next" type="button">选择产品系统 <i>→</i></button>
       </div>
     </div>
   `;
@@ -370,58 +434,535 @@ function renderAnalysis({ fadeIn = false } = {}) {
     state.step = getCurrentQuestions().length - 1;
     renderQuestion("back");
   });
-  answerContent.querySelector(".analysis-next").addEventListener("click", renderResults);
+  answerContent.querySelector(".analysis-next").addEventListener("click", renderProductSystemSelection);
 }
 
-function renderResults() {
+function renderProductSystemSelection() {
   clearAnalysisLoadingTimers();
-  const recommendation = state.recommendation || buildPlanRecommendation(state.answers);
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-lead", "is-submitted");
-  shell.classList.add("is-results");
-  currentProgress.textContent = "方案";
+  clearPlanCardPreviews();
+  const selectedId = state.selectedProductSystem?.id || state.answers.selectedProductSystem?.id || "";
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.add("is-product-system");
+  currentProgress.textContent = "系统";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
-  title.textContent = "为您准备了三种空间方向";
-  note.textContent = "不是标准答案，而是从预算到理想生活的三种设计选择。";
+  title.textContent = "选择适合您的产品系统";
+  note.textContent = "根据您的收纳需求，选择最符合空间风格与使用习惯的系统方案。";
 
   answerContent.innerHTML = `
-    <div class="result-intro">
-      <span>${state.answers.spaceUse || "定制空间"}</span>
-      <span>${recommendation.dimensions.layoutType || "I型"} / ${recommendation.dimensions.width} × ${recommendation.dimensions.depth} × ${recommendation.dimensions.height || 2700} mm</span>
-      <span>${recommendation.demands.length ? recommendation.demands.join("、") : "综合收纳"}</span>
-    </div>
-    <div class="result-plans">
-      ${recommendation.plans.map((plan) => renderPlanCard(plan, recommendation)).join("")}
+    <div class="product-system-panel">
+      <div class="product-system-grid">
+        ${productSystems.map((system) => renderProductSystemCard(system, selectedId)).join("")}
+      </div>
+      <div class="product-system-actions">
+        <button class="analysis-back product-system-back" type="button">← 返回分析</button>
+        <button class="dimension-next product-system-next" type="button" ${selectedId ? "" : "disabled"}>生成专属方案 <i>→</i></button>
+      </div>
     </div>
   `;
 
-  answerContent.querySelectorAll("[data-select-plan]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const plan = recommendation.plans.find((item) => item.code === button.dataset.selectPlan);
-      renderLeadForm(plan);
+  const nextButton = answerContent.querySelector(".product-system-next");
+  answerContent.querySelectorAll("[data-product-system]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const selected = productSystems.find((system) => system.id === card.dataset.productSystem);
+      if (!selected) return;
+      state.selectedProductSystem = selected;
+      state.answers.selectedProductSystem = selected;
+      answerContent.querySelectorAll("[data-product-system]").forEach((item) => {
+        item.dataset.selected = item === card ? "true" : "false";
+      });
+      nextButton.disabled = false;
     });
+  });
+  answerContent.querySelector(".product-system-back").addEventListener("click", () => renderAnalysis());
+  nextButton.addEventListener("click", () => {
+    if (!state.selectedProductSystem && !state.answers.selectedProductSystem) return;
+    renderAiRecommendedPlans();
   });
 }
 
-function renderPlanCard(plan, recommendation) {
+function renderProductSystemCard(system, selectedId) {
   return `
-    <article class="result-plan${plan.recommended ? " is-recommended" : ""}">
-      <header><span>方案 ${plan.code}</span>${plan.recommended ? "<em>推荐</em>" : ""}</header>
-      <h2>${plan.name}</h2>
-      <p class="result-price"><small>预计价格</small><strong>¥${plan.price.toLocaleString("zh-CN")}</strong></p>
-      <p class="result-satisfaction"><small>满足度</small><strong>${plan.satisfaction}</strong></p>
-      <p class="result-series"><small>推荐系统</small><strong>${recommendation.system}</strong></p>
-      <p class="result-summary">${plan.position}<br>${plan.summary}</p>
-      <div class="mini-ratios">${renderRatioRows(recommendation.demandRatios, true, getRatioLabels(state.answers.spaceUse))}</div>
-      <button type="button" data-select-plan="${plan.code}">选择此方案 <i>→</i></button>
+    <article class="product-system-card" data-product-system="${system.id}" data-selected="${selectedId === system.id ? "true" : "false"}">
+      <div class="product-system-image">
+        <img src="${getIconAssetPath(system.image)}" alt="${system.name}" loading="lazy" />
+      </div>
+      <div class="product-system-copy">
+        <div class="product-system-title">
+          <h2>${system.name}</h2>
+          <span class="product-system-selected">✓ 已选择</span>
+        </div>
+        <p>${system.description}</p>
+        <ul>${system.features.map((feature) => `<li>${feature}</li>`).join("")}</ul>
+      </div>
     </article>
   `;
 }
 
+function renderAiRecommendedPlans() {
+  clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
+  const recommendation = state.recommendation || buildPlanRecommendation(state.answers);
+  const dimensions = recommendation.dimensions || {};
+  const selectedProductSystem = state.selectedProductSystem || state.answers.selectedProductSystem || null;
+  const needs = state.answers.needs || state.answers.entryNeeds || state.answers.displayNeeds || state.answers.studyNeeds || state.answers.demands || {};
+  const needWeights = state.answers.demandsWeights || (state.answers.demands && typeof state.answers.demands === "object" ? state.answers.demands : {});
+  const planInput = {
+    ...state.answers,
+    selectedProductSystem
+  };
+  const generatedPlans = generateRecommendedPlans(planInput);
+  const recommendedPlans = ensureRecommendedPlanTiers(generatedPlans);
+  const candidateDebugStats = getCandidatePlanDebugStats();
+  const payload = {
+    selectedProductSystem,
+    spaceType: state.answers.spaceUse || "",
+    layoutType: dimensions.layoutType || "I型",
+    roomWidth: dimensions.width,
+    roomDepth: dimensions.depth,
+    roomHeight: dimensions.height || 2700,
+    peopleCount: state.answers.people || state.answers.style || "",
+    budgetRange: state.answers.budget || "",
+    needs,
+    needWeights
+  };
+  console.log("[ai-planner] recommended-plan-input", payload);
+  console.log("[ai-planner] generated-plans", summarizeRecommendedPlans(generatedPlans));
+  console.log("[ai-planner] rendered-plans", summarizeRecommendedPlans(recommendedPlans));
+  console.log("[ai-planner] recommended-plan-presets", {
+    basic: recommendedPlans.find((plan) => plan.planType === "basic")?.configPreset,
+    value: recommendedPlans.find((plan) => plan.planType === "value")?.configPreset,
+    premium: recommendedPlans.find((plan) => plan.planType === "premium")?.configPreset
+  });
+
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-results", "is-lead", "is-submitted");
+  shell.classList.add("is-ai-plans");
+  shell.classList.toggle("is-ai-plan-debug", isDevelopmentEnvironment());
+  currentProgress.textContent = "方案";
+  progressLine.style.transform = "scaleX(1)";
+  backButton.disabled = false;
+  title.textContent = "推荐方案";
+  note.textContent = "基于您选择的产品系统与空间需求，先为您整理三种方案方向。";
+
+  answerContent.innerHTML = `
+    <div class="ai-plan-panel">
+      ${isDevelopmentEnvironment() ? renderAiPlanDebugBadge(generatedPlans, recommendedPlans) : ""}
+      <div class="ai-plan-context">
+        <span>${selectedProductSystem?.name || "未选择产品系统"}</span>
+        <span>${dimensions.width || "-"} × ${dimensions.depth || "-"} × ${dimensions.height || 2700} mm</span>
+        <span>${payload.peopleCount || "使用人数待确认"}</span>
+        <span>${payload.budgetRange || "预算待确认"}</span>
+      </div>
+      <div class="ai-plan-grid">
+        ${recommendedPlans.map(renderAiPlanCard).join("")}
+      </div>
+      ${isCandidateDebugEnabled() ? renderCandidateDebugPanel(candidateDebugStats, recommendedPlans) : ""}
+    </div>
+  `;
+
+  updateAiPlanDebugBadge(generatedPlans, recommendedPlans);
+
+  answerContent.querySelectorAll("[data-ai-plan]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const selected = recommendedPlans.find((plan) => plan.planType === button.dataset.aiPlan);
+      if (!selected) return;
+      state.selectedPlan = selected;
+      renderLeadForm(selected);
+    });
+  });
+  answerContent.querySelectorAll("[data-preview-plan]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const selected = recommendedPlans.find((plan) => plan.planType === button.dataset.previewPlan);
+      if (!selected) return;
+      openPlanPreviewModal(selected, selectedProductSystem);
+    });
+  });
+  loadPlanCardPreviews(recommendedPlans, selectedProductSystem);
+}
+
+function renderAiPlanCard(plan) {
+  const hasPrice = Number.isFinite(Number(plan.planPrice)) && Number(plan.planPrice) > 0;
+  return `
+    <article class="ai-plan-card" data-plan-type="${plan.planType}" data-plan-fallback="${plan.isFallback ? "true" : "false"}">
+      <span class="ai-plan-type">${plan.planType}</span>
+      <button class="planPreview" type="button" data-preview-plan="${plan.planType}" aria-label="查看${plan.planName}3D预览">
+        <div class="plan-card-preview-root" data-card-preview-plan="${plan.planType}" data-preview-error="none">
+          ${plan.planPreview ? `<img src="${plan.planPreview}" alt="${plan.planName}" loading="lazy" />` : `<span aria-hidden="true"></span>`}
+        </div>
+        <em class="ai-plan-budget">${hasPrice ? formatPlanPrice(plan.planPrice) : "价格待确认"}<span>${plan.planCapacityCoverage}</span></em>
+        <strong>点击查看3D预览</strong>
+        <small>可旋转查看</small>
+      </button>
+      <h2>${plan.planName}</h2>
+      <div class="ai-plan-capacity">
+        <small>预计可收纳</small>
+        <ul>
+          ${plan.planCapacity.length
+            ? plan.planCapacity.map((item) => `<li>${item.label}${item.estimate}</li>`).join("")
+            : "<li>方案数据待补充</li>"}
+        </ul>
+      </div>
+      <button class="ai-plan-select" type="button" data-ai-plan="${plan.planType}" ${plan.isFallback ? "disabled" : ""}>${plan.isFallback ? "方案待补充" : "选择此方案"} <i>→</i></button>
+    </article>
+  `;
+}
+
+function isDevelopmentEnvironment() {
+  const hostname = window.location.hostname;
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname)
+    || new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
+function renderAiPlanDebugBadge(generatedPlans, renderedPlans) {
+  return `
+    <aside class="ai-plan-debug-badge" aria-label="AI plan render debug">
+      <span>plans.length = ${Array.isArray(generatedPlans) ? generatedPlans.length : 0}</span>
+      <span data-ai-plan-card-count>card DOM count = 0</span>
+      <span>planTypes = ${renderedPlans.map((plan) => plan.planType).join("/")}</span>
+    </aside>
+  `;
+}
+
+function updateAiPlanDebugBadge(generatedPlans, renderedPlans) {
+  const cardCount = answerContent.querySelectorAll(".ai-plan-card").length;
+  const cardCountLabel = answerContent.querySelector("[data-ai-plan-card-count]");
+  if (cardCountLabel) cardCountLabel.textContent = `card DOM count = ${cardCount}`;
+  console.log("[ai-planner] plan-card-dom", {
+    plansLength: Array.isArray(generatedPlans) ? generatedPlans.length : 0,
+    cardCount,
+    planTypes: renderedPlans.map((plan) => plan.planType)
+  });
+}
+
+function summarizeRecommendedPlans(plans) {
+  return (Array.isArray(plans) ? plans : []).filter(Boolean).map((plan) => ({
+    planType: plan.planType,
+    planName: plan.planName,
+    planPrice: plan.planPrice,
+    placementCount: plan.configPreset?.placements?.length ?? plan.candidateDebug?.placementCount
+  }));
+}
+
+function isCandidateDebugEnabled() {
+  return new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
+function renderCandidateDebugPanel(stats, plans) {
+  const rejectReasons = Object.entries(stats.rejectReasons || {})
+    .sort((a, b) => b[1] - a[1]);
+  return `
+    <section class="candidate-debug-panel">
+      <header>
+        <div>
+          <small>DEVELOPMENT ONLY</small>
+          <h2>Candidate Plan Engine Debug</h2>
+        </div>
+        <dl>
+          <div><dt>totalCandidates</dt><dd>${stats.totalCandidates ?? stats.generatedCount ?? 0}</dd></div>
+          <div><dt>validCandidates</dt><dd>${stats.validCandidates ?? stats.validCount ?? 0}</dd></div>
+          <div><dt>rankedCandidates</dt><dd>${stats.validCount ?? 0}</dd></div>
+          <div><dt>missingPlanType</dt><dd>${escapeDebugValue(stats.missingPlanType || "none")}</dd></div>
+          <div><dt>missingReason</dt><dd>${escapeDebugValue(stats.missingReason || "none")}</dd></div>
+          <div><dt>candidateRejectTopReasons</dt><dd>${escapeDebugValue(
+            (stats.candidateRejectTopReasons || [])
+              .map((item) => `${item.planType}:${item.reason}:${item.count}`)
+              .join(", ") || "none"
+          )}</dd></div>
+          <div><dt>basicValueSimilarity</dt><dd>${escapeDebugValue(JSON.stringify(stats.basicValueSimilarity || {}))}</dd></div>
+          <div><dt>valuePremiumSimilarity</dt><dd>${escapeDebugValue(JSON.stringify(stats.valuePremiumSimilarity || {}))}</dd></div>
+          <div><dt>duplicatePlanDetected</dt><dd>${stats.duplicatePlanDetected ? "true" : "false"}</dd></div>
+          <div><dt>reselectionReason</dt><dd>${escapeDebugValue(stats.reselectionReason || "none")}</dd></div>
+        </dl>
+      </header>
+      <div class="candidate-debug-plans">
+        ${plans.map(renderSelectedPlanDebug).join("")}
+      </div>
+      <div class="candidate-debug-rejections">
+        <h3>rejectReason frequency</h3>
+        ${rejectReasons.length
+          ? `<dl>${rejectReasons.map(([reason, count]) => `
+              <div><dt>${escapeDebugValue(reason)}</dt><dd>${count}</dd></div>
+            `).join("")}</dl>`
+          : "<p>No rejected candidates.</p>"}
+      </div>
+      ${renderCandidateHeatmap(stats.heatmap || {})}
+    </section>
+  `;
+}
+
+function renderCandidateHeatmap(heatmap) {
+  return `
+    <div class="candidate-heatmap">
+      <h3>Candidate Heatmap</h3>
+      ${["basic", "value", "premium"].map((planType) => `
+        <section>
+          <h4>${planType} Top 10</h4>
+          <div class="candidate-heatmap-table">
+            <div class="candidate-heatmap-row candidate-heatmap-head">
+              <span>planId</span><span>total</span><span>storage</span><span>layout</span>
+              <span>visual</span><span>budget</span><span>upgrade</span><span>price</span>
+              <span>capacity</span><span>bays</span><span>zones</span><span>components</span><span>placements</span>
+            </div>
+            ${(heatmap[planType] || []).map(renderCandidateHeatmapRow).join("")
+              || `<p class="candidate-heatmap-empty">No valid ${planType} candidates.</p>`}
+          </div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderCandidateHeatmapRow(candidate) {
+  const scores = candidate.scores || {};
+  return `
+    <div class="candidate-heatmap-row">
+      <span>${escapeDebugValue(candidate.planId || "-")}</span>
+      <span>${scores.totalScore ?? "-"}</span>
+      <span>${scores.storageScore ?? "-"}</span>
+      <span>${scores.layoutScore ?? "-"}</span>
+      <span>${scores.visualScore ?? "-"}</span>
+      <span>${scores.budgetScore ?? "-"}</span>
+      <span>${scores.upgradeScore ?? "-"}</span>
+      <span>${candidate.estimatedPrice ?? "-"}</span>
+      <span>${formatDebugObject(candidate.estimatedCapacity)}</span>
+      <span>${candidate.bayCount ?? "-"}</span>
+      <span>${formatDebugObject(candidate.zoneDistribution)}</span>
+      <span>${formatDebugObject(candidate.componentCount)}</span>
+      <span>${candidate.placementCount ?? "-"}</span>
+    </div>
+  `;
+}
+
+function renderSelectedPlanDebug(plan) {
+  const debug = plan.candidateDebug || {};
+  const scores = plan.candidateScores || {};
+  return `
+    <article>
+      <h3>${escapeDebugValue(plan.planType)} <span>${escapeDebugValue(plan.candidatePlanId || "-")}</span></h3>
+      <dl class="candidate-debug-scores">
+        ${["totalScore", "storageScore", "layoutScore", "visualScore", "budgetScore", "upgradeScore"]
+          .map((key) => `<div><dt>${key}</dt><dd>${scores[key] ?? "-"}</dd></div>`).join("")}
+      </dl>
+      <dl class="candidate-debug-details">
+        <div><dt>bayCount</dt><dd>${debug.bayCount ?? "-"}</dd></div>
+        <div><dt>zoneDistribution</dt><dd>${formatDebugObject(debug.zoneDistribution)}</dd></div>
+        <div><dt>componentCount</dt><dd>${formatDebugObject(debug.componentCount)}</dd></div>
+        <div><dt>placementCount</dt><dd>${debug.placementCount ?? "-"}</dd></div>
+        <div><dt>shelfGaps</dt><dd>${formatShelfGapDiagnostics(debug.shelfGaps)}</dd></div>
+        <div><dt>estimatedPrice</dt><dd>${debug.estimatedPrice ?? plan.planPrice ?? "-"}</dd></div>
+        <div><dt>estimatedCapacity</dt><dd>${formatDebugObject(debug.estimatedCapacity)}</dd></div>
+        <div><dt>rejectedReason</dt><dd>${escapeDebugValue(debug.rejectedReason || "none")}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+function formatDebugObject(value) {
+  if (value == null) return "-";
+  if (Array.isArray(value)) {
+    return escapeDebugValue(value.map((item) => (
+      typeof item === "object" ? `${item.label || item.itemType || "item"}:${item.estimate || item.quantity || ""}` : item
+    )).join(", "));
+  }
+  if (typeof value === "object") {
+    return escapeDebugValue(Object.entries(value).map(([key, count]) => `${key}:${count}`).join(", ") || "-");
+  }
+  return escapeDebugValue(value);
+}
+
+function formatShelfGapDiagnostics(diagnostics) {
+  if (!Array.isArray(diagnostics) || !diagnostics.length) return "none";
+  return escapeDebugValue(diagnostics.map((item) => (
+    `${item.bayKey}:${item.shelfClass}:${item.lowerHeight}-${item.upperHeight}:gap=${item.clearGap}:min=${item.minGap}`
+  )).join(", "));
+}
+
+function escapeDebugValue(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function normalizeRecommendedPlan(plan = {}, index = 0) {
+  const planType = plan.planType || recommendedPlanTypes[index] || "basic";
+  return {
+    ...plan,
+    planType,
+    planName: plan.planName || plan.name || planType,
+    planPrice: Number(plan.planPrice ?? plan.price ?? 0),
+    planPreview: plan.planPreview || null,
+    planCapacityCoverage: plan.planCapacityCoverage || plan.coverage || "",
+    planCapacity: Array.isArray(plan.planCapacity) ? plan.planCapacity : [],
+    configPreset: plan.configPreset || {}
+  };
+}
+
+function ensureRecommendedPlanTiers(plans) {
+  const normalizedPlans = (Array.isArray(plans) ? plans : [])
+    .filter(Boolean)
+    .map(normalizeRecommendedPlan);
+  const plansByType = new Map(normalizedPlans.map((plan) => [plan.planType, plan]));
+  return recommendedPlanTypes.map((planType, index) => (
+    plansByType.get(planType) || normalizeRecommendedPlan(createFallbackRecommendedPlan(planType), index)
+  ));
+}
+
+function createFallbackRecommendedPlan(planType) {
+  const fallback = recommendedPlanFallbacks[planType];
+  return {
+    planType,
+    planName: fallback.planName,
+    planPrice: null,
+    planPreview: null,
+    planCapacityCoverage: fallback.planCapacityCoverage,
+    planCapacity: [],
+    configPreset: {},
+    isFallback: true
+  };
+}
+
+async function loadPlanCardPreviews(plans, selectedProductSystem) {
+  planCardPreviewCleanups.forEach((cleanup) => cleanup?.());
+  planCardPreviewCleanups = [];
+  const roots = Array.from(answerContent.querySelectorAll("[data-card-preview-plan]"));
+  if (!roots.length) return;
+  try {
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=wall-mounted-placement-rules-20260621-05");
+    await Promise.all(roots.map(async (root) => {
+      const plan = plans.find((item) => item.planType === root.dataset.cardPreviewPlan);
+      if (!plan || plan.isFallback) {
+        setPlanCardPreviewFallback(root, "missing-plan", "该档方案候选暂未生成");
+        return;
+      }
+      try {
+        const cleanup = await mountReadOnlyWardrobePreview(root, {
+          plan,
+          selectedProductSystem,
+          mode: "thumbnail"
+        });
+        if (!root.isConnected) {
+          cleanup?.();
+          return;
+        }
+        root.dataset.previewState = "ready";
+        root.dataset.previewError = "none";
+        planCardPreviewCleanups.push(cleanup);
+      } catch (error) {
+        console.warn("[ai-planner] card preview fallback", plan.planType, error);
+        setPlanCardPreviewFallback(root, "mount-failed", "3D 预览暂时无法加载");
+      }
+    }));
+  } catch (error) {
+    console.warn("[ai-planner] card preview fallback", error);
+    roots.forEach((root) => setPlanCardPreviewFallback(root, "module-failed", "3D 预览暂时无法加载"));
+  }
+}
+
+function setPlanCardPreviewFallback(root, errorType, message) {
+  if (!root?.isConnected) return;
+  root.dataset.previewState = "fallback";
+  root.dataset.previewError = errorType;
+  root.innerHTML = `
+    <span aria-hidden="true"></span>
+    <p class="plan-card-preview-error">${message}</p>
+  `;
+}
+
+function openPlanPreviewModal(plan, selectedProductSystem) {
+  closePlanPreviewModal();
+  const modal = document.createElement("div");
+  modal.className = "plan-preview-modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.innerHTML = `
+    <div class="plan-preview-backdrop" data-close-preview></div>
+    <section class="plan-preview-dialog">
+      <header>
+        <div>
+          <h2>方案预览</h2>
+          <p>当前方案仅供空间配置参考，最终以顾问复核为准。</p>
+        </div>
+        <button type="button" class="plan-preview-close" data-close-preview>关闭</button>
+      </header>
+      <div class="plan-preview-stage">
+        <div class="readonly-preview-root" data-readonly-preview-root>
+          <div class="plan-preview-shell" aria-hidden="true">
+            <span></span>
+            <i></i>
+            <b></b>
+          </div>
+        </div>
+        <div class="plan-preview-caption">
+          <strong>${selectedProductSystem?.name || "产品系统"}</strong>
+          <span>${plan.planName} / ${formatPlanPrice(plan.planPrice)}</span>
+          <small>只读预览 · 可旋转查看 · 可缩放</small>
+        </div>
+      </div>
+      <footer>
+        <button type="button" class="analysis-back" data-close-preview>关闭</button>
+        <button type="button" class="dimension-next" data-select-preview-plan>选择此方案 <i>→</i></button>
+      </footer>
+    </section>
+  `;
+  modal.querySelectorAll("[data-close-preview]").forEach((button) => {
+    button.addEventListener("click", closePlanPreviewModal);
+  });
+  modal.querySelector("[data-select-preview-plan]").addEventListener("click", () => {
+    closePlanPreviewModal();
+    state.selectedPlan = plan;
+    renderLeadForm(plan);
+  });
+  document.body.appendChild(modal);
+  document.body.classList.add("has-plan-preview-modal");
+  loadReadOnlyPlanPreview(modal.querySelector("[data-readonly-preview-root]"), plan, selectedProductSystem);
+}
+
+function closePlanPreviewModal() {
+  activePlanPreviewCleanup?.();
+  activePlanPreviewCleanup = null;
+  document.querySelector(".plan-preview-modal")?.remove();
+  document.body.classList.remove("has-plan-preview-modal");
+}
+
+async function loadReadOnlyPlanPreview(container, plan, selectedProductSystem) {
+  if (!container) return;
+  try {
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=wall-mounted-placement-rules-20260621-05");
+    const cleanup = await mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem });
+    if (!container.isConnected) {
+      cleanup?.();
+      return;
+    }
+    activePlanPreviewCleanup = cleanup;
+    container.dataset.previewState = "ready";
+  } catch (error) {
+    console.warn("[ai-planner] readonly preview fallback", error);
+    container.dataset.previewState = "fallback";
+    container.innerHTML = `
+      <div class="plan-preview-shell" aria-hidden="true">
+        <span></span>
+        <i></i>
+        <b></b>
+      </div>
+      <p class="readonly-preview-error">真实预览暂时无法加载，已保留方案预览入口。</p>
+    `;
+  }
+}
+
+function formatPlanPrice(value) {
+  return `¥${Number(value || 0).toLocaleString("zh-CN")}`;
+}
+
 function renderLeadForm(plan) {
   clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
   state.selectedPlan = plan;
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-submitted");
+  const selectedPlanName = plan.planName || plan.name || "推荐方案";
+  const selectedPlanCode = plan.code ? `方案 ${plan.code} / ` : "";
+  const selectedPlanPrice = plan.planPrice ? formatPlanPrice(plan.planPrice) : (plan.price ? `¥${plan.price.toLocaleString("zh-CN")}` : "");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-submitted");
   shell.classList.add("is-lead");
   currentProgress.textContent = "确认";
   progressLine.style.transform = "scaleX(1)";
@@ -430,11 +971,12 @@ function renderLeadForm(plan) {
   note.textContent = "留下联系方式后，璞舍顾问会根据您的空间尺寸和收纳需求，为您进一步确认尺寸、预算和落地细节。";
   answerContent.innerHTML = `
     <form class="lead-form">
-      <p class="lead-selected">已选择：方案 ${plan.code} / ${plan.name} / ¥${plan.price.toLocaleString("zh-CN")}</p>
+      <p class="lead-selected">已选择：${selectedPlanCode}${selectedPlanName}${selectedPlanPrice ? ` / ${selectedPlanPrice}` : ""}</p>
       <label><span>姓名</span><input name="name" required autocomplete="name" /></label>
       <label><span>手机号</span><input name="phone" required inputmode="tel" autocomplete="tel" /></label>
       <label><span>微信号（选填）</span><input name="wechat" /></label>
       <label><span>所在城市（选填）</span><input name="city" autocomplete="address-level2" /></label>
+      <label class="lead-form-note"><span>备注（选填）</span><textarea name="note" rows="4"></textarea></label>
       <button class="dimension-next" type="submit">提交方案需求</button>
     </form>
   `;
@@ -444,11 +986,13 @@ function renderLeadForm(plan) {
     const payload = {
       selectedPlan: plan,
       answers: state.answers,
+      selectedProductSystem: state.selectedProductSystem || state.answers.selectedProductSystem || null,
       contact: {
         name: form.get("name"),
         phone: form.get("phone"),
         wechat: form.get("wechat"),
-        city: form.get("city")
+        city: form.get("city"),
+        note: form.get("note")
       }
     };
     console.log("[ai-planner] lead", payload);
@@ -458,7 +1002,8 @@ function renderLeadForm(plan) {
 
 function renderSubmitted() {
   clearAnalysisLoadingTimers();
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-results", "is-lead");
+  clearPlanCardPreviews();
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead");
   shell.classList.add("is-submitted");
   currentProgress.textContent = "完成";
   title.textContent = "已收到您的方案需求";
@@ -631,10 +1176,14 @@ backButton.addEventListener("click", () => {
     return;
   }
   if (shell.classList.contains("is-submitted") || shell.classList.contains("is-lead")) {
-    renderResults();
+    renderAiRecommendedPlans();
     return;
   }
-  if (shell.classList.contains("is-results")) {
+  if (shell.classList.contains("is-ai-plans")) {
+    renderProductSystemSelection();
+    return;
+  }
+  if (shell.classList.contains("is-product-system")) {
     renderAnalysis();
     return;
   }
@@ -648,4 +1197,11 @@ backButton.addEventListener("click", () => {
   renderQuestion("back");
 });
 
-renderQuestion();
+loadClosetRules()
+  .then(() => renderQuestion())
+  .catch((error) => {
+    console.error("[ai-planner] closet rules load failed", error);
+    title.textContent = "规则数据暂时无法加载";
+    note.textContent = "请刷新页面后重试。";
+    answerContent.replaceChildren();
+  });

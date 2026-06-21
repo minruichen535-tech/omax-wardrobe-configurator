@@ -20,6 +20,7 @@ import {
 import {
   applyLayout,
   calculateDesign,
+  createConfigFromPlannerPreset,
   createInitialConfig,
   formatCurrency,
   getComponentIcon,
@@ -29,7 +30,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=cache-20260617-01";
+} from "./configurator.js?v=cache-20260621-02";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -38,16 +39,25 @@ import {
   parseProductFile,
   parseRulesFile,
   saveWorkbookOverride
-} from "./dataSource.js?v=cache-20260617-01";
-import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260617-01";
-import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260617-01";
-import { WardrobeScene } from "./scene.js?v=cache-20260617-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=cache-20260617-01";
+} from "./dataSource.js?v=cache-20260621-02";
+import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260621-02";
+import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260621-02";
+import { WardrobeScene } from "./scene.js?v=cache-20260621-02";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=cache-20260621-02";
+import {
+  WALL_MOUNTED_PLACEMENT_RULES,
+  createWallMountedRailWithShelfPlacement,
+  getWallMountedLinkedShelfHeight,
+  getWallMountedRailOffsetPosition,
+  resolveWallMountedShelfType
+} from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
 
 const h = React.createElement;
 const frameColorOptions = ["Silver Grey", "Black"];
 const woodColor = "Wood Brown";
 const defaultProductColor = "Default Material";
+const plannerPresetStorageKey = "purenest-ai-planner-preset";
+const plannerPresetMaxAgeMs = 10 * 60 * 1000;
 const employeeBrandFallback = {
   brandNameCn: "奥美斯五金",
   brandNameEn: "OMAX Hardware",
@@ -71,6 +81,34 @@ function normalizeAluminumConnectionMode(value) {
     return "ceiling-mounted";
   }
   return "wall-mounted";
+}
+
+function readPlannerPreset(seriesId) {
+  let preset = null;
+  try {
+    const raw = sessionStorage.getItem(plannerPresetStorageKey);
+    if (!raw) return null;
+    preset = JSON.parse(raw);
+  } catch (error) {
+    sessionStorage.removeItem(plannerPresetStorageKey);
+    console.warn("[ai-planner preset] invalid preset payload", error);
+    return null;
+  }
+
+  const isValid = preset?.source === "ai-planner"
+    && preset?.configPreset?.productSystemId === seriesId
+    && Date.now() - Number(preset.createdAt || 0) <= plannerPresetMaxAgeMs;
+  sessionStorage.removeItem(plannerPresetStorageKey);
+  if (!isValid) {
+    console.warn("[ai-planner preset] ignored preset", {
+      expectedSeriesId: seriesId,
+      presetSeriesId: preset?.configPreset?.productSystemId,
+      source: preset?.source,
+      createdAt: preset?.createdAt
+    });
+    return null;
+  }
+  return preset;
 }
 
 function App() {
@@ -133,6 +171,7 @@ function ClientApp({ data, isClientMode = false }) {
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
   const isAluminumPostWardrobe = data.series.seriesId === "aluminum-post-wardrobe";
+  const isWallMountedV2 = data.series.seriesId === "wall-mounted-v2";
   const supportsLed = data.series.supportsLed === true || isAluminumPostWardrobe;
   const usesProductPostHeight = data.series.usesProductPostHeight === true;
   const resolvedShelfDepth = data.series.resolveShelfDepth?.({
@@ -190,6 +229,13 @@ function ClientApp({ data, isClientMode = false }) {
       ...(fixedFrameColor ? {
         frameColor: fixedFrameColor,
         color: data.series.fixedConfigColor || fixedFrameColor.toLowerCase()
+      } : {}),
+      ...(isWallMountedV2 ? {
+        wallOffset: 250,
+        wallMountedShelfType: resolveWallMountedShelfType({
+          wallMountedShelfType: current.wallMountedShelfType || current.wallMountedRailShelfType,
+          supportedTypes: cuttingRules.componentTypes
+        })
       } : {})
     }));
   }, [
@@ -204,7 +250,8 @@ function ClientApp({ data, isClientMode = false }) {
     connectionModeOptions.join("|"),
     fixedFrameColor,
     fixedShelfDepth,
-    data.series.fixedConfigColor
+    data.series.fixedConfigColor,
+    isWallMountedV2
   ]);
 
   useEffect(() => {
@@ -221,6 +268,12 @@ function ClientApp({ data, isClientMode = false }) {
         : current.postHeight || defaultPostHeight
     }));
   }, [isAluminumPostWardrobe, data.settings?.roomHeightFixed, data.settings?.defaultPostHeight]);
+
+  useEffect(() => {
+    const preset = readPlannerPreset(data.series.seriesId);
+    if (!preset) return;
+    setConfig((current) => createConfigFromPlannerPreset(preset, current, data));
+  }, [data]);
 
   useEffect(() => {
     const brandPaths = isClientMode
@@ -351,6 +404,20 @@ function ClientApp({ data, isClientMode = false }) {
       color,
       quantity: 1
     };
+    if (isWallMountedV2 && componentType === "singleRail") {
+      setConfig((current) => addWallMountedRailWithShelf({
+        current,
+        placement,
+        wall,
+        productByType: design.productByType,
+        roomHeight: design.room.height,
+        shelfType: resolveWallMountedShelfType({
+          wallMountedShelfType: current.wallMountedShelfType,
+          supportedTypes: cuttingRules.componentTypes
+        })
+      }));
+      return;
+    }
     setConfig((current) => ({
       ...current,
       selectedPlacementId: placement.id,
@@ -358,16 +425,33 @@ function ClientApp({ data, isClientMode = false }) {
     }));
   };
 
-  const updatePlacement = (id, patch) => setConfig((current) => ({
-    ...current,
-    placements: current.placements.map((placement) => placement.id === id ? { ...placement, ...patch } : placement)
-  }));
+  const updatePlacement = (id, patch) => setConfig((current) => {
+    if (!isWallMountedV2) {
+      return {
+        ...current,
+        placements: current.placements.map((placement) => placement.id === id
+          ? { ...placement, ...patch }
+          : placement)
+      };
+    }
+    return updateWallMountedLinkedPlacement({
+      current,
+      id,
+      patch,
+      productByType: design.productByType,
+      roomHeight: design.room.height
+    });
+  });
 
-  const removePlacement = (id) => setConfig((current) => ({
-    ...current,
-    selectedPlacementId: current.selectedPlacementId === id ? "" : current.selectedPlacementId,
-    placements: current.placements.filter((placement) => placement.id !== id)
-  }));
+  const removePlacement = (id) => setConfig((current) => (
+    isWallMountedV2
+      ? removeWallMountedLinkedPlacement(current, id)
+      : {
+        ...current,
+        selectedPlacementId: current.selectedPlacementId === id ? "" : current.selectedPlacementId,
+        placements: current.placements.filter((placement) => placement.id !== id)
+      }
+  ));
 
   if (!isAuthenticated) {
     return h(LoginScreen, {
@@ -556,6 +640,15 @@ function ClientApp({ data, isClientMode = false }) {
               frameColor: fixedFrameColor || (isAluminumPostWardrobe ? "Black" : frameColor),
               ...(fixedFrameColor ? { color: data.series.fixedConfigColor || "black" } : {})
             })
+          }),
+          isWallMountedV2 && h(Segmented, {
+            label: "挂衣杆上方层板类型",
+            value: config.wallMountedShelfType || "woodShelf",
+            options: [
+              { value: "woodShelf", label: "木层板" },
+              { value: "glassShelf", label: "玻璃层板" }
+            ],
+            onChange: (wallMountedShelfType) => updateConfig({ wallMountedShelfType })
           }),
           h("div", { className: "component-library" },
             cuttingRules.componentTypes.filter((type) => !design.productByType[type]?.autoGenerated).map((type) => {
@@ -1754,6 +1847,365 @@ function parseIntegerInput(value) {
   const normalized = String(value ?? "").trim();
   if (!/^\d+$/.test(normalized)) return null;
   return Number.parseInt(normalized, 10);
+}
+
+function addWallMountedRailWithShelf({
+  current,
+  placement,
+  wall,
+  productByType,
+  roomHeight,
+  shelfType
+}) {
+  const resolvedShelfType = resolveWallMountedShelfType({
+    wallMountedShelfType: shelfType,
+    supportedTypes: Object.keys(productByType || {})
+  });
+  if (!productByType[resolvedShelfType]) {
+    console.warn("[wall-mounted-v2] singleRail not added: linked shelf type unavailable", {
+      rejectReason: "wallMountedRailMissingShelf",
+      shelfType: resolvedShelfType
+    });
+    return current;
+  }
+  const railId = makeUniquePlacementId(placement.id, current.placements);
+  const railHeight = findWallMountedRailHeight({
+    desiredHeight: placement.heightFromFloor,
+    placement,
+    placements: current.placements,
+    productByType,
+    roomHeight
+  });
+  if (railHeight == null) {
+    console.warn("[wall-mounted-v2] singleRail not added: no clear rail height in this bay", {
+      rejectReason: "wallMountedRailCollision",
+      wallId: placement.wallId,
+      bayIndex: placement.bayIndex
+    });
+    return current;
+  }
+  const linkedShelfId = `${railId}:linked-shelf`;
+  const created = createWallMountedRailWithShelfPlacement({
+    rail: { ...placement, id: railId, heightFromFloor: railHeight },
+    shelf: {
+      id: linkedShelfId,
+      color: pickColor(resolvedShelfType, current),
+      quantity: 1,
+      autoGenerated: true,
+      heightLocked: true,
+      linkedWallMountedShelf: true,
+      linkedRailId: railId,
+      linkedRailIds: [railId]
+    },
+    shelfType: resolvedShelfType,
+    dependencyId: `manual:${railId}`
+  });
+  const rail = created.railPlacement;
+
+  const sameBayShelves = current.placements.filter((item) => (
+    item.wallId === rail.wallId
+    && Number(item.bayIndex) === Number(rail.bayIndex)
+    && ["woodShelf", "glassShelf"].includes(item.componentType)
+  ));
+  const linkedShelves = sameBayShelves.filter((item) => item.linkedWallMountedShelf);
+  const suitableShelf = [...(linkedShelves.length ? linkedShelves : sameBayShelves)]
+    .filter((item) => isSuitableWallMountedRailShelf(item, rail))
+    .sort((a, b) => Number(a.heightFromFloor) - Number(b.heightFromFloor))[0];
+
+  if (suitableShelf) {
+    const linkedRailIds = uniquePlacementIds([
+      ...(Array.isArray(suitableShelf.linkedRailIds) ? suitableShelf.linkedRailIds : []),
+      suitableShelf.linkedRailId,
+      rail.id
+    ]);
+    rail.linkedShelfId = suitableShelf.id;
+    return {
+      ...current,
+      selectedPlacementId: rail.id,
+      placements: [
+        ...current.placements.map((item) => item.id === suitableShelf.id
+          ? {
+            ...item,
+            linkedRailId: linkedRailIds[0],
+            linkedRailIds,
+            linkedWallMountedShelf: true,
+            heightLocked: true
+          }
+          : item),
+        rail
+      ]
+    };
+  }
+
+  const shelfHeight = findWallMountedLinkedShelfHeight({
+    rail,
+    placements: current.placements,
+    productByType,
+    roomHeight,
+    shelfType: resolvedShelfType
+  });
+  if (shelfHeight == null) {
+    console.warn("[wall-mounted-v2] singleRail not added: no usable linked shelf position", {
+      rejectReason: "wallMountedRailMissingShelf",
+      wallId: rail.wallId,
+      bayIndex: rail.bayIndex,
+      railHeight: rail.heightFromFloor
+    });
+    return current;
+  }
+
+  const linkedShelf = {
+    ...created.linkedShelfPlacement,
+    heightFromFloor: shelfHeight,
+  };
+  rail.linkedShelfId = linkedShelfId;
+  return {
+    ...current,
+    selectedPlacementId: rail.id,
+    placements: [...current.placements, rail, linkedShelf]
+  };
+}
+
+function updateWallMountedLinkedPlacement({ current, id, patch, productByType, roomHeight }) {
+  const target = current.placements.find((placement) => placement.id === id);
+  if (!target) return current;
+  const geometryKeys = ["heightFromFloor", "wallId", "bayIndex"];
+  if (target.linkedWallMountedShelf && geometryKeys.some((key) => Object.hasOwn(patch, key))) {
+    console.warn("[wall-mounted-v2] linked shelf position is controlled by its rail", {
+      shelfId: target.id,
+      linkedRailId: target.linkedRailId
+    });
+    return current;
+  }
+  if (target.componentType !== "singleRail" || !target.linkedShelfId) {
+    return {
+      ...current,
+      placements: current.placements.map((placement) => placement.id === id
+        ? { ...placement, ...patch }
+        : placement)
+    };
+  }
+
+  const linkedShelf = current.placements.find((placement) => placement.id === target.linkedShelfId);
+  if (!linkedShelf) {
+    console.warn("[wall-mounted-v2] singleRail update rejected: linked shelf missing", {
+      rejectReason: "wallMountedRailMissingShelf",
+      railId: target.id
+    });
+    return current;
+  }
+  const updatedRail = { ...target, ...patch };
+  const geometryChanged = geometryKeys.some((key) => Object.hasOwn(patch, key));
+  if (!geometryChanged) {
+    return {
+      ...current,
+      placements: current.placements.map((placement) => placement.id === id ? updatedRail : placement)
+    };
+  }
+  const railOffset = getWallMountedRailOffsetPosition({
+    id: updatedRail.wallId,
+    axis: updatedRail.wallId === "back" ? "X" : "Z"
+  });
+  Object.assign(updatedRail, {
+    distanceFromWall: WALL_MOUNTED_PLACEMENT_RULES.railDistanceFromWallMm,
+    wallMountedOffsetPosition: railOffset
+  });
+  const placementsWithoutPair = current.placements.filter((placement) => (
+    placement.id !== target.id && placement.id !== linkedShelf.id
+  ));
+  if (hasWallMountedPlacementCollision(placementsWithoutPair, updatedRail, productByType)) {
+    console.warn("[wall-mounted-v2] singleRail update rejected: rail position overlaps another component", {
+      railId: target.id
+    });
+    return current;
+  }
+  const shelfHeight = findWallMountedLinkedShelfHeight({
+    rail: updatedRail,
+    placements: placementsWithoutPair,
+    productByType,
+    roomHeight,
+    shelfType: linkedShelf.componentType
+  });
+  if (shelfHeight == null) {
+    console.warn("[wall-mounted-v2] singleRail update rejected: linked shelf cannot be repositioned", {
+      rejectReason: "wallMountedRailMissingShelf",
+      railId: target.id
+    });
+    return current;
+  }
+  const updatedShelf = {
+    ...linkedShelf,
+    wallId: updatedRail.wallId,
+    bayIndex: updatedRail.bayIndex,
+    heightFromFloor: shelfHeight
+  };
+  delete updatedShelf.distanceFromWall;
+  delete updatedShelf.wallMountedOffsetPosition;
+  return {
+    ...current,
+    placements: current.placements.map((placement) => {
+      if (placement.id === updatedRail.id) return updatedRail;
+      if (placement.id === updatedShelf.id) return updatedShelf;
+      return placement;
+    })
+  };
+}
+
+function removeWallMountedLinkedPlacement(current, id) {
+  const target = current.placements.find((placement) => placement.id === id);
+  if (!target) return current;
+  const removedIds = new Set([target.id]);
+  let placements = current.placements;
+
+  if (target.componentType === "singleRail" && target.linkedShelfId) {
+    const shelf = placements.find((placement) => placement.id === target.linkedShelfId);
+    if (shelf) {
+      const remainingRailIds = uniquePlacementIds([
+        ...(Array.isArray(shelf.linkedRailIds) ? shelf.linkedRailIds : []),
+        shelf.linkedRailId
+      ]).filter((railId) => railId !== target.id);
+      if (remainingRailIds.length) {
+        placements = placements.map((placement) => placement.id === shelf.id
+          ? { ...placement, linkedRailId: remainingRailIds[0], linkedRailIds: remainingRailIds }
+          : placement);
+      } else {
+        removedIds.add(shelf.id);
+      }
+    }
+  } else if (target.linkedWallMountedShelf) {
+    const linkedRailIds = uniquePlacementIds([
+      ...(Array.isArray(target.linkedRailIds) ? target.linkedRailIds : []),
+      target.linkedRailId,
+      ...placements.filter((placement) => placement.linkedShelfId === target.id)
+        .map((placement) => placement.id)
+    ]);
+    linkedRailIds.forEach((railId) => removedIds.add(railId));
+  }
+
+  return {
+    ...current,
+    selectedPlacementId: removedIds.has(current.selectedPlacementId)
+      ? ""
+      : current.selectedPlacementId,
+    placements: placements.filter((placement) => !removedIds.has(placement.id))
+  };
+}
+
+function findWallMountedRailHeight({
+  desiredHeight,
+  placement,
+  placements,
+  productByType,
+  roomHeight
+}) {
+  const candidates = uniquePlacementIds([
+    Number(desiredHeight),
+    ...WALL_MOUNTED_PLACEMENT_RULES.manualRailHeightCandidates
+  ]).map(Number);
+  const railHeight = getWallMountedComponentHeight("singleRail", productByType);
+  for (const heightFromFloor of candidates) {
+    if (!Number.isFinite(heightFromFloor)
+      || heightFromFloor < 0
+      || heightFromFloor + railHeight > Number(roomHeight || 0)) continue;
+    const candidate = { ...placement, heightFromFloor };
+    if (hasWallMountedPlacementCollision(placements, candidate, productByType)) continue;
+    if (!hasWallMountedRailVerticalClearance(placements, candidate, productByType)) continue;
+    return heightFromFloor;
+  }
+  return null;
+}
+
+function hasWallMountedRailVerticalClearance(placements, candidate, productByType) {
+  const candidateInterval = getWallMountedPlacementInterval(candidate, productByType);
+  return placements
+    .filter((placement) => placement.componentType === "singleRail"
+      && placement.wallId === candidate.wallId
+      && Number(placement.bayIndex) === Number(candidate.bayIndex))
+    .every((placement) => {
+      const interval = getWallMountedPlacementInterval(placement, productByType);
+      const clearGap = candidateInterval.bottom >= interval.top
+        ? candidateInterval.bottom - interval.top
+        : interval.bottom >= candidateInterval.top
+          ? interval.bottom - candidateInterval.top
+          : -1;
+      return clearGap >= WALL_MOUNTED_PLACEMENT_RULES.railMinVerticalClearanceMm;
+    });
+}
+
+function findWallMountedLinkedShelfHeight({
+  rail,
+  placements,
+  productByType,
+  roomHeight,
+  shelfType
+}) {
+  const railHeight = Number(rail.heightFromFloor || 0);
+  const shelfHeight = getWallMountedComponentHeight(shelfType, productByType);
+  const maxHeight = Number(roomHeight || 0) - shelfHeight;
+  const offsets = [
+    WALL_MOUNTED_PLACEMENT_RULES.railTopOffsetMm,
+    WALL_MOUNTED_PLACEMENT_RULES.railTopOffsetMm + WALL_MOUNTED_PLACEMENT_RULES.contactToleranceMm
+  ];
+  for (const offset of offsets) {
+    const heightFromFloor = Math.round((railHeight + offset) / 10) * 10;
+    if (heightFromFloor <= railHeight || heightFromFloor > maxHeight) continue;
+    const candidate = {
+      wallId: rail.wallId,
+      bayIndex: rail.bayIndex,
+      componentType: shelfType,
+      heightFromFloor
+    };
+    if (!hasWallMountedPlacementCollision(placements, candidate, productByType)) {
+      return heightFromFloor;
+    }
+  }
+  return null;
+}
+
+function hasWallMountedPlacementCollision(placements, candidate, productByType) {
+  const candidateInterval = getWallMountedPlacementInterval(candidate, productByType);
+  const clearance = 20;
+  return placements.some((placement) => {
+    if (placement.wallId !== candidate.wallId
+      || Number(placement.bayIndex) !== Number(candidate.bayIndex)
+      || placement.id === candidate.id) return false;
+    const interval = getWallMountedPlacementInterval(placement, productByType);
+    return candidateInterval.bottom < interval.top + clearance
+      && candidateInterval.top > interval.bottom - clearance;
+  });
+}
+
+function getWallMountedPlacementInterval(placement, productByType) {
+  const heightFromFloor = Number(placement.heightFromFloor || 0);
+  const componentHeight = getWallMountedComponentHeight(placement.componentType, productByType);
+  return { bottom: heightFromFloor, top: heightFromFloor + componentHeight };
+}
+
+function getWallMountedComponentHeight(componentType, productByType) {
+  const product = productByType?.[componentType];
+  const productHeight = Number(product?.heightRule ?? product?.height);
+  if (Number.isFinite(productHeight) && productHeight > 0) return productHeight;
+  if (componentType === "singleRail" || componentType === "doubleRail") return 50;
+  if (componentType === "woodShelf" || componentType === "glassShelf") return 40;
+  return 100;
+}
+
+function isSuitableWallMountedRailShelf(shelf, rail) {
+  const gap = Number(shelf.heightFromFloor || 0) - Number(rail.heightFromFloor || 0);
+  const target = getWallMountedLinkedShelfHeight(rail.heightFromFloor) - Number(rail.heightFromFloor || 0);
+  return gap >= target && gap <= target + WALL_MOUNTED_PLACEMENT_RULES.contactToleranceMm;
+}
+
+function makeUniquePlacementId(preferredId, placements) {
+  const existingIds = new Set(placements.map((placement) => placement.id));
+  if (!existingIds.has(preferredId)) return preferredId;
+  let suffix = 1;
+  while (existingIds.has(`${preferredId}-${suffix}`)) suffix += 1;
+  return `${preferredId}-${suffix}`;
+}
+
+function uniquePlacementIds(ids) {
+  return [...new Set(ids.filter(Boolean))];
 }
 
 function clampValue(value, min, max) {

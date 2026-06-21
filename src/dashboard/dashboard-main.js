@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { dashboardProducts } from "./config/dashboardProducts.js?v=cache-20260617-01";
+import { dashboardProducts } from "./config/dashboardProducts.js?v=cache-20260621-02";
 
 const h = React.createElement;
 

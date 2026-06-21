@@ -5,7 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="璞舍高定空间顾问" />
     <title>璞舍高定空间顾问</title>
-    <link rel="stylesheet" href="/src/ai-planner/ai-planner.css?v=cache-20260617-01" />
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://127.0.0.1:8080/ai-planner/");
+      }
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "three": "https://esm.sh/three@0.165.0",
+          "three/addons/": "https://esm.sh/three@0.165.0/examples/jsm/",
+          "xlsx": "https://esm.sh/xlsx@0.18.5"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="/src/ai-planner/ai-planner.css?v=plan-card-visibility-20260621-01" />
   </head>
   <body>
     <main class="planner-shell">
@@ -39,6 +55,6 @@
         <p>PURENEST PERSONAL SPACE CONSULTANT</p>
       </footer>
     </main>
-    <script type="module" src="/src/ai-planner/ai-planner.js?v=cache-20260617-01"></script>
+    <script type="module" src="/src/ai-planner/ai-planner.js?v=cache-20260621-02"></script>
   </body>
 </html>

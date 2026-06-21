@@ -2,10 +2,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=cache-20260617-01";
-import { resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260617-01";
-import { theme } from "./config/theme.js?v=cache-20260617-01";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=cache-20260617-01";
+import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=cache-20260621-02";
+import { resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260621-02";
+import { theme } from "./config/theme.js?v=cache-20260621-02";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=cache-20260621-02";
+import {
+  getWallMountedRailOffsetPosition
+} from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -33,7 +36,7 @@ const aluminumPostModelPaths = {
 
 console.log("[scene.js]", sceneTransformVersion);
 
-export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement }) {
+export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement, readOnly = false, previewMode = "" }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const renderIdRef = useRef(0);
@@ -46,26 +49,47 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
   useEffect(() => {
     const mount = mountRef.current;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(theme.colors.subtle);
+    const isAiPlannerPreview = previewMode === "ai-planner";
+    scene.background = new THREE.Color(isAiPlannerPreview ? 0xeeeae2 : theme.colors.subtle);
 
-    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
-    camera.position.set(4.8, 3.5, 5.2);
+    const camera = new THREE.PerspectiveCamera(isAiPlannerPreview ? 38 : 45, mount.clientWidth / mount.clientHeight, 0.1, 100);
+    if (previewMode === "ai-planner") {
+      camera.position.set(3.4, 2.6, 3.8);
+    } else {
+      camera.position.set(4.8, 3.5, 5.2);
+    }
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
+    if (isAiPlannerPreview) {
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.target.set(0, 1.25, 0);
+    controls.target.set(0, previewMode === "ai-planner" ? 1.45 : 1.25, 0);
+    if (isAiPlannerPreview) {
+      controls.minDistance = 1.2;
+      controls.maxDistance = 12;
+    }
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xb7aa9d, 2.8));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+    scene.add(new THREE.HemisphereLight(isAiPlannerPreview ? 0xfffbf3 : 0xffffff, 0xb7aa9d, isAiPlannerPreview ? 2.2 : 2.8));
+    const keyLight = new THREE.DirectionalLight(isAiPlannerPreview ? 0xfff4df : 0xffffff, isAiPlannerPreview ? 2.8 : 2.2);
     keyLight.position.set(3, 6, 5);
     keyLight.castShadow = true;
     scene.add(keyLight);
+
+    if (isAiPlannerPreview) {
+      const fillLight = new THREE.DirectionalLight(0xdce5ef, 1.25);
+      fillLight.position.set(-4, 3.5, 2);
+      scene.add(fillLight);
+    }
 
     sceneRef.current = { scene, camera, renderer, controls };
 
@@ -105,9 +129,11 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
       }
     };
 
-    renderer.domElement.addEventListener("dragover", handleDragOver);
-    renderer.domElement.addEventListener("drop", handleDrop);
-    renderer.domElement.addEventListener("click", handleClick);
+    if (!readOnly) {
+      renderer.domElement.addEventListener("dragover", handleDragOver);
+      renderer.domElement.addEventListener("drop", handleDrop);
+      renderer.domElement.addEventListener("click", handleClick);
+    }
 
     const resize = () => {
       camera.aspect = mount.clientWidth / mount.clientHeight;
@@ -127,22 +153,28 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
     return () => {
       cancelAnimationFrame(animationFrame);
       window.removeEventListener("resize", resize);
-      renderer.domElement.removeEventListener("dragover", handleDragOver);
-      renderer.domElement.removeEventListener("drop", handleDrop);
-      renderer.domElement.removeEventListener("click", handleClick);
+      if (!readOnly) {
+        renderer.domElement.removeEventListener("dragover", handleDragOver);
+        renderer.domElement.removeEventListener("drop", handleDrop);
+        renderer.domElement.removeEventListener("click", handleClick);
+      }
       renderer.dispose();
       mount.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [readOnly, previewMode]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
     const renderId = renderIdRef.current + 1;
     renderIdRef.current = renderId;
-    rebuildScene(sceneRef.current.scene, config, design, series, debug, selectedId, renderIdRef, () => {
-      sceneRef.current?.renderer.render(sceneRef.current.scene, sceneRef.current.camera);
+    rebuildScene(sceneRef.current.scene, config, design, series, debug, selectedId, renderIdRef, previewMode, () => {
+      const current = sceneRef.current;
+      if (current && previewMode === "ai-planner") {
+        fitAiPlannerCamera(current.camera, current.controls, current.scene.getObjectByName("design-root"));
+      }
+      current?.renderer.render(current.scene, current.camera);
     });
-  }, [config, design, series, debug, selectedId]);
+  }, [config, design, series, debug, selectedId, previewMode]);
 
   return h("div", { className: "three-mount", ref: mountRef, "aria-label": "3D preview" });
 }
@@ -179,7 +211,7 @@ function pickNearestBayTarget(event, scene, camera, domElement) {
   return nearest;
 }
 
-async function rebuildScene(scene, config, design, series, debug, selectedId, renderIdRef, requestRender) {
+async function rebuildScene(scene, config, design, series, debug, selectedId, renderIdRef, previewMode, requestRender) {
   const old = scene.getObjectByName("design-root");
   if (old) scene.remove(old);
 
@@ -240,7 +272,8 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
     roomHeight,
     seriesId,
     leftWallDepth,
-    rightWallDepth
+    rightWallDepth,
+    previewMode
   );
   for (const wall of design.activeWalls) {
     report.wallGenerationOrder.push(wall.id);
@@ -267,6 +300,27 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
 }
 
 function publishModelReport(report, status) {
+  const wallMountedRailShelfContacts = report.componentDimensions
+    .filter((component) => component.componentType === "singleRail"
+      && (component.linkedShelfId || component.shelfDependency?.dependencyId))
+    .map((rail) => {
+      const shelf = report.componentDimensions.find((component) => (
+        component.placementId === rail.linkedShelfId
+        || component.linkedRailDependencyId === rail.shelfDependency?.dependencyId
+      ));
+      if (!shelf) return {
+        railId: rail.placementId,
+        shelfId: rail.linkedShelfId || rail.shelfDependency?.dependencyId,
+        missingShelf: true
+      };
+      return {
+        railId: rail.placementId,
+        shelfId: shelf.placementId,
+        railTopY: rail.finalBoundingBox?.max?.y,
+        shelfBottomY: shelf.finalBoundingBox?.min?.y,
+        gap: Number(shelf.finalBoundingBox?.min?.y || 0) - Number(rail.finalBoundingBox?.max?.y || 0)
+      };
+    });
   const payload = {
     status,
     requested: Array.from(report.requested),
@@ -296,6 +350,7 @@ function publishModelReport(report, status) {
     aluminumBaseLedDiagnostics: report.aluminumBaseLedDiagnostics,
     wallMountedLedStripCount: report.wallMountedLedStripCount,
     wallMountedLedDiagnostics: report.wallMountedLedDiagnostics,
+    wallMountedRailShelfContacts,
     roomWallDiagnostics: report.roomWallDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
   };
@@ -303,19 +358,32 @@ function publishModelReport(report, status) {
   document.documentElement.setAttribute("data-model-report", JSON.stringify(payload));
 }
 
-function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, rightWallDepth = depth) {
-  const floorMat = new THREE.MeshStandardMaterial({ color: theme.colors.border, roughness: 0.85 });
-  const wallMat = new THREE.MeshStandardMaterial({ color: theme.colors.background, roughness: 0.9, transparent: true, opacity: 0.82 });
+function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, rightWallDepth = depth, previewMode = "") {
+  const isAiPlannerPreview = previewMode === "ai-planner";
+  const floorMat = new THREE.MeshStandardMaterial({
+    color: isAiPlannerPreview ? 0xd8d0c3 : theme.colors.border,
+    roughness: isAiPlannerPreview ? 0.96 : 0.85,
+    transparent: isAiPlannerPreview,
+    opacity: isAiPlannerPreview ? 0.58 : 1
+  });
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: isAiPlannerPreview ? 0xf6f4ef : theme.colors.background,
+    roughness: 0.9,
+    transparent: true,
+    opacity: isAiPlannerPreview ? 0.32 : 0.82
+  });
   const wallThickness = seriesId === "carbon-steel-post-wardrobe-v2" ? 0.06 : 0.04;
   const floorDepth = Math.max(depth, leftWallDepth, rightWallDepth);
   const floorCenterZ = (floorDepth - depth) / 2;
 
   const floor = box(width, wallThickness, floorDepth, floorMat);
+  floor.name = "Preview Room Floor";
   floor.position.set(0, -wallThickness / 2, floorCenterZ);
   floor.receiveShadow = true;
   root.add(floor);
 
   const backWall = box(width, height, wallThickness, wallMat);
+  backWall.name = "Preview Room Back Wall";
   const backWallCenterZ = seriesId === "aluminum-post-wardrobe"
     ? -depth / 2 - wallThickness / 2
     : seriesId === "carbon-steel-post-wardrobe-v2"
@@ -325,6 +393,7 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   root.add(backWall);
 
   const leftWall = box(wallThickness, height, leftWallDepth, wallMat);
+  leftWall.name = "Preview Room Left Wall";
   leftWall.position.set(
     -width / 2 - wallThickness / 2,
     height / 2,
@@ -333,6 +402,7 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   root.add(leftWall);
 
   const rightWall = box(wallThickness, height, rightWallDepth, wallMat);
+  rightWall.name = "Preview Room Right Wall";
   rightWall.position.set(
     width / 2 + wallThickness / 2,
     height / 2,
@@ -345,9 +415,11 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   const rightWallBox = new THREE.Box3().setFromObject(rightWall);
 
   const gridSize = Math.max(width, floorDepth);
-  const grid = new THREE.GridHelper(gridSize, 12, theme.colors.walnut, theme.colors.divider);
-  grid.position.set(0, 0.03, floorCenterZ);
-  root.add(grid);
+  if (!isAiPlannerPreview) {
+    const grid = new THREE.GridHelper(gridSize, 12, theme.colors.walnut, theme.colors.divider);
+    grid.position.set(0, 0.03, floorCenterZ);
+    root.add(grid);
+  }
 
   return {
     floor: {
@@ -379,6 +451,49 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   };
 }
 
+function fitAiPlannerCamera(camera, controls, root) {
+  const bounds = getAiPlannerPresentationBounds(root);
+  if (bounds.isEmpty()) return;
+  const size = bounds.getSize(new THREE.Vector3());
+  const center = bounds.getCenter(new THREE.Vector3());
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.35));
+  const verticalDistance = size.y / (2 * Math.tan(verticalFov / 2));
+  const horizontalDistance = size.x / (2 * Math.tan(horizontalFov / 2));
+  const distance = Math.max(verticalDistance, horizontalDistance, size.z * 1.4, 1.8) / 0.86;
+  const yaw = THREE.MathUtils.degToRad(38);
+  const target = new THREE.Vector3(center.x, Math.min(1.4, Math.max(1.05, center.y)), center.z);
+
+  camera.position.set(
+    target.x + Math.sin(yaw) * distance,
+    Math.min(1.65, Math.max(1.45, target.y + 0.24)),
+    target.z + Math.cos(yaw) * distance
+  );
+  camera.near = Math.max(0.05, distance / 100);
+  camera.far = Math.max(30, distance * 8);
+  camera.updateProjectionMatrix();
+  controls.target.copy(target);
+  controls.minDistance = Math.max(1.1, distance * 0.42);
+  controls.maxDistance = distance * 2.2;
+  controls.update();
+}
+
+function getAiPlannerPresentationBounds(root) {
+  const bounds = new THREE.Box3();
+  if (!root) return bounds;
+  root.updateMatrixWorld(true);
+  root.traverse((object) => {
+    if (!object.isMesh || !object.geometry || object.userData?.isBayDropTarget) return;
+    if (/^Preview Room /.test(object.name || "")) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    if (materials.every((material) => !material || material.visible === false || material.opacity === 0 || material.colorWrite === false)) return;
+    if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+    if (!object.geometry.boundingBox) return;
+    bounds.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));
+  });
+  return bounds;
+}
+
 async function addWallRun(
   root,
   wall,
@@ -396,6 +511,7 @@ async function addWallRun(
   modelTransforms
 ) {
   const group = new THREE.Group();
+  group.name = `wall-run-${wall.id}`;
   const isWallMountedV2 = series?.seriesId === "wall-mounted-v2";
   const length = meters(wall.length);
   const shelfDepth = meters(Number(config.shelfDepth) || 450);
@@ -1008,6 +1124,7 @@ async function addWallRun(
   });
 
   const wallPlacements = design.placements.filter((placement) => placement.wallId === wall.id);
+  const aluminumBaseWoodShelfSupportRegistry = new Set();
   const addWallPlacement = async (placement) => {
       const usesAdjustedAluminumBaseBay = aluminumBaseAdjustedPostIndexes.has(placement.bayIndex)
         || aluminumBaseAdjustedPostIndexes.has(placement.bayIndex + 1);
@@ -1133,7 +1250,8 @@ async function addWallRun(
         modelTransforms,
         cuttingRules,
         aluminumComponentPostEdges,
-        carbonComponentPostEdges
+        carbonComponentPostEdges,
+        aluminumBaseWoodShelfSupportRegistry
       );
   };
   if (series?.seriesId === "aluminum-base-supported") {
@@ -1335,7 +1453,8 @@ async function addPlacement(
   modelTransforms,
   cuttingRules,
   aluminumComponentPostEdges = null,
-  carbonComponentPostEdges = null
+  carbonComponentPostEdges = null,
+  aluminumBaseWoodShelfSupportRegistry = null
 ) {
   const y = meters(placement.heightFromFloor);
   const product = design.productBySku[placement.productSku] || design.productByType[placement.componentType];
@@ -1422,6 +1541,17 @@ async function addPlacement(
   }
   group.add(model);
   group.updateMatrixWorld(true);
+  const hasWallMountedDistance = series?.seriesId === "wall-mounted-v2"
+    && Number.isFinite(Number(placement.distanceFromWall));
+  const wallMountedOffsetPosition = hasWallMountedDistance
+    ? getWallMountedRailOffsetPosition({
+      id: wall?.id,
+      axis: wall?.id === "back" ? "X" : "Z"
+    }, Number(placement.distanceFromWall))
+    : null;
+  const wallMountedWorldAnchor = wallMountedOffsetPosition
+    ? group.localToWorld(new THREE.Vector3(x, y, 0))
+    : null;
   model.updateMatrixWorld(true);
   let wallMountedComponentDepthAdjustment = null;
   if (
@@ -1579,9 +1709,36 @@ async function addPlacement(
       wall,
       meters(Number(design.room?.width) || 0),
       meters(Number(design.room?.depth) || 0),
-      Number(modelTransforms.componentWallClearanceMm) || 0
+      placement.componentType === "backPanel"
+        ? 20
+        : Number(modelTransforms.componentWallClearanceMm) || 0
     )
     : null;
+  const wallMountedDistanceAdjustment = series?.seriesId === "wall-mounted-v2"
+    && Number.isFinite(Number(placement.distanceFromWall))
+    ? alignWallMountedPlacementDistanceFromWall(
+      model,
+      group,
+      wall,
+      design.room,
+      Number(placement.distanceFromWall)
+    )
+    : null;
+  const wallMountedLinkedShelfVerticalAdjustment = series?.seriesId === "wall-mounted-v2"
+    && (placement.linkedWallMountedShelf || placement.isLinkedRailShelf)
+    ? alignWallMountedLinkedShelfToRail(model, group, placement)
+    : null;
+  const aluminumBaseWoodShelfSupportAdjustment =
+    series?.seriesId === "aluminum-base-supported"
+    && placement.componentType === "woodShelf"
+    && aluminumBaseWoodShelfSupportRegistry
+      ? dedupeAluminumBaseWoodShelfSupports(
+        model,
+        group,
+        placement,
+        aluminumBaseWoodShelfSupportRegistry
+      )
+      : null;
   const wallMountedLedDiagnostic = series?.seriesId === "wall-mounted-v2"
     && ["woodShelf", "shoeShelf", "glassShelf"].includes(placement.componentType)
     ? addWallMountedShelfLedStrips(
@@ -1631,7 +1788,18 @@ async function addPlacement(
     alignMode: transform.alignMode,
     offsetX: transform.offsetX || 0,
     offsetZ: transform.offsetZ || 0,
-    anchor: transform.anchor
+    anchor: transform.anchor,
+    distanceFromWall: placement.distanceFromWall,
+    linkedShelfId: placement.linkedShelfId || null,
+    linkedRailId: placement.linkedRailId || null,
+    linkedRailDependencyId: placement.linkedRailDependencyId || null,
+    shelfDependency: placement.shelfDependency || null,
+    wallMountedOffsetPosition,
+    wallMountedWorldAnchor: wallMountedWorldAnchor ? {
+      x: toMm(wallMountedWorldAnchor.x),
+      y: toMm(wallMountedWorldAnchor.y),
+      z: toMm(wallMountedWorldAnchor.z)
+    } : null
   };
   if (
     series?.seriesId === "wall-mounted-v2"
@@ -1644,6 +1812,9 @@ async function addPlacement(
       Number(placement.bayIndex) === getSideBackCornerBayIndex(wall);
   }
   const finalBoundingBox = new THREE.Box3().setFromObject(model);
+  const wallMountedActualDistanceFromWall = series?.seriesId === "wall-mounted-v2"
+    ? getWallMountedActualDistanceFromWall(finalBoundingBox, wall, design.room)
+    : null;
   report.componentDimensions.push({
     placementId: placement.id,
     componentType: placement.componentType,
@@ -1664,12 +1835,23 @@ async function addPlacement(
     usesSideWallPostInnerWidth: usesCarbonPostInnerWidthCompensation,
     aluminumPostInnerEdgeAdjustment,
     aluminumBaseWoodShelfBoardAdjustment,
+    aluminumBaseWoodShelfSupportAdjustment,
     aluminumBaseWallAdjustment,
     wallMountedSupportColorAdjustment,
     wallMountedLedDiagnostic,
     wallMountedComponentDepthAdjustment,
     wallMountedSideBackPanelAdjustment,
     wallMountedBackPanelDepthAdjustment,
+    wallMountedDistanceAdjustment,
+    wallMountedLinkedShelfVerticalAdjustment,
+    wallMountedActualDistanceFromWall,
+    distanceFromWall: placement.distanceFromWall,
+    wallMountedOffsetPosition,
+    wallMountedWorldAnchor: model.userData.wallMountedWorldAnchor,
+    shelfDependency: placement.shelfDependency || null,
+    linkedShelfId: placement.linkedShelfId || null,
+    linkedRailId: placement.linkedRailId || null,
+    linkedRailDependencyId: placement.linkedRailDependencyId || null,
     originalBoundingBoxWidth: model.userData.originalBoundingBoxWidth,
     finalBoundingBoxWidth: toMm(actualWidth),
     actualDisplayWidth: toMm(actualWidth),
@@ -2064,6 +2246,7 @@ function alignAluminumBaseComponentToWall(
 
 function usesAluminumBaseComponentWallAlignment(componentType) {
   return [
+    "backPanel",
     "woodShelf",
     "glassShelf",
     "singleRail",
@@ -2364,6 +2547,8 @@ async function createModelOrMissing(product, series, report, targetSize, label, 
     const effectiveTransform = componentType === "post"
       ? series?.seriesId === "aluminum-post-wardrobe"
         ? { ...transform, resizeMode: "stretchHeightOnly", scaleAxis: "y" }
+        : series?.seriesId === "aluminum-base-supported"
+          ? { ...transform, resizeMode: "stretchHeightOnly", scaleAxis: "y" }
         : series?.seriesId === "carbon-steel-post-wardrobe-v2"
           ? transform
           : { ...transform, resizeMode: "stretchXYZ", scaleAxis: "y" }
@@ -2884,6 +3069,52 @@ function findAluminumBaseShelfSupportMeshes(model, group) {
       - b.localBox.getCenter(new THREE.Vector3()).x);
 }
 
+function dedupeAluminumBaseWoodShelfSupports(model, group, placement, registry) {
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const supports = findAluminumBaseShelfSupportMeshes(model, group);
+  const componentBox = getObjectBoxRelativeTo(model, group);
+  if (componentBox.isEmpty()) return null;
+  const componentCenterX = componentBox.getCenter(new THREE.Vector3()).x;
+  const kept = [];
+  const removed = [];
+
+  supports.forEach((support) => {
+    const supportCenterX = support.localBox.getCenter(new THREE.Vector3()).x;
+    const side = supportCenterX < componentCenterX ? "left" : "right";
+    const postIndex = Number(placement.bayIndex) + (side === "right" ? 1 : 0);
+    const key = `${placement.wallId}:${postIndex}:${Math.round(Number(placement.heightFromFloor) || 0)}`;
+    const diagnostic = {
+      key,
+      side,
+      postIndex,
+      meshName: support.mesh.name || "",
+      materialNames: support.materialNames,
+      materialColors: (Array.isArray(support.mesh.material)
+        ? support.mesh.material
+        : [support.mesh.material])
+        .map((material) => material?.color ? `#${material.color.getHexString()}` : null),
+      worldBBox: serializeBox(support.worldBox)
+    };
+    if (registry.has(key)) {
+      support.mesh.parent?.remove(support.mesh);
+      removed.push(diagnostic);
+    } else {
+      registry.add(key);
+      kept.push(diagnostic);
+    }
+  });
+
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  return {
+    keptCount: kept.length,
+    removedCount: removed.length,
+    kept,
+    removed
+  };
+}
+
 function addAluminumBaseShelfLedStrip(
   model,
   group,
@@ -3064,6 +3295,74 @@ function translateObjectByWorldDelta(object, relativeTo, deltaX, deltaY = 0, del
   object.position.add(localShifted.sub(localOrigin));
 }
 
+function alignWallMountedLinkedShelfToRail(shelfModel, group, placement) {
+  const railModel = group.children.find((child) => {
+    if (placement.linkedRailId && child.userData?.placementId === placement.linkedRailId) return true;
+    return placement.linkedRailDependencyId
+      && child.userData?.shelfDependency?.dependencyId === placement.linkedRailDependencyId;
+  });
+  if (!railModel) return { missingRail: true };
+  group.updateMatrixWorld(true);
+  railModel.updateMatrixWorld(true);
+  shelfModel.updateMatrixWorld(true);
+  const railBox = new THREE.Box3().setFromObject(railModel);
+  const shelfBoxBefore = new THREE.Box3().setFromObject(shelfModel);
+  const deltaY = railBox.max.y - shelfBoxBefore.min.y;
+  if (Number.isFinite(deltaY) && Math.abs(deltaY) > 1e-12) {
+    translateObjectByWorldDelta(shelfModel, group, 0, deltaY, 0);
+    group.updateMatrixWorld(true);
+    shelfModel.updateMatrixWorld(true);
+  }
+  const shelfBoxAfter = new THREE.Box3().setFromObject(shelfModel);
+  return {
+    railId: railModel.userData?.placementId || null,
+    railTopY: toMm(railBox.max.y),
+    shelfBottomYBefore: toMm(shelfBoxBefore.min.y),
+    shelfBottomYAfter: toMm(shelfBoxAfter.min.y),
+    deltaY: toMm(deltaY),
+    finalGap: toMm(shelfBoxAfter.min.y - railBox.max.y)
+  };
+}
+
+function alignWallMountedPlacementDistanceFromWall(model, group, wall, room, targetDistanceMm) {
+  group.updateMatrixWorld(true);
+  model.updateMatrixWorld(true);
+  const beforeBox = new THREE.Box3().setFromObject(model);
+  const beforeDistance = getWallMountedActualDistanceFromWall(beforeBox, wall, room);
+  if (!Number.isFinite(beforeDistance)) return null;
+  const deltaMm = Number(targetDistanceMm) - beforeDistance;
+  const delta = meters(deltaMm);
+  let deltaWorldX = 0;
+  let deltaWorldZ = 0;
+  if (wall.id === "back") deltaWorldZ = delta;
+  if (wall.id === "left") deltaWorldX = delta;
+  if (wall.id === "right") deltaWorldX = -delta;
+  if (Math.abs(deltaWorldX) > 1e-12 || Math.abs(deltaWorldZ) > 1e-12) {
+    translateObjectByWorldDelta(model, group, deltaWorldX, 0, deltaWorldZ);
+    group.updateMatrixWorld(true);
+    model.updateMatrixWorld(true);
+  }
+  const afterBox = new THREE.Box3().setFromObject(model);
+  return {
+    wallId: wall.id,
+    targetDistanceFromWall: Number(targetDistanceMm),
+    distanceBefore: beforeDistance,
+    distanceAfter: getWallMountedActualDistanceFromWall(afterBox, wall, room),
+    deltaWorldX: toMm(deltaWorldX),
+    deltaWorldZ: toMm(deltaWorldZ)
+  };
+}
+
+function getWallMountedActualDistanceFromWall(worldBox, wall, room = {}) {
+  if (!worldBox || worldBox.isEmpty() || !wall?.id) return null;
+  const roomWidth = meters(Number(room.width) || 0);
+  const roomDepth = meters(Number(room.depth) || 0);
+  if (wall.id === "back") return toMm(worldBox.min.z - (-roomDepth / 2));
+  if (wall.id === "left") return toMm(worldBox.min.x - (-roomWidth / 2));
+  if (wall.id === "right") return toMm(roomWidth / 2 - worldBox.max.x);
+  return null;
+}
+
 function serializeVectorMm(vector) {
   return {
     x: toMm(vector.x),
@@ -3102,6 +3401,8 @@ function applyPlacementColor(object, componentType, frameColor, modelTransforms,
       ? (material) => /^P(?:ly|lay)wood_01_1k$/i.test(material.name || "")
       : seriesId === "aluminum-post-wardrobe"
       ? (material) => !/^Metal_06_1k$/i.test(material.name || "")
+      : seriesId === "aluminum-base-supported" && componentType === "woodShelf"
+        ? (material) => !/(?:metal(?:_06)?|\[Color M07\]|灰色支撑件)/i.test(material.name || "")
       : null;
     applyModelColor(object, theme.colors.woodBrown, { metalness: 0, roughness: 0.58 }, materialFilter);
     if (seriesId === "carbon-steel-post-wardrobe-v2") {
@@ -3110,6 +3411,14 @@ function applyPlacementColor(object, componentType, frameColor, modelTransforms,
         getFrameColor(frameColor),
         { metalness: 0.45, roughness: 0.32 },
         (material) => /^Metal_06_1K$/i.test(material.name || "")
+      );
+    }
+    if (seriesId === "aluminum-base-supported" && componentType === "woodShelf") {
+      applyModelColor(
+        object,
+        getFrameColor(frameColor),
+        { metalness: 0.55, roughness: 0.28 },
+        (material) => /(?:metal(?:_06)?|\[Color M07\]|灰色支撑件)/i.test(material.name || "")
       );
     }
   }

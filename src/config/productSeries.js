@@ -1,4 +1,4 @@
-import { getSeriesConfig } from "../series/index.js?v=cache-20260617-01";
+import { getSeriesConfig } from "../series/index.js?v=cache-20260621-02";
 
 export const assetCacheVersion = "20260617";
 

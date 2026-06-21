@@ -1,4 +1,9 @@
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=cache-20260617-01";
+import {
+  PLANNER_COMPONENT_MAP,
+  WALL_MOUNTED_PLACEMENT_RULES,
+  createWallMountedRailWithShelfPlacement
+} from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=cache-20260621-02";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -38,6 +43,51 @@ export function createInitialConfig() {
   };
 }
 
+export function createConfigFromPlannerPreset(preset, baseConfig = createInitialConfig(), data = {}) {
+  const configPreset = preset?.configPreset || {};
+  const seriesId = data?.series?.seriesId || configPreset.productSystemId || DEFAULT_SERIES_ID;
+  const cuttingRules = getCuttingRules(seriesId, data) || defaultCuttingRules;
+  const productByType = Array.isArray(data.products)
+    ? data.products.reduce((map, product) => {
+      if (!map[product.type]) map[product.type] = product;
+      return map;
+    }, {})
+    : {};
+  const componentTypes = new Set(cuttingRules.componentTypes || []);
+  const room = {
+    width: Number(configPreset.roomWidth) || baseConfig.room?.width || 3600,
+    depth: Number(configPreset.roomDepth) || baseConfig.room?.depth || 2800,
+    height: Number(configPreset.roomHeight) || baseConfig.room?.height || 2700
+  };
+  const layout = mapPlannerLayout(configPreset.layoutType);
+  const walls = createPlannerWalls(baseConfig, room, layout, cuttingRules, configPreset);
+  const configWithRoom = syncWallLengthsWithRoom({
+    ...baseConfig,
+    room,
+    layout,
+    leftWallLength: room.depth,
+    rightWallLength: room.depth,
+    walls,
+    placements: [],
+    selectedPlacementId: "",
+    ...(seriesId === "wall-mounted-v2" ? { wallOffset: 250 } : {}),
+    ...(typeof configPreset.lighting === "boolean" ? { led: configPreset.lighting } : {})
+  }, room);
+  const placements = createPlannerPlacements({
+    configPreset,
+    seriesId,
+    cuttingRules,
+    productByType,
+    componentTypes,
+    walls: configWithRoom.walls
+  });
+  return {
+    ...configWithRoom,
+    placements,
+    selectedPlacementId: placements[0]?.id || ""
+  };
+}
+
 export function applyLayout(config, layout) {
   const walls = {
     ...config.walls,
@@ -46,6 +96,715 @@ export function applyLayout(config, layout) {
     right: { ...config.walls.right, enabled: layout === "L-right" || layout === "U" }
   };
   return prunePlacements({ ...config, layout, walls });
+}
+
+function mapPlannerLayout(layoutType) {
+  if (layoutType === "U型") return "U";
+  if (layoutType === "L型") return "L-left";
+  return "I";
+}
+
+function createPlannerWalls(baseConfig, room, layout, cuttingRules, configPreset = {}) {
+  const requestedBayCount = Number(configPreset.bayCount);
+  const backBayCount = Number.isInteger(requestedBayCount) && requestedBayCount > 0
+    ? requestedBayCount
+    : recommendBayCount(room.width, cuttingRules);
+  const sideBayCount = recommendBayCount(room.depth, cuttingRules);
+  return {
+    back: {
+      ...(baseConfig.walls?.back || {}),
+      enabled: true,
+      length: room.width,
+      bayCount: backBayCount,
+      bayWidths: []
+    },
+    left: {
+      ...(baseConfig.walls?.left || {}),
+      enabled: layout === "L-left" || layout === "U",
+      length: room.depth,
+      bayCount: sideBayCount,
+      bayWidths: []
+    },
+    right: {
+      ...(baseConfig.walls?.right || {}),
+      enabled: layout === "U",
+      length: room.depth,
+      bayCount: sideBayCount,
+      bayWidths: []
+    }
+  };
+}
+
+function createPlannerPlacements({ configPreset, seriesId, cuttingRules, productByType, componentTypes, walls }) {
+  const map = PLANNER_COMPONENT_MAP[seriesId] || {};
+  const wallId = "back";
+  const bayCount = Math.max(1, Number(walls?.back?.bayCount || 1));
+  const placements = [];
+  const bayStates = createPlannerBayStates(walls, cuttingRules);
+  const zoneRequirements = Array.isArray(configPreset.zoneRequirements) ? configPreset.zoneRequirements : [];
+  const context = {
+    seriesId,
+    map,
+    wallId,
+    bayCount,
+    placements,
+    componentTypes,
+    productByType,
+    cuttingRules,
+    planType: configPreset.planType || "basic",
+    roomHeight: Number(configPreset.roomHeight) || 2700,
+    maxExclusiveBays: Math.max(1, bayStates.length - 1),
+    bayStates,
+    zoneRequirements,
+    wallMountedRailDependencies: Array.isArray(configPreset.wallMountedRailDependencies)
+      ? configPreset.wallMountedRailDependencies
+      : [],
+    componentCounts: {},
+    experienceComponentCount: 0
+  };
+  if (zoneRequirements.length) {
+    [...zoneRequirements]
+      .sort((a, b) => getPlannerRequirementPriority(context, a) - getPlannerRequirementPriority(context, b))
+      .forEach((requirement) => {
+      const candidates = [
+        ...(requirement.zoneType === "shoeZone" ? ["shoeShelf", "shoesShelf"] : []),
+        requirement.preferredComponent,
+        ...(Array.isArray(requirement.allowedComponents) ? requirement.allowedComponents : [])
+      ].filter((type, index, list) => type && type !== "NONE" && list.indexOf(type) === index);
+      if (requirement.preferredComponent === "NONE" || requirement.zoneType === "luggageZone") {
+        reservePlannerBay(context, requirement.zoneType);
+        return;
+      }
+      const componentType = candidates.find((type) => isPlannerComponentAllowed(context, type)
+        && componentTypes.has(type) && productByType[type]);
+      if (!componentType) {
+        if (candidates.length) {
+          console.warn("[ai-planner preset] no supported component for zone", {
+            zoneType: requirement.zoneType,
+            candidates,
+            seriesId
+          });
+        }
+        return;
+      }
+      addZonePlannerPlacements(context, requirement, componentType);
+    });
+    addPremiumUpgradeCabinets(context);
+    return placements;
+  }
+  const demandRatios = configPreset.demandRatios || {};
+  const shelfCount = Number.isFinite(Number(configPreset.shelves))
+    ? Number(configPreset.shelves)
+    : getPlannerShelfCount(configPreset.shelfLevel, bayCount, demandRatios);
+  const hangingRodCount = getPlannerHangingRodCount(configPreset, demandRatios);
+
+  addPlannerPlacementGroup(context, "shelf", shelfCount, [1800, 1200, 600]);
+  addPlannerPlacementGroup(context, "hangingRod", hangingRodCount, [1600]);
+  addPlannerPlacementGroup(context, "cabinet", Number(configPreset.cabinets || 0), [300]);
+  addPlannerPlacementGroup(context, "drawer", Number(configPreset.drawers || 0), [300]);
+  addPlannerPlacementGroup(context, "glassShelf", Number(configPreset.glassShelves || 0), [1400, 1700]);
+  addPlannerPlacementGroup(context, "jewelryBox", configPreset.jewelryBox ? 1 : 0, [900]);
+  addPlannerPlacementGroup(context, "trouserRack", configPreset.trouserRack ? 1 : 0, [800]);
+
+  return placements;
+}
+
+function addPremiumUpgradeCabinets(context) {
+  if (context.planType !== "premium" || !context.componentTypes.has("cabinet") || !context.productByType.cabinet) return;
+  const targetCount = 2;
+  const requirement = {
+    zoneType: "storageZone",
+    heightFromFloor: 0
+  };
+  for (let index = Number(context.componentCounts.cabinet || 0); index < targetCount; index += 1) {
+    if (!placePlannerComponent(context, requirement, "cabinet", `premium:${index}`)) break;
+  }
+}
+
+function createPlannerBayStates(walls, cuttingRules) {
+  return ["back", "left", "right"].flatMap((wallId) => {
+    const wall = walls?.[wallId];
+    if (!wall?.enabled) return [];
+    const bayCount = Math.max(1, Number(wall.bayCount || 1));
+    const fallbackWidth = Number(wall.length || 0) / bayCount;
+    return Array.from({ length: bayCount }, (_, bayIndex) => {
+      const requestedWidth = Number(wall.bayWidths?.[bayIndex]);
+      const rawWidth = Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : fallbackWidth;
+      return {
+        wallId,
+        bayIndex,
+        width: Math.max(1, rawWidth - Number(cuttingRules.postProfileWidthMm || 0)),
+        exclusiveZone: "",
+        reservedBottom: 0,
+        placementCount: 0,
+        nonShelfFunctionalCount: 0,
+        zoneTypes: new Set(),
+        intervals: []
+      };
+    });
+  });
+}
+
+function addZonePlannerPlacements(context, requirement, componentType) {
+  const count = Math.max(0, Math.min(20, Math.round(Number(requirement.quantity) || 0)));
+  if (!count) return;
+  if (context.planType === "value" && isExperiencePlannerComponent(componentType)
+    && context.experienceComponentCount >= 1) return;
+  if (requirement.zoneType === "longHangZone") {
+    const groupCount = getLongHangZoneCount(context, requirement, count);
+    addExclusiveHangZones(context, requirement, componentType, groupCount, [1600]);
+    if (context.seriesId !== "wall-mounted-v2") addLongHangTopShelves(context);
+    return;
+  }
+  if (requirement.zoneType === "shortHangZone") {
+    const heights = Array.isArray(requirement.railHeights) && requirement.railHeights.length
+      ? requirement.railHeights
+      : [1050, 2000];
+    addExclusiveHangZones(context, requirement, componentType, 1, heights);
+    if (context.seriesId !== "wall-mounted-v2") addShortHangTopShelf(context);
+    return;
+  }
+  if (requirement.zoneType === "shoeZone") {
+    addShoeZonePlacements(context, requirement, componentType, count);
+    return;
+  }
+  for (let index = 0; index < count; index += 1) {
+    let placed = placePlannerComponent(context, requirement, componentType, index);
+    if (!placed && context.planType === "premium" && isRequiredPremiumComponent(requirement.zoneType)) {
+      placed = placeRequiredPremiumComponent(context, requirement, componentType, index);
+    }
+    if (!placed && context.planType !== "premium") break;
+  }
+}
+
+function getPlannerRequirementPriority(context, requirement) {
+  if (context.planType === "value" && ["jewelryZone", "trouserZone"].includes(requirement.zoneType)) {
+    return 2.4 - (Number(requirement.demandWeight || 0) * 0.01)
+      + (requirement.zoneType === "jewelryZone" ? 0.001 : 0);
+  }
+  if (context.planType === "premium") {
+    if (requirement.zoneType === "jewelryZone") return 2.4;
+    if (requirement.zoneType === "trouserZone") return 2.5;
+  }
+  return Number(requirement.priorityIndex ?? 99);
+}
+
+function isRequiredPremiumComponent(zoneType) {
+  return zoneType === "jewelryZone" || zoneType === "trouserZone";
+}
+
+function placeRequiredPremiumComponent(context, requirement, componentType, index) {
+  const candidateBays = getPlannerCandidateBays(context, componentType, requirement.zoneType);
+  for (const bay of candidateBays) {
+    const removable = context.placements
+      .filter((placement) => placement.wallId === bay.wallId
+        && placement.bayIndex === bay.bayIndex
+        && isPlannerShelf(placement.componentType)
+        && !["longHangZone", "shortHangZone", "shoeZone"].includes(getPlannerPlacementZone(placement)))
+      .sort((a, b) => b.heightFromFloor - a.heightFromFloor);
+    for (const shelf of removable) {
+      removePlannerPlacement(context, bay, shelf);
+      if (placePlannerComponent(context, requirement, componentType, index)) return true;
+    }
+  }
+  return false;
+}
+
+function getPlannerPlacementZone(placement) {
+  return String(placement.id || "").split(":")[1] || "";
+}
+
+function removePlannerPlacement(context, bay, placement) {
+  const placementIndex = context.placements.findIndex((candidate) => candidate.id === placement.id);
+  if (placementIndex >= 0) context.placements.splice(placementIndex, 1);
+  const intervalIndex = bay.intervals.findIndex((interval) => interval.placementId === placement.id);
+  if (intervalIndex >= 0) bay.intervals.splice(intervalIndex, 1);
+  bay.placementCount = Math.max(0, bay.placementCount - 1);
+  context.componentCounts[placement.componentType] = Math.max(
+    0,
+    Number(context.componentCounts[placement.componentType] || 0) - 1
+  );
+}
+
+function getLongHangZoneCount(context, requirement, requestedCount) {
+  const demandQuantity = Number(requirement.demandQuantity || 0);
+  const demandLimit = demandQuantity <= 15
+    ? 1
+    : demandQuantity <= 35
+      ? 2
+      : Math.max(2, Math.ceil(demandQuantity / 20));
+  const hasShortHang = context.zoneRequirements.some((zone) => zone.zoneType === "shortHangZone");
+  const hasShoe = context.zoneRequirements.some((zone) => zone.zoneType === "shoeZone");
+  const hasOtherStorage = context.zoneRequirements.some((zone) => !["longHangZone", "shortHangZone", "shoeZone", "luggageZone"].includes(zone.zoneType));
+  const reservedStandardBays = (hasShortHang ? 1 : 0) + (hasShoe ? 1 : 0) + (hasOtherStorage ? 1 : 0);
+  const standardBayCount = context.bayStates.filter((bay) => bay.width >= 700).length;
+  const availableForLongHang = Math.max(1, standardBayCount - reservedStandardBays);
+  return Math.max(1, Math.min(requestedCount, demandLimit, availableForLongHang));
+}
+
+function addExclusiveHangZones(context, requirement, componentType, count, heights) {
+  if (context.seriesId === "wall-mounted-v2") {
+    addWallMountedExclusiveHangZones(context, requirement, componentType, count, heights);
+    return;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const bay = findPlannerBay(context, true);
+    if (!bay) break;
+    bay.exclusiveZone = requirement.zoneType;
+    const railHeights = requirement.zoneType === "shortHangZone" && componentType === "singleRail"
+      ? heights.slice(0, 2)
+      : [heights[0]];
+    railHeights.forEach((height, railIndex) => {
+      addPlannerPlacement(context, componentType, requirement.zoneType, bay, Number(height), `${index}:${railIndex}`);
+    });
+  }
+}
+
+function addWallMountedExclusiveHangZones(context, requirement, componentType, count, heights) {
+  const dependencies = context.wallMountedRailDependencies
+    .filter((dependency) => dependency.railZoneType === requirement.zoneType);
+  const groups = [...new Map(dependencies.map((dependency) => [
+    `${dependency.wallId}:${dependency.bayIndex}`,
+    dependencies.filter((item) => item.wallId === dependency.wallId
+      && item.bayIndex === dependency.bayIndex)
+  ])).values()].slice(0, count);
+
+  groups.forEach((group, groupIndex) => {
+    const first = group[0];
+    const bay = context.bayStates.find((candidate) => candidate.wallId === first.wallId
+      && candidate.bayIndex === first.bayIndex
+      && !candidate.exclusiveZone
+      && candidate.reservedBottom === 0);
+    if (!bay) return;
+    const existingPlacementIds = new Set(context.placements.map((placement) => placement.id));
+    bay.exclusiveZone = requirement.zoneType;
+    const railDependencies = requirement.zoneType === "shortHangZone"
+      ? group.slice(0, 2)
+      : group.slice(0, 1);
+    const allPlaced = railDependencies.every((dependency, railIndex) => addWallMountedRailWithShelf(
+      context,
+      requirement.zoneType,
+      componentType,
+      bay,
+      dependency,
+      `${groupIndex}:${railIndex}`
+    ));
+    if (!allPlaced) {
+      context.placements
+        .filter((placement) => !existingPlacementIds.has(placement.id))
+        .forEach((placement) => removePlannerPlacement(context, bay, placement));
+      bay.exclusiveZone = "";
+      bay.zoneTypes.delete(requirement.zoneType);
+    }
+  });
+
+  if (!groups.length && count > 0) {
+    console.warn("[ai-planner preset] wall-mounted rail rejected: missing shelf dependency", {
+      rejectReason: "wallMountedRailMissingShelf",
+      zoneType: requirement.zoneType
+    });
+  }
+}
+
+function addWallMountedRailWithShelf(context, zoneType, componentType, bay, dependency, index) {
+  const created = createWallMountedRailWithShelfPlacement({
+    rail: {
+      wallId: bay.wallId,
+      bayIndex: bay.bayIndex,
+      componentType,
+      heightFromFloor: Number(dependency.railHeightFromFloor)
+    },
+    shelfType: dependency.componentType,
+    dependencyId: dependency.dependencyId
+  });
+  const rail = addPlannerPlacement(
+    context,
+    componentType,
+    zoneType,
+    bay,
+    Number(created.railPlacement.heightFromFloor),
+    index,
+    {
+      distanceFromWall: created.railPlacement.distanceFromWall,
+      wallMountedOffsetPosition: created.railPlacement.wallMountedOffsetPosition,
+      shelfDependency: { ...dependency, ...created.railPlacement.shelfDependency }
+    }
+  );
+  if (!rail) return false;
+  const shelfType = dependency.componentType;
+  if (!["woodShelf", "glassShelf"].includes(shelfType)
+    || !context.componentTypes.has(shelfType)
+    || !context.productByType[shelfType]) {
+    removePlannerPlacement(context, bay, rail);
+    return false;
+  }
+  const shelf = addPlannerPlacement(
+    context,
+    shelfType,
+    zoneType,
+    bay,
+    Number(created.linkedShelfPlacement.heightFromFloor),
+    `${index}:linked-shelf`,
+    {
+      allowHighShelf: true,
+      allowExactHeight: true,
+      linkedRailDependencyId: dependency.dependencyId,
+      linkedRailHeight: dependency.railHeightFromFloor,
+      isLinkedRailShelf: true
+    }
+  );
+  if (shelf) return true;
+  removePlannerPlacement(context, bay, rail);
+  return false;
+}
+
+function addLongHangTopShelves(context) {
+  const shelfType = ["woodShelf"].find((type) => context.componentTypes.has(type) && context.productByType[type]);
+  if (!shelfType) return;
+  const hasBedding = context.zoneRequirements.some((zone) => zone.zoneType === "beddingZone");
+  if (!hasBedding && context.planType !== "premium") return;
+  const longBays = context.bayStates.filter((bay) => bay.exclusiveZone === "longHangZone");
+  const shelfCount = context.planType === "premium" ? longBays.length : Math.min(1, longBays.length);
+  longBays.slice(0, shelfCount).forEach((bay, index) => {
+    addPlannerPlacement(context, shelfType, "longHangZone", bay, 2050, `top:${index}`);
+  });
+}
+
+function addShortHangTopShelf(context) {
+  const shelfType = context.componentTypes.has("woodShelf") && context.productByType.woodShelf
+    ? "woodShelf"
+    : "";
+  if (!shelfType) return;
+  const shortBay = context.bayStates.find((bay) => bay.exclusiveZone === "shortHangZone");
+  if (!shortBay) return;
+  addPlannerPlacement(context, shelfType, "shortHangZone", shortBay, 2050, "top");
+}
+
+function addShoeZonePlacements(context, requirement, componentType, count) {
+  if (isLowShoeDemand(requirement, count)) {
+    const longBays = context.bayStates.filter((bay) => bay.exclusiveZone === "longHangZone");
+    const mixedCount = Math.min(count, longBays.length);
+    let placed = 0;
+    longBays.slice(0, mixedCount).forEach((bay, index) => {
+      if (addPlannerPlacement(context, componentType, requirement.zoneType, bay, 250, `mixed:${index}`)) placed += 1;
+    });
+    if (placed > 0) return;
+  }
+  let remaining = count;
+  let groupIndex = 0;
+  while (remaining > 0) {
+    const bay = findPlannerBay(context, true, { edgeFirst: true });
+    if (!bay) break;
+    bay.exclusiveZone = "shoeZone";
+    [250, 500, 750].slice(0, Math.min(3, remaining)).forEach((height, shelfIndex) => {
+      if (addPlannerPlacement(context, componentType, requirement.zoneType, bay, height, `${groupIndex}:${shelfIndex}`)) {
+        remaining -= 1;
+      }
+    });
+    groupIndex += 1;
+  }
+}
+
+function isLowShoeDemand(requirement) {
+  return Number(requirement.demandQuantity || 0) <= 25;
+}
+
+function placePlannerComponent(context, requirement, componentType, index) {
+  const candidateBays = getPlannerCandidateBays(context, componentType, requirement.zoneType);
+  if (!candidateBays.length) return false;
+  const heights = getZoneCandidateHeights(requirement.zoneType, componentType, requirement.heightFromFloor);
+  for (const bay of candidateBays) {
+    if (isFixedPlannerModule(context, componentType) && bay.width < 700 && context.planType !== "premium") continue;
+    for (const height of heights) {
+      if (addPlannerPlacement(context, componentType, requirement.zoneType, bay, height, index)) return true;
+    }
+  }
+  return false;
+}
+
+function reservePlannerBay(context, zoneType) {
+  const bay = context.bayStates
+    .filter((candidate) => !candidate.exclusiveZone && candidate.reservedBottom === 0 && candidate.placementCount === 0)
+    .sort((a, b) => a.width - b.width || (a.wallId === "back" ? 1 : -1))[0] || null;
+  if (!bay) return;
+  bay.reservedBottom = zoneType === "luggageZone" ? 800 : 600;
+  bay.intervals.push({ bottom: 0, top: bay.reservedBottom, zoneType, componentType: "NONE" });
+}
+
+function findPlannerBay(context, requireEmpty, options = {}) {
+  const candidates = context.bayStates.filter((bay) => !bay.exclusiveZone && bay.reservedBottom === 0);
+  if (requireEmpty) {
+    const exclusiveCount = context.bayStates.filter((bay) => bay.exclusiveZone).length;
+    if (exclusiveCount >= context.maxExclusiveBays) return null;
+    const empty = candidates.filter((bay) => bay.placementCount === 0);
+    if (options.edgeFirst) {
+      return empty.sort((a, b) => plannerEdgeScore(a, context) - plannerEdgeScore(b, context))[0] || null;
+    }
+    return empty[0] || null;
+  }
+  return candidates.sort((a, b) => a.placementCount - b.placementCount || a.bayIndex - b.bayIndex)[0] || null;
+}
+
+function getPlannerCandidateBays(context, componentType, zoneType) {
+  const fixedModule = isFixedPlannerModule(context, componentType);
+  const spreadSameZone = context.planType === "premium";
+  const candidates = context.bayStates
+    .filter((bay) => !bay.exclusiveZone
+      || (bay.exclusiveZone === "shoeZone" && isExperiencePlannerComponent(componentType)))
+    .sort((a, b) => {
+      if (componentType === "cabinet") {
+        const aNarrow = a.width < 700 ? 0 : 1;
+        const bNarrow = b.width < 700 ? 0 : 1;
+        if (aNarrow !== bNarrow) return aNarrow - bNarrow;
+      }
+      if (fixedModule) {
+        const aPreferred = a.width >= 700 && a.width <= 900 ? 0 : 1;
+        const bPreferred = b.width >= 700 && b.width <= 900 ? 0 : 1;
+        if (aPreferred !== bPreferred) return aPreferred - bPreferred;
+      }
+      const aSameZone = a.zoneTypes.has(zoneType) ? (spreadSameZone ? 1 : 0) : (spreadSameZone ? 0 : 1);
+      const bSameZone = b.zoneTypes.has(zoneType) ? (spreadSameZone ? 1 : 0) : (spreadSameZone ? 0 : 1);
+      if (aSameZone !== bSameZone) return aSameZone - bSameZone;
+      if (!a.zoneTypes.has(zoneType) && !b.zoneTypes.has(zoneType) && a.zoneTypes.size !== b.zoneTypes.size) {
+        return a.zoneTypes.size - b.zoneTypes.size;
+      }
+      return a.placementCount - b.placementCount || b.width - a.width;
+    });
+  return candidates;
+}
+
+function isPlannerShelf(componentType) {
+  return ["woodShelf", "glassShelf", "shoeShelf", "shoesShelf"].includes(componentType);
+}
+
+function plannerEdgeScore(bay, context) {
+  const wallBays = context.bayStates.filter((candidate) => candidate.wallId === bay.wallId);
+  const maxIndex = Math.max(0, ...wallBays.map((candidate) => candidate.bayIndex));
+  const edgeDistance = Math.min(bay.bayIndex, maxIndex - bay.bayIndex);
+  return (bay.wallId === "back" ? 0 : 10) + edgeDistance;
+}
+
+function isPlannerComponentAllowed(context, componentType) {
+  if (context.planType !== "basic") return true;
+  const allowed = new Set(["singleRail", "doubleRail", "woodShelf", "cabinet", "shoeShelf", "shoesShelf"]);
+  if (!allowed.has(componentType)) return false;
+  if (componentType === "cabinet" && Number(context.componentCounts.cabinet || 0) >= 1) return false;
+  return true;
+}
+
+function addPlannerPlacement(context, componentType, zoneType, bay, heightFromFloor, index, options = {}) {
+  if (!isPlannerComponentAllowed(context, componentType)) return false;
+  if (isNonShelfFunctionalComponent(componentType) && bay.nonShelfFunctionalCount >= 2) return false;
+  const requestedHeight = options.allowExactHeight
+    ? Number(heightFromFloor)
+    : snapPlannerHeight(heightFromFloor);
+  const snappedHeight = options.allowHighShelf
+    ? requestedHeight
+    : clampPlannerShelfHeight(componentType, requestedHeight);
+  const interval = getPlannerPlacementInterval(context, componentType, snappedHeight);
+  if (!interval
+    || !hasPlannerRailShelfClearance(bay, componentType, interval, options)
+    || hasPlannerCollision(bay, interval)) return false;
+  const moduleWidth = isFixedPlannerModule(context, componentType)
+    ? getPlannerModuleWidth(bay.width, context.cuttingRules)
+    : null;
+  if (isFixedPlannerModule(context, componentType) && !moduleWidth) return false;
+  const plannerPlacement = {
+    id: `planner:${zoneType}:${bay.wallId}:${bay.bayIndex}:${index}`,
+    wallId: bay.wallId,
+    bayIndex: bay.bayIndex,
+    componentType,
+    ...(moduleWidth ? { moduleWidth, standardWidth: moduleWidth } : {}),
+    heightFromFloor: snappedHeight,
+    quantity: 1,
+    ...Object.fromEntries(Object.entries(options).filter(([key]) => (
+      key !== "allowHighShelf" && key !== "allowExactHeight"
+    )))
+  };
+  context.placements.push(plannerPlacement);
+  const placementId = `planner:${zoneType}:${bay.wallId}:${bay.bayIndex}:${index}`;
+  bay.intervals.push({ ...interval, placementId, heightFromFloor: snappedHeight, zoneType, componentType });
+  bay.zoneTypes.add(zoneType);
+  bay.placementCount += 1;
+  if (isNonShelfFunctionalComponent(componentType)) bay.nonShelfFunctionalCount += 1;
+  if (isExperiencePlannerComponent(componentType)) context.experienceComponentCount += 1;
+  context.componentCounts[componentType] = Number(context.componentCounts[componentType] || 0) + 1;
+  return plannerPlacement;
+}
+
+function isExperiencePlannerComponent(componentType) {
+  return [
+    "jewelryBox",
+    "trouserRack",
+    "mixedStorage",
+    "jewelryBoxThreeDrawer",
+    "trouserRackThreeDrawer"
+  ].includes(componentType);
+}
+
+function hasPlannerRailShelfClearance(bay, componentType, interval, options = {}) {
+  if (!isPlannerShelf(componentType)) return true;
+  const clearanceAboveRail = options.isLinkedRailShelf
+    ? WALL_MOUNTED_PLACEMENT_RULES.railTopOffsetMm
+    : 240;
+  return bay.intervals
+    .filter((current) => ["singleRail", "doubleRail"].includes(current.componentType))
+    .every((rail) => interval.bottom <= rail.heightFromFloor
+      || interval.bottom >= rail.heightFromFloor + clearanceAboveRail);
+}
+
+function getZoneCandidateHeights(zoneType, componentType, requestedHeight) {
+  if (componentType === "cabinet") return [0, 100, 200, 300];
+  if (["jewelryBox", "jewelryBoxThreeDrawer"].includes(componentType)) return [900, 850, 950, 1100, 1200, 1300];
+  if (["trouserRack", "trouserRackThreeDrawer"].includes(componentType)) return [750, 900, 1050];
+  if (componentType === "mixedStorage") return [300, 900, 1200];
+  const heightsByZone = {
+    bagZone: [1300, 1400, 1500, 1100],
+    beddingZone: [2050, 1950, 2100],
+    displayZone: [1400, 1300, 1500],
+    bookZone: [500, 800, 1100, 1400, 1700, 2000, 2100],
+    trouserZone: [800, 900]
+  };
+  return heightsByZone[zoneType] || [Number(requestedHeight) || 1200];
+}
+
+function snapPlannerHeight(value) {
+  const height = Math.max(0, Number(value) || 0);
+  const anchors = [0, 250, 750, 900, 1050, 1300, 1400, 1500, 1650, 2000, 2050, 2100];
+  const nearest = anchors.reduce((best, anchor) => (
+    Math.abs(anchor - height) < Math.abs(best - height) ? anchor : best
+  ), anchors[0]);
+  return Math.abs(nearest - height) <= 120 ? nearest : height;
+}
+
+function clampPlannerShelfHeight(componentType, height) {
+  return ["woodShelf", "glassShelf", "shoeShelf", "shoesShelf"].includes(componentType)
+    ? Math.min(2100, height)
+    : height;
+}
+
+function isNonShelfFunctionalComponent(componentType) {
+  return [
+    "cabinet",
+    "jewelryBox",
+    "trouserRack",
+    "mixedStorage",
+    "jewelryBoxThreeDrawer",
+    "trouserRackThreeDrawer"
+  ].includes(componentType);
+}
+
+function getPlannerPlacementInterval(context, componentType, heightFromFloor) {
+  const height = Number(heightFromFloor);
+  if (!Number.isFinite(height) || height < 0) return null;
+  const productHeight = Number(context.productByType[componentType]?.height);
+  const fallbackHeights = {
+    singleRail: 50,
+    doubleRail: 80,
+    woodShelf: 40,
+    glassShelf: 40,
+    shoeShelf: 40,
+    shoesShelf: 40,
+    cabinet: 600,
+    jewelryBox: 180,
+    jewelryBoxThreeDrawer: 420,
+    trouserRack: 180,
+    trouserRackThreeDrawer: 420,
+    mixedStorage: 500
+  };
+  const componentHeight = Math.max(20, Number.isFinite(productHeight) && productHeight > 0
+    ? productHeight
+    : Number(fallbackHeights[componentType] || 100));
+  const rail = componentType === "singleRail" || componentType === "doubleRail";
+  const bottom = rail ? height - componentHeight / 2 : height;
+  const top = rail ? height + componentHeight / 2 : height + componentHeight;
+  if (componentType === "cabinet" && height > 300) return null;
+  if (bottom < 0 || top > context.roomHeight) return null;
+  return { bottom, top };
+}
+
+function hasPlannerCollision(bay, interval) {
+  const clearance = 20;
+  return bay.intervals.some((current) => interval.bottom < current.top + clearance
+    && interval.top > current.bottom - clearance);
+}
+
+function isFixedPlannerModule(context, componentType) {
+  return context.cuttingRules.fixedModuleTypes.includes(componentType);
+}
+
+function getPlannerModuleWidth(bayWidth, cuttingRules) {
+  const options = [...cuttingRules.fixedModuleWidths].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const fitting = options.filter((width) => width <= bayWidth);
+  return fitting[fitting.length - 1] || null;
+}
+
+function getPlannerShelfCount(shelfLevel, bayCount, demandRatios) {
+  const base = shelfLevel === "high"
+    ? bayCount
+    : shelfLevel === "medium"
+      ? Math.ceil(bayCount * 0.75)
+      : Math.max(1, Math.ceil(bayCount / 2));
+  return demandRatios?.shoe || demandRatios?.bag || demandRatios?.display || demandRatios?.bedding || demandRatios?.luggage
+    ? Math.max(base, Math.ceil(bayCount * 0.75))
+    : base;
+}
+
+function getPlannerHangingRodCount(configPreset, demandRatios) {
+  const requested = Number(configPreset.hangingRods || 0);
+  if (requested > 0) return requested;
+  return demandRatios?.hanging ? 1 : 0;
+}
+
+function addPlannerPlacementGroup(context, key, count, heights) {
+  if (context.seriesId === "wall-mounted-v2" && key === "hangingRod") {
+    if (!context.wallMountedRailDependencies.length) {
+      if (Number(count) > 0) {
+        console.warn("[ai-planner preset] wall-mounted rail rejected: missing shelf dependency", {
+          rejectReason: "wallMountedRailMissingShelf"
+        });
+      }
+      return;
+    }
+    ["longHangZone", "shortHangZone"].forEach((zoneType) => {
+      const zoneDependencies = context.wallMountedRailDependencies
+        .filter((dependency) => dependency.railZoneType === zoneType);
+      if (!zoneDependencies.length) return;
+      const groupCount = new Set(zoneDependencies.map((dependency) => (
+        `${dependency.wallId}:${dependency.bayIndex}`
+      ))).size;
+      addWallMountedExclusiveHangZones(context, { zoneType }, "singleRail", groupCount, heights);
+    });
+    return;
+  }
+  const componentType = context.map[key];
+  if (!componentType || !context.componentTypes.has(componentType) || !context.productByType[componentType]) {
+    if (count > 0) {
+      console.warn("[ai-planner preset] missing component mapping", {
+        key,
+        componentType,
+        seriesComponentTypes: Array.from(context.componentTypes)
+      });
+    }
+    return;
+  }
+  const safeCount = Math.max(0, Math.min(20, Math.round(Number(count) || 0)));
+  for (let index = 0; index < safeCount; index += 1) {
+    const bayIndex = index % context.bayCount;
+    const currentBayWidth = 0;
+    const moduleWidth = context.cuttingRules.fixedModuleTypes.includes(componentType)
+      ? normalizeFixedModuleWidth(currentBayWidth, context.cuttingRules)
+      : null;
+    context.placements.push({
+      id: `planner:${key}:${index}`,
+      wallId: context.wallId,
+      bayIndex,
+      componentType,
+      ...(moduleWidth ? { moduleWidth, standardWidth: moduleWidth } : {}),
+      heightFromFloor: heights[index % heights.length],
+      quantity: 1
+    });
+  }
 }
 
 export function syncWallLengthsWithRoom(config, roomPatch) {
@@ -298,6 +1057,20 @@ export function getActiveWalls(config, cuttingRules = defaultCuttingRules) {
         rightWallLength: getUSideWallSourceLength(config, "right"),
         cornerOffset: config.cornerOffset
       });
+  } else if (
+    (config.layout === "L-left" || config.layout === "L-right")
+    && cuttingRules.reuseBackFirstSideWallPlansForLLayouts === true
+  ) {
+    const backFirstSideWallCornerOffset = Number.isFinite(
+      Number(cuttingRules.uBackFirstSideWallCornerOffsetMm)
+    )
+      ? Number(cuttingRules.uBackFirstSideWallCornerOffsetMm)
+      : cuttingRules.sideWallLengthAdjustmentMm;
+    wallPlans = getJapaneseUWallPlans(
+      standardWallPlans,
+      "back-first",
+      backFirstSideWallCornerOffset
+    );
   }
 
   return wallPlans.map((plan, generationIndex) => {

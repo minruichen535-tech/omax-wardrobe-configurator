@@ -5,6 +5,7 @@ export const japaneseClosetCuttingRules = {
   sideWallLengthAdjustmentMm: 510,
   supportsULayoutModes: true,
   preservesExistingUWallGeometry: true,
+  reuseBackFirstSideWallPlansForLLayouts: true,
   uLayoutModeControl: "icons",
   postProfileWidthMm: 25,
   componentTypes: [
