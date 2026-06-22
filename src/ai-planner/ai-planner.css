@@ -353,6 +353,22 @@ body {
   gap: 12px;
 }
 
+.planner-layout-options {
+  max-width: 920px;
+  margin: 16px auto 0;
+  padding: 0 28px;
+}
+
+.planner-layout-options .layout-option {
+  width: 100%;
+  font-family: inherit;
+}
+
+.planner-layout-options .layout-option[data-selected="true"] {
+  background: rgba(236, 235, 229, 0.84);
+  border-color: #292925;
+}
+
 .layout-option {
   position: relative;
   display: grid;
@@ -1690,6 +1706,10 @@ body {
 .is-product-system .planner-footer,
 .is-ai-plans .planner-footer {
   display: none;
+}
+
+.is-ai-plans .planner-footer {
+  display: flex;
 }
 
 .is-analysis-loading .question-paper,

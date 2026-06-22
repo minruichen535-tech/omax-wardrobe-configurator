@@ -2,10 +2,11 @@ import {
   buildPlanRecommendation,
   generateRecommendedPlans,
   getCandidatePlanDebugStats,
+  getJapaneseClosetBudgetAvailability,
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=wall-mounted-placement-rules-20260621-04";
+} from "./planRules.js?v=planner-flow-order-20260622-06";
 import { loadClosetRules } from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
 
 const state = {
@@ -22,6 +23,7 @@ const note = document.querySelector(".question-note");
 const answerContent = document.querySelector(".answer-content");
 const currentProgress = document.querySelector(".progress-current");
 const progressLine = document.querySelector(".planner-progress i");
+const totalProgress = document.querySelector(".planner-progress span:last-child");
 const backButton = document.querySelector(".back-button");
 const iconRoot = "/customer-home/icons/";
 const iconVersion = "20260617";
@@ -140,12 +142,15 @@ function renderQuestion(direction = "forward") {
 
   title.textContent = question.title;
   note.textContent = question.note;
-  currentProgress.textContent = String(state.step + 1);
-  progressLine.style.transform = `scaleX(${(state.step + 1) / questions.length})`;
-  backButton.disabled = state.step === 0;
+  currentProgress.textContent = String(state.step + 2);
+  totalProgress.textContent = String(questions.length + 1);
+  progressLine.style.transform = `scaleX(${(state.step + 2) / (questions.length + 1)})`;
+  backButton.disabled = false;
   answerContent.replaceChildren();
 
-  if (question.type === "dimensions") {
+  if (question.type === "layout") {
+    renderLayoutOptions(question);
+  } else if (question.type === "dimensions") {
     renderDimensions(question);
   } else if (question.type === "multi") {
     renderMultiOptions(question);
@@ -154,26 +159,87 @@ function renderQuestion(direction = "forward") {
   }
 }
 
+function renderLayoutOptions(question) {
+  const selectedLayout = state.answers.layoutType || state.answers.dimensions?.layoutType || "I型";
+  const list = document.createElement("div");
+  list.className = "layout-options planner-layout-options";
+  layoutOptions.forEach((layout, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "layout-option";
+    button.style.setProperty("--option-index", index);
+    button.dataset.selected = selectedLayout === layout.value ? "true" : "false";
+    button.innerHTML = `
+      <span class="layout-sketch">${layout.sketch}</span>
+      <strong>${layout.title}</strong>
+      <em>${layout.subtitle}</em>
+    `;
+    button.addEventListener("click", () => selectOption(question.key, layout.value, button));
+    list.appendChild(button);
+  });
+  answerContent.appendChild(list);
+}
+
 function renderOptions(question) {
   const list = document.createElement("div");
   const usesPeopleIcons = question.key === "people";
+  const budgetAvailability = question.key === "budget"
+    ? getJapaneseClosetBudgetAvailability(state.answers)
+    : null;
+  const options = budgetAvailability
+    ? budgetAvailability.dynamicBudgetRanges.map((range) => range.label)
+    : question.options;
+  if (budgetAvailability && state.answers.budget
+    && (!options.includes(state.answers.budget)
+      || budgetAvailability.disabledBudgetRanges.includes(state.answers.budget))) {
+    delete state.answers.budget;
+    state.recommendation = null;
+    note.textContent = "空间尺寸已变化，请重新选择适合当前空间的预算区间。";
+  }
   list.className = `answer-options${usesPeopleIcons ? " people-options" : ""}`;
 
-  question.options.forEach((option, index) => {
+  options.forEach((option, index) => {
     const iconPath = usesPeopleIcons ? getOptionIconPath(option) : "";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `answer-option${iconPath ? " people-option has-option-icon" : ""}`;
     button.style.setProperty("--option-index", index);
     button.dataset.selected = state.answers[question.key] === option ? "true" : "false";
+    const disabledReason = budgetAvailability?.disabledReason?.[option] || "";
+    if (disabledReason) {
+      button.disabled = true;
+      button.title = "当前空间不适合该预算区间";
+      button.style.opacity = "0.35";
+      button.style.cursor = "not-allowed";
+    }
     button.innerHTML = iconPath
       ? `<img class="option-icon people-icon" src="${iconPath}" alt="" loading="lazy" /><strong>${option}</strong>`
-      : `<span>${String(index + 1).padStart(2, "0")}</span><strong>${option}</strong><i>→</i>`;
+      : `<span>${String(index + 1).padStart(2, "0")}</span><strong>${option}</strong><i>→</i>${
+        disabledReason ? `<small>${disabledReason}</small>` : ""
+      }`;
     button.addEventListener("click", () => selectOption(question.key, option, button));
     list.appendChild(button);
   });
 
   answerContent.appendChild(list);
+  if (budgetAvailability && isCandidateDebugEnabled()) {
+    const debug = document.createElement("pre");
+    debug.className = "candidate-debug-panel";
+    debug.textContent = [
+      `bayCount = ${budgetAvailability.bayCount}`,
+      `minPossiblePrice = ${budgetAvailability.minPossiblePrice}`,
+      `normalPossiblePrice = ${budgetAvailability.normalPossiblePrice}`,
+      `maxPossiblePrice = ${budgetAvailability.maxPossiblePrice}`,
+      `dynamicBudgetRanges = ${budgetAvailability.dynamicBudgetRanges.map((range) => range.label).join(", ")}`,
+      `disabledBudgetRanges = ${budgetAvailability.disabledBudgetRanges.join(", ") || "none"}`,
+      `selectedBudgetRange = ${budgetAvailability.selectedBudgetRange || "none"}`,
+      `basicTargetPrice = ${budgetAvailability.basicTargetPrice ?? "none"}`,
+      `valueTargetPrice = ${budgetAvailability.valueTargetPrice ?? "none"}`,
+      `premiumTargetPrice = ${budgetAvailability.premiumTargetPrice ?? "none"}`,
+      `disabledReason = ${JSON.stringify(budgetAvailability.disabledReason)}`
+    ].join("\n");
+    answerContent.appendChild(debug);
+  }
 }
 
 function renderMultiOptions(question) {
@@ -285,7 +351,6 @@ function getDemandColor(option) {
 
 function renderDimensions(question) {
   const values = state.answers[question.key] || {};
-  const selectedLayout = values.layoutType || "I型";
   const form = document.createElement("form");
   form.className = "dimension-form";
   form.innerHTML = `
@@ -301,20 +366,6 @@ function renderDimensions(question) {
       <span>HEIGHT / 高度</span>
       <div><input name="height" type="number" min="1800" max="5000" inputmode="numeric" placeholder="2700" value="${values.height || 2700}" /><em>mm</em></div>
     </label>
-    <fieldset class="layout-selector">
-      <legend>空间布局</legend>
-      <p>请选择空间的基本布局形式</p>
-      <div class="layout-options">
-        ${layoutOptions.map((layout) => `
-          <label class="layout-option">
-            <input type="radio" name="layoutType" value="${layout.value}" ${selectedLayout === layout.value ? "checked" : ""} />
-            <span class="layout-sketch">${layout.sketch}</span>
-            <strong>${layout.title}</strong>
-            <em>${layout.subtitle}</em>
-          </label>
-        `).join("")}
-      </div>
-    </fieldset>
     <button class="dimension-next" type="submit">尺寸确认 <i>→</i></button>
   `;
   form.addEventListener("submit", (event) => {
@@ -323,7 +374,7 @@ function renderDimensions(question) {
     const width = Number(data.get("width"));
     const depth = Number(data.get("depth"));
     const height = Number(data.get("height")) || 2700;
-    const layoutType = data.get("layoutType") || "I型";
+    const layoutType = state.answers.layoutType || values.layoutType || "I型";
     if (!width || !depth || !height) return;
     state.answers[question.key] = { width, depth, height, layoutType };
     nextStep();
@@ -332,11 +383,12 @@ function renderDimensions(question) {
 }
 
 function selectOption(key, option, button) {
-  if (key === "spaceUse" && state.answers.spaceUse !== option) {
-    state.answers = { spaceUse: option };
-    state.recommendation = null;
-    state.selectedProductSystem = null;
-    state.selectedPlan = null;
+  if (key === "layoutType") {
+    state.answers.layoutType = option;
+    state.answers.dimensions = {
+      ...(state.answers.dimensions || {}),
+      layoutType: option
+    };
   } else {
     state.answers[key] = option;
   }
@@ -387,7 +439,7 @@ function renderAnalysisLoading() {
   });
   analysisLoadingTimers.push(window.setTimeout(() => {
     clearAnalysisLoadingTimers();
-    renderAnalysis({ fadeIn: true });
+    renderAiRecommendedPlans();
   }, 5000));
 }
 
@@ -426,7 +478,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
       ${Object.keys(demandRatios).length ? renderReportSection("功能区比例", renderStackedRatioBar(demandRatios, labels)) : ""}
       <div class="analysis-actions">
         <button class="analysis-back" type="button">← 返回上一题</button>
-        <button class="dimension-next analysis-next" type="button">选择产品系统 <i>→</i></button>
+        <button class="dimension-next analysis-next" type="button">生成推荐方案 <i>→</i></button>
       </div>
     </div>
   `;
@@ -434,7 +486,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
     state.step = getCurrentQuestions().length - 1;
     renderQuestion("back");
   });
-  answerContent.querySelector(".analysis-next").addEventListener("click", renderProductSystemSelection);
+  answerContent.querySelector(".analysis-next").addEventListener("click", renderAiRecommendedPlans);
 }
 
 function renderProductSystemSelection() {
@@ -443,9 +495,10 @@ function renderProductSystemSelection() {
   const selectedId = state.selectedProductSystem?.id || state.answers.selectedProductSystem?.id || "";
   shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-ai-plans", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-product-system");
-  currentProgress.textContent = "系统";
-  progressLine.style.transform = "scaleX(1)";
-  backButton.disabled = false;
+  currentProgress.textContent = "1";
+  totalProgress.textContent = String(getCurrentQuestions().length + 1);
+  progressLine.style.transform = `scaleX(${1 / (getCurrentQuestions().length + 1)})`;
+  backButton.disabled = true;
   title.textContent = "选择适合您的产品系统";
   note.textContent = "根据您的收纳需求，选择最符合空间风格与使用习惯的系统方案。";
 
@@ -455,8 +508,7 @@ function renderProductSystemSelection() {
         ${productSystems.map((system) => renderProductSystemCard(system, selectedId)).join("")}
       </div>
       <div class="product-system-actions">
-        <button class="analysis-back product-system-back" type="button">← 返回分析</button>
-        <button class="dimension-next product-system-next" type="button" ${selectedId ? "" : "disabled"}>生成专属方案 <i>→</i></button>
+        <button class="dimension-next product-system-next" type="button" ${selectedId ? "" : "disabled"}>下一步 <i>→</i></button>
       </div>
     </div>
   `;
@@ -468,16 +520,18 @@ function renderProductSystemSelection() {
       if (!selected) return;
       state.selectedProductSystem = selected;
       state.answers.selectedProductSystem = selected;
+      state.answers.spaceUse ||= "衣帽间";
       answerContent.querySelectorAll("[data-product-system]").forEach((item) => {
         item.dataset.selected = item === card ? "true" : "false";
       });
       nextButton.disabled = false;
     });
   });
-  answerContent.querySelector(".product-system-back").addEventListener("click", () => renderAnalysis());
   nextButton.addEventListener("click", () => {
     if (!state.selectedProductSystem && !state.answers.selectedProductSystem) return;
-    renderAiRecommendedPlans();
+    state.answers.spaceUse ||= "衣帽间";
+    state.step = 0;
+    renderQuestion("forward");
   });
 }
 
@@ -556,7 +610,11 @@ function renderAiRecommendedPlans() {
       <div class="ai-plan-grid">
         ${recommendedPlans.map(renderAiPlanCard).join("")}
       </div>
-      ${isCandidateDebugEnabled() ? renderCandidateDebugPanel(candidateDebugStats, recommendedPlans) : ""}
+      ${isCandidateDebugEnabled() ? renderCandidateDebugPanel(
+        candidateDebugStats,
+        recommendedPlans,
+        payload.budgetRange
+      ) : ""}
     </div>
   `;
 
@@ -647,7 +705,7 @@ function isCandidateDebugEnabled() {
   return new URLSearchParams(window.location.search).get("debug") === "1";
 }
 
-function renderCandidateDebugPanel(stats, plans) {
+function renderCandidateDebugPanel(stats, plans, budgetRange) {
   const rejectReasons = Object.entries(stats.rejectReasons || {})
     .sort((a, b) => b[1] - a[1]);
   return `
@@ -661,6 +719,27 @@ function renderCandidateDebugPanel(stats, plans) {
           <div><dt>totalCandidates</dt><dd>${stats.totalCandidates ?? stats.generatedCount ?? 0}</dd></div>
           <div><dt>validCandidates</dt><dd>${stats.validCandidates ?? stats.validCount ?? 0}</dd></div>
           <div><dt>rankedCandidates</dt><dd>${stats.validCount ?? 0}</dd></div>
+          <div><dt>budgetRange</dt><dd>${escapeDebugValue(budgetRange || "none")}</dd></div>
+          <div><dt>bayCount</dt><dd>${stats.budgetAvailability?.bayCount ?? "-"}</dd></div>
+          <div><dt>minPossiblePrice</dt><dd>${stats.budgetAvailability?.minPossiblePrice ?? "-"}</dd></div>
+          <div><dt>normalPossiblePrice</dt><dd>${stats.budgetAvailability?.normalPossiblePrice ?? "-"}</dd></div>
+          <div><dt>maxPossiblePrice</dt><dd>${stats.budgetAvailability?.maxPossiblePrice ?? "-"}</dd></div>
+          <div><dt>dynamicBudgetRanges</dt><dd>${escapeDebugValue(
+            stats.budgetAvailability?.dynamicBudgetRanges?.map((range) => range.label).join(", ") || "none"
+          )}</dd></div>
+          <div><dt>disabledBudgetRanges</dt><dd>${escapeDebugValue(
+            stats.budgetAvailability?.disabledBudgetRanges?.join(", ") || "none"
+          )}</dd></div>
+          <div><dt>disabledReason</dt><dd>${escapeDebugValue(
+            JSON.stringify(stats.budgetAvailability?.disabledReason || {})
+          )}</dd></div>
+          <div><dt>selectedBudgetRange</dt><dd>${escapeDebugValue(
+            stats.budgetAvailability?.selectedBudgetRange || "none"
+          )}</dd></div>
+          <div><dt>basicTargetPrice</dt><dd>${stats.budgetAvailability?.basicTargetPrice ?? "-"}</dd></div>
+          <div><dt>valueTargetPrice</dt><dd>${stats.budgetAvailability?.valueTargetPrice ?? "-"}</dd></div>
+          <div><dt>premiumTargetPrice</dt><dd>${stats.budgetAvailability?.premiumTargetPrice ?? "-"}</dd></div>
+          <div><dt>priceWasTargetAdjusted</dt><dd>false</dd></div>
           <div><dt>missingPlanType</dt><dd>${escapeDebugValue(stats.missingPlanType || "none")}</dd></div>
           <div><dt>missingReason</dt><dd>${escapeDebugValue(stats.missingReason || "none")}</dd></div>
           <div><dt>candidateRejectTopReasons</dt><dd>${escapeDebugValue(
@@ -1180,11 +1259,11 @@ backButton.addEventListener("click", () => {
     return;
   }
   if (shell.classList.contains("is-ai-plans")) {
-    renderProductSystemSelection();
+    state.step = getCurrentQuestions().length - 1;
+    renderQuestion("back");
     return;
   }
   if (shell.classList.contains("is-product-system")) {
-    renderAnalysis();
     return;
   }
   if (shell.classList.contains("is-analysis")) {
@@ -1192,13 +1271,16 @@ backButton.addEventListener("click", () => {
     renderQuestion("back");
     return;
   }
-  if (state.step === 0) return;
+  if (state.step === 0) {
+    renderProductSystemSelection();
+    return;
+  }
   state.step -= 1;
   renderQuestion("back");
 });
 
 loadClosetRules()
-  .then(() => renderQuestion())
+  .then(() => renderProductSystemSelection())
   .catch((error) => {
     console.error("[ai-planner] closet rules load failed", error);
     title.textContent = "规则数据暂时无法加载";

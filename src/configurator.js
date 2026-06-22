@@ -162,6 +162,16 @@ function createPlannerPlacements({ configPreset, seriesId, cuttingRules, product
     componentCounts: {},
     experienceComponentCount: 0
   };
+  if (seriesId === "japanese-closet"
+    && Array.isArray(configPreset.explicitPlacements)
+    && configPreset.explicitPlacements.length) {
+    return createJapaneseExplicitPlannerPlacements(
+      configPreset.explicitPlacements,
+      walls,
+      componentTypes,
+      productByType
+    );
+  }
   if (zoneRequirements.length) {
     [...zoneRequirements]
       .sort((a, b) => getPlannerRequirementPriority(context, a) - getPlannerRequirementPriority(context, b))
@@ -207,6 +217,45 @@ function createPlannerPlacements({ configPreset, seriesId, cuttingRules, product
   addPlannerPlacementGroup(context, "trouserRack", configPreset.trouserRack ? 1 : 0, [800]);
 
   return placements;
+}
+
+function createJapaneseExplicitPlannerPlacements(explicitPlacements, walls, componentTypes, productByType) {
+  return explicitPlacements.flatMap((placement, index) => {
+    const componentType = placement?.componentType;
+    const wallId = placement?.wallId || "back";
+    const wall = walls?.[wallId];
+    const bayIndex = Number(placement?.bayIndex);
+    const heightFromFloor = Number(placement?.heightFromFloor);
+    if (!componentType
+      || !componentTypes.has(componentType)
+      || !productByType[componentType]
+      || !wall?.enabled
+      || !Number.isInteger(bayIndex)
+      || bayIndex < 0
+      || bayIndex >= Number(wall.bayCount || 0)
+      || !Number.isFinite(heightFromFloor)) {
+      console.warn("[ai-planner preset] invalid japanese explicit placement", placement);
+      return [];
+    }
+    return [{
+      id: `planner:explicit:${wallId}:${bayIndex}:${componentType}:${index}`,
+      wallId,
+      bayIndex,
+      componentType,
+      ...(isJapaneseAiFixedModulePlacement(placement)
+        ? {
+          preferredWidth: Number(placement.preferredWidth),
+          allowedWidths: normalizeAiPlannerAllowedWidths(placement.allowedWidths),
+          moduleWidth: Number(placement.preferredWidth),
+          standardWidth: Number(placement.preferredWidth)
+        }
+        : {}),
+      heightFromFloor,
+      quantity: 1,
+      zoneType: placement.zoneType || "",
+      source: placement.source || "candidate"
+    }];
+  });
 }
 
 function addPremiumUpgradeCabinets(context) {
@@ -880,13 +929,30 @@ export function calculateDesign(config, data) {
   const placements = normalizePlacements(rawPlacements, activeWalls, room.height)
     .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules))
     .map((placement) => {
-      const product = bomCalculator.resolvePlacementProduct?.({
+      const preferredProduct = resolveAiPlannerPreferredProduct({
+        placement,
+        productsByType,
+        seriesId
+      });
+      const product = preferredProduct || bomCalculator.resolvePlacementProduct?.({
         placement,
         productsByType,
         productByType,
         config
       }) || productByType[placement.componentType];
-      return product ? { ...placement, productSku: product.sku } : placement;
+      const resolvedPlacement = product ? { ...placement, productSku: product.sku } : placement;
+      if (isJapaneseAiFixedModulePlacement(resolvedPlacement)) {
+        console.log("[ai-planner fixed-module-width]", {
+          componentType: resolvedPlacement.componentType,
+          bayInnerWidth: resolvedPlacement.innerBayWidth,
+          preferredWidth: resolvedPlacement.preferredWidth,
+          allowedWidths: resolvedPlacement.allowedWidths,
+          selectedWidth: resolvedPlacement.moduleWidth,
+          selectedSku: product?.sku || null,
+          reason: resolvedPlacement.widthSelectionReason
+        });
+      }
+      return resolvedPlacement;
     });
   const errors = [];
   const warnings = [];
@@ -1542,8 +1608,11 @@ function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCu
   const bay = wall?.bays?.[placement.bayIndex];
   if (!wall || !bay) return placement;
   const componentCutLength = cuttingRules.getCutLength(placement.componentType, bay.innerBayWidth);
+  const preferredWidthSelection = isJapaneseAiFixedModulePlacement(placement)
+    ? selectAiPlannerLargestFittingWidth(placement, bay.innerBayWidth)
+    : null;
   const moduleWidth = cuttingRules.fixedModuleTypes.includes(placement.componentType)
-    ? normalizeFixedModuleWidthForRules(
+    ? preferredWidthSelection?.selectedWidth || normalizeFixedModuleWidthForRules(
       placement.moduleWidth || placement.standardWidth || bay.postCenterDistance,
       cuttingRules.fixedModuleWidths
     )
@@ -1558,6 +1627,9 @@ function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCu
     ...placement,
     moduleWidth,
     standardWidth: moduleWidth,
+    ...(preferredWidthSelection
+      ? { widthSelectionReason: preferredWidthSelection.reason }
+      : {}),
     postLeftX: wall.posts[placement.bayIndex]?.x,
     postRightX: wall.posts[placement.bayIndex + 1]?.x,
     postProfileWidth: wall.postProfileWidth,
@@ -1570,6 +1642,41 @@ function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCu
     usableComponentWidth: bay.usableComponentWidth,
     cutLength: componentCutLength
   };
+}
+
+function isJapaneseAiFixedModulePlacement(placement) {
+  return placement?.source === "candidate"
+    && ["trouserRack", "jewelryBox"].includes(placement.componentType)
+    && Number(placement.preferredWidth) > 0;
+}
+
+function normalizeAiPlannerAllowedWidths(widths) {
+  const normalized = (Array.isArray(widths) ? widths : [900, 800, 700, 600, 500])
+    .map(Number)
+    .filter((width) => Number.isFinite(width) && width > 0)
+    .sort((left, right) => right - left);
+  return [...new Set(normalized)];
+}
+
+function selectAiPlannerLargestFittingWidth(placement, bayInnerWidth) {
+  const allowedWidths = normalizeAiPlannerAllowedWidths(placement.allowedWidths);
+  const preferredWidth = Number(placement.preferredWidth);
+  const selectedWidth = allowedWidths.find((width) => (
+    width <= preferredWidth && width <= Number(bayInnerWidth)
+  )) || null;
+  return {
+    selectedWidth,
+    reason: selectedWidth === preferredWidth ? "preferredWidthFit" : "fallbackToLargestFit"
+  };
+}
+
+function resolveAiPlannerPreferredProduct({ placement, productsByType, seriesId }) {
+  if (seriesId !== "japanese-closet" || !isJapaneseAiFixedModulePlacement(placement)) return null;
+  const selectedWidth = Number(placement.moduleWidth || placement.standardWidth);
+  if (!selectedWidth) return null;
+  return (productsByType[placement.componentType] || []).find((product) => (
+    Number(product.width || product.moduleWidth || product.standardWidth) === selectedWidth
+  )) || null;
 }
 
 export function normalizeFixedModuleWidth(width, cuttingRules = defaultCuttingRules) {

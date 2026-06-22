@@ -15,17 +15,18 @@ import {
   getLastCandidateEngineStats,
   getShelfGapDiagnostics,
   selectRecommendedCandidates
-} from "./candidatePlanEngine.js?v=wall-mounted-placement-rules-20260621-04";
+} from "./candidatePlanEngine.js?v=japanese-price-anchor-20260622-07";
+import { findSimilarJapaneseCases } from "./japaneseCaseLibrary.js?v=japanese-case-library-20260622-02";
 
-const budgetOptions = ["3,000以下", "3,000 - 5,000", "5,000 - 8,000", "8,000 - 12,000", "12,000 - 18,000", "18,000+"];
+const budgetOptions = ["3,000以下", "3,000 - 6,000", "6,000 - 9,000", "9,000 - 12,000", "12,000 - 18,000", "18,000以上"];
 
 const budgetRanges = {
   "3,000以下": { min: 0, max: 3000 },
-  "3,000 - 5,000": { min: 3000, max: 5000 },
-  "5,000 - 8,000": { min: 5000, max: 8000 },
-  "8,000 - 12,000": { min: 8000, max: 12000 },
+  "3,000 - 6,000": { min: 3000, max: 6000 },
+  "6,000 - 9,000": { min: 6000, max: 9000 },
+  "9,000 - 12,000": { min: 9000, max: 12000 },
   "12,000 - 18,000": { min: 12000, max: 18000 },
-  "18,000+": { min: 18000, max: 22000 }
+  "18,000以上": { min: 18000, max: 22000 }
 };
 
 export const zoneColors = {
@@ -57,15 +58,24 @@ const zonePresentation = {
   cabinet: { color: zoneColors.bulky, description: "用于综合收纳和视觉整洁。" }
 };
 
-const firstQuestion = {
-  key: "spaceUse",
-  title: "这个空间主要用于什么？",
-  note: "先从空间的日常角色开始。",
-  options: ["衣帽间", "主卧衣柜", "玄关收纳", "客厅展示", "书房收纳"]
+const layoutQuestion = {
+  key: "layoutType",
+  title: "空间采用哪种布局？",
+  note: "布局形式会影响可用墙面、跨数和预算范围。",
+  type: "layout"
+};
+
+const dimensionsQuestion = {
+  key: "dimensions",
+  title: "空间尺寸是多少？",
+  note: "请输入空间尺寸，系统会据此计算跨数和可实现预算。",
+  type: "dimensions"
 };
 
 const wardrobeFlow = [
-  firstQuestion,
+  layoutQuestion,
+  dimensionsQuestion,
+  budgetQuestion(),
   {
     key: "people",
     title: "有多少人使用？",
@@ -78,25 +88,13 @@ const wardrobeFlow = [
     note: "可多选，系统会据此调整挂衣、鞋包、抽屉和展示比例。",
     type: "multi",
     options: ["长衣", "短衣", "裤子", "鞋子", "包包", "首饰", "被褥", "行李箱", "展示收藏"]
-  },
-  {
-    key: "dimensions",
-    title: "空间尺寸是多少？",
-    note: "大致尺寸即可，设计顾问会在下一阶段为您复核。",
-    type: "dimensions"
-  },
-  budgetQuestion()
+  }
 ];
 
 const entryFlow = [
-  firstQuestion,
-  {
-    key: "demands",
-    title: "这个玄关主要满足什么需求？",
-    note: "可多选，我们会平衡鞋区、挂放和随手收纳。",
-    type: "multi",
-    options: ["鞋子收纳", "外套挂放", "包包放置", "雨伞收纳", "钥匙杂物", "行李箱", "展示摆件"]
-  },
+  layoutQuestion,
+  dimensionsQuestion,
+  budgetQuestion(),
   {
     key: "people",
     title: "日常使用人数是多少？",
@@ -104,67 +102,57 @@ const entryFlow = [
     options: ["1人", "2人", "3人", "4人以上"]
   },
   {
-    key: "dimensions",
-    title: "玄关空间尺寸是多少？",
-    note: "宽度和深度会决定柜体层次与通行动线。",
-    type: "dimensions"
-  },
-  budgetQuestion()
+    key: "demands",
+    title: "这个玄关主要满足什么需求？",
+    note: "可多选，我们会平衡鞋区、挂放和随手收纳。",
+    type: "multi",
+    options: ["鞋子收纳", "外套挂放", "包包放置", "雨伞收纳", "钥匙杂物", "行李箱", "展示摆件"]
+  }
 ];
 
 const displayFlow = [
-  firstQuestion,
+  layoutQuestion,
+  dimensionsQuestion,
+  budgetQuestion(),
+  {
+    key: "people",
+    title: "有多少人使用？",
+    note: "人数会影响展示与收纳的分区方式。",
+    options: ["1人", "2人", "3人", "4人以上"]
+  },
   {
     key: "demands",
     title: "主要展示什么内容？",
     note: "可多选，系统会据此判断开放展示、玻璃层板和灯光比例。",
     type: "multi",
     options: ["摆件", "收藏品", "书籍", "酒具", "茶具", "包包展示", "综合展示"]
-  },
-  {
-    key: "style",
-    title: "你希望整体更偏向哪种感觉？",
-    note: "风格会影响开放比例、材质层次和灯光氛围。",
-    options: ["极简", "现代", "轻奢", "日式", "温润自然"]
-  },
-  {
-    key: "dimensions",
-    title: "展示墙尺寸是多少？",
-    note: "宽度和深度会决定展示尺度与柜体收纳占比。",
-    type: "dimensions"
-  },
-  budgetQuestion()
+  }
 ];
 
 const studyFlow = [
-  firstQuestion,
+  layoutQuestion,
+  dimensionsQuestion,
+  budgetQuestion(),
+  {
+    key: "people",
+    title: "有多少人使用？",
+    note: "人数会影响书籍、文件和设备的容量规划。",
+    options: ["1人", "2人", "3人", "4人以上"]
+  },
   {
     key: "demands",
     title: "主要收纳什么内容？",
     note: "可多选，系统会据此分配书籍、文件、设备和展示比例。",
     type: "multi",
     options: ["书籍", "文件", "电子设备", "收藏品", "摆件", "综合收纳"]
-  },
-  {
-    key: "style",
-    title: "你希望书房更偏向哪种使用方式？",
-    note: "使用方式会影响开放层板、文件抽屉和封闭柜比例。",
-    options: ["办公为主", "阅读为主", "展示为主", "收纳为主", "综合使用"]
-  },
-  {
-    key: "dimensions",
-    title: "书房收纳墙尺寸是多少？",
-    note: "宽度和深度会决定书架层板与柜体容量。",
-    type: "dimensions"
-  },
-  budgetQuestion()
+  }
 ];
 
 function budgetQuestion() {
   return {
     key: "budget",
     title: "希望控制在什么范围？",
-    note: "我们会同时保留预算、体验和理想状态三种可能。",
+    note: "我们会根据空间尺寸过滤无法实现的预算区间。",
     options: budgetOptions
   };
 }
@@ -181,7 +169,126 @@ export function getDemandOptions(spaceType = "") {
 }
 
 export function parseBudgetRange(label = "") {
-  return budgetRanges[label] || budgetRanges["8,000 - 12,000"];
+  if (budgetRanges[label]) return budgetRanges[label];
+  const values = String(label || "").match(/[\d,]+/g)
+    ?.map((value) => Number(value.replace(/,/g, ""))) || [];
+  if (String(label || "").includes("以下")) return { min: 0, max: values[0] || 3000 };
+  if (String(label || "").includes("以上")) {
+    const min = values[0] || 18000;
+    return { min, max: Math.round(min * 1.25), openEnded: true };
+  }
+  if (values.length >= 2) return { min: values[0], max: values[1] };
+  return budgetRanges["9,000 - 12,000"];
+}
+
+export function getDynamicJapaneseBudgetRanges({ bayCount }) {
+  const minPossiblePrice = roundToHundred(bayCount * 700);
+  const normalPossiblePrice = roundToHundred(bayCount * 900);
+  const maxPossiblePrice = roundToHundred(bayCount * 2200);
+  const lowStart = Math.max(3000, roundDownToHundred(minPossiblePrice * 0.85));
+  const lowEnd = Math.max(lowStart + 100, roundUpToHundred(normalPossiblePrice * 1.05));
+  const midEnd = Math.max(lowEnd + 100, roundUpToHundred(normalPossiblePrice * 1.45));
+  const highEnd = Math.max(midEnd + 100, roundUpToHundred(maxPossiblePrice * 0.85));
+  const premiumEnd = Math.max(highEnd + 100, roundUpToHundred(maxPossiblePrice * 1.15));
+  const ranges = lowStart > 3000
+    ? [
+      { min: 0, max: lowStart, label: `${formatBudgetAmount(lowStart)}以下` },
+      { min: lowStart, max: lowEnd, label: formatBudgetRange(lowStart, lowEnd) },
+      { min: lowEnd, max: midEnd, label: formatBudgetRange(lowEnd, midEnd) },
+      { min: midEnd, max: premiumEnd, label: formatBudgetRange(midEnd, premiumEnd) },
+      { min: premiumEnd, max: Infinity, openEnded: true, label: `${formatBudgetAmount(premiumEnd)}以上` }
+    ]
+    : [
+      { min: 0, max: lowStart, label: `${formatBudgetAmount(lowStart)}以下` },
+      { min: lowStart, max: midEnd, label: formatBudgetRange(lowStart, midEnd) },
+      { min: midEnd, max: highEnd, label: formatBudgetRange(midEnd, highEnd) },
+      { min: highEnd, max: premiumEnd, label: formatBudgetRange(highEnd, premiumEnd) },
+      { min: premiumEnd, max: Infinity, openEnded: true, label: `${formatBudgetAmount(premiumEnd)}以上` }
+    ];
+  return ranges;
+}
+
+export function getJapaneseClosetBudgetAvailability(answers = {}) {
+  const seriesId = answers.selectedProductSystem?.seriesId
+    || answers.selectedProductSystem?.id
+    || "";
+  if (seriesId !== "japanese-closet") return null;
+  const dimensions = answers.dimensions || {};
+  const width = Number(dimensions.width) || 3600;
+  const depth = Number(dimensions.depth) || 2800;
+  const layoutType = dimensions.layoutType || "I型";
+  const runLength = layoutType === "U型"
+    ? width + depth * 2
+    : layoutType === "L型"
+      ? width + depth
+      : width;
+  const bayCount = Math.max(1, Math.round(runLength / 900));
+  const minPossiblePrice = roundToHundred(bayCount * 700);
+  const normalPossiblePrice = roundToHundred(bayCount * 900);
+  const maxPossiblePrice = roundToHundred(bayCount * 2200);
+  const dynamicBudgetRanges = getDynamicJapaneseBudgetRanges({ bayCount });
+  const disabledBudgetRanges = [];
+  const disabledReason = {};
+
+  dynamicBudgetRanges.forEach((range) => {
+    const budgetRange = range.label;
+    if (range.max < minPossiblePrice * 0.85) {
+      disabledBudgetRanges.push(budgetRange);
+      disabledReason[budgetRange] = "当前空间基础配置也难以做到该预算。";
+    } else if (range.min > maxPossiblePrice * 1.15) {
+      disabledBudgetRanges.push(budgetRange);
+      disabledReason[budgetRange] = "当前空间无法合理达到该预算。";
+    }
+  });
+  const selectedRange = dynamicBudgetRanges.find((range) => range.label === answers.budget) || null;
+  const targetPrices = getJapaneseBudgetTargetPrices(selectedRange, maxPossiblePrice);
+
+  return {
+    bayCount,
+    minPossiblePrice,
+    normalPossiblePrice,
+    maxPossiblePrice,
+    dynamicBudgetRanges,
+    disabledBudgetRanges,
+    disabledReason,
+    selectedBudgetRange: selectedRange?.label || "",
+    ...targetPrices
+  };
+}
+
+function getJapaneseBudgetTargetPrices(range, maxPossiblePrice) {
+  if (!range) {
+    return { basicTargetPrice: null, valueTargetPrice: null, premiumTargetPrice: null };
+  }
+  const upper = range.openEnded
+    ? Math.max(range.min, maxPossiblePrice)
+    : range.max;
+  const width = Math.max(0, upper - range.min);
+  return {
+    basicTargetPrice: roundToHundred(range.min + width * 0.30),
+    valueTargetPrice: roundToHundred(range.min + width * 0.55),
+    premiumTargetPrice: roundToHundred(range.min + width * 0.85)
+  };
+}
+
+function roundDownToHundred(value) {
+  return Math.floor(Number(value || 0) / 100) * 100;
+}
+
+function roundUpToHundred(value) {
+  return Math.ceil(Number(value || 0) / 100) * 100;
+}
+
+function roundToHundred(value) {
+  return Math.round(Number(value || 0) / 100) * 100;
+}
+
+function formatBudgetAmount(value) {
+  return Number(value || 0).toLocaleString("zh-CN");
+}
+
+function formatBudgetRange(min, max) {
+  return `${formatBudgetAmount(min)} - ${formatBudgetAmount(max)}`;
 }
 
 export function calculateDemandProfile(answers) {
@@ -614,19 +721,53 @@ export function generatePlans(answers) {
 }
 
 export function getPlanPriceRange(budgetRange = "", planType = "basic") {
-  const price = getPlanPriceFromRules(budgetRange, planType);
+  const price = getPlannerPriceRule(budgetRange, planType);
   return [price.min, price.max];
 }
 
 export function getPlanPrice(budgetRange = "", planType = "basic") {
-  return getPlanPriceFromRules(budgetRange, planType).price;
+  return getPlannerPriceRule(budgetRange, planType).price;
+}
+
+function getPlannerPriceRule(budgetRange, planType) {
+  const rulePrice = getPlanPriceFromRules(budgetRange, planType);
+  if (Number(rulePrice.price || 0) > 0) return rulePrice;
+  const range = parseBudgetRange(budgetRange);
+  const target = planType === "basic"
+    ? Math.max(range.min + 600, range.max - 500)
+    : planType === "value"
+      ? range.max + 400
+      : range.max + 950;
+  const price = Math.round(target / 100) * 100;
+  return { min: price, max: price, price };
 }
 
 export function generateRecommendedPlans(answers = {}) {
   const weightedDemands = getWeightedDemands(answers);
-  const candidates = generateCandidatePlans(answers, getClosetRules());
-  return selectRecommendedCandidates(candidates, answers).map((candidate) => {
+  const isJapaneseCloset = (answers.selectedProductSystem?.seriesId || answers.selectedProductSystem?.id) === "japanese-closet";
+  const matchedJapaneseCases = isJapaneseCloset ? findSimilarJapaneseCases(answers) : [];
+  const primaryCase = matchedJapaneseCases[0] || null;
+  const planningAnswers = isJapaneseCloset
+    ? { ...answers, matchedJapaneseCases, primaryJapaneseCase: primaryCase }
+    : answers;
+  const candidates = generateCandidatePlans(planningAnswers, getClosetRules());
+  const selectedCandidates = selectRecommendedCandidates(candidates, planningAnswers);
+  const bayPlansByTier = Object.fromEntries(selectedCandidates.map((candidate) => [
+    candidate.planType,
+    candidate.bayPlan || []
+  ]));
+  return selectedCandidates.map((candidate) => {
     const tier = getPlanTier(candidate.planType);
+    const pricedComponentCountByType = countDebugValues(
+      candidate.placements.filter((placement) => placement.componentType),
+      "componentType"
+    );
+    const previewComponentCountByType = countDebugValues(
+      (candidate.configPreset?.explicitPlacements || []).filter((placement) => placement.componentType),
+      "componentType"
+    );
+    const pricePreviewMismatch = JSON.stringify(pricedComponentCountByType)
+      !== JSON.stringify(previewComponentCountByType);
     return {
       planType: candidate.planType,
       planName: tier.planName,
@@ -640,15 +781,55 @@ export function generateRecommendedPlans(answers = {}) {
       candidatePlanId: candidate.planId,
       candidateScores: candidate.scores,
       candidateDebug: {
+        primaryCaseId: primaryCase?.caseId || null,
+        layoutTemplate: primaryCase?.layoutTemplate || [],
+        bayPlanBasic: bayPlansByTier.basic || [],
+        bayPlanValue: bayPlansByTier.value || [],
+        bayPlanPremium: bayPlansByTier.premium || [],
+        templateViolationCount: candidate.templateViolationCount || 0,
+        primaryCaseScore: primaryCase?.score ?? null,
+        secondaryCaseIds: matchedJapaneseCases.slice(1).map((caseData) => caseData.caseId),
+        caseMatchWeight: candidate.scores?.caseMatchWeight || 0,
+        caseDistributionTarget: candidate.scores?.caseDistributionTarget || {},
+        candidateDistribution: candidate.scores?.candidateDistribution || {},
+        distributionDelta: candidate.scores?.distributionDelta || {},
+        premiumHardRequirements: candidate.premiumHardRequirements || null,
+        premiumRequirementStatus: candidate.premiumRequirementStatus || null,
+        caseLibraryAppliedAs: candidate.caseLibraryAppliedAs || "layoutReferenceOnly",
+        hardRuleOverrideCase: candidate.hardRuleOverrideCase || false,
+        matchedJapaneseCases: matchedJapaneseCases.map(({ caseId, score, modelPath, matchedReason }) => ({
+          caseId, score, modelPath, matchedReason
+        })),
+        caseMatchBonus: candidate.scores?.caseMatchBonus || 0,
         bayCount: candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 0,
         zoneDistribution: countDebugValues(candidate.placements, "zoneType"),
         componentCount: countDebugValues(
           candidate.placements.filter((placement) => placement.componentType),
           "componentType"
         ),
+        pricedComponentCountByType,
+        previewComponentCountByType,
+        pricePreviewMismatch,
         placementCount: candidate.placements.length,
         shelfGaps: getShelfGapDiagnostics(candidate.placements),
-        estimatedPrice: candidate.estimatedPrice,
+        estimatedPrice: candidate.manualComponentPrice == null
+          ? candidate.estimatedPrice
+          : `manualComponentPrice=${candidate.manualComponentPrice}, servicePriceFactor=${candidate.servicePriceFactor}, finalPlanPrice=${candidate.finalPlanPrice}, primaryCaseId=${primaryCase?.caseId || "none"}, layoutTemplate=${JSON.stringify(primaryCase?.layoutTemplate || [])}, bayPlanBasic=${JSON.stringify(bayPlansByTier.basic || [])}, bayPlanValue=${JSON.stringify(bayPlansByTier.value || [])}, bayPlanPremium=${JSON.stringify(bayPlansByTier.premium || [])}, templateViolationCount=${candidate.templateViolationCount || 0}, primaryCaseScore=${primaryCase?.score ?? "none"}, secondaryCaseIds=${matchedJapaneseCases.slice(1).map((caseData) => caseData.caseId).join("|")}, caseMatchWeight=${candidate.scores?.caseMatchWeight || 0}, caseDistributionTarget=${JSON.stringify(candidate.scores?.caseDistributionTarget || {})}, candidateDistribution=${JSON.stringify(candidate.scores?.candidateDistribution || {})}, distributionDelta=${JSON.stringify(candidate.scores?.distributionDelta || {})}, premiumHardRequirements=${JSON.stringify(candidate.premiumHardRequirements || {})}, premiumRequirementStatus=${JSON.stringify(candidate.premiumRequirementStatus || {})}, caseLibraryAppliedAs=${candidate.caseLibraryAppliedAs || "layoutReferenceOnly"}, hardRuleOverrideCase=${candidate.hardRuleOverrideCase || false}, caseMatchBonus=${candidate.scores?.caseMatchBonus || 0}, budgetMin=${candidate.budgetMin}, budgetMax=${candidate.budgetMax}, basicTarget=${candidate.basicTarget}, valueTarget=${candidate.valueTarget}, premiumTarget=${candidate.premiumTarget}, targetPrice=${candidate.targetPrice}, actualPrice=${candidate.actualPrice}, priceDelta=${candidate.priceDelta}, premiumAboveBudget=${candidate.premiumAboveBudget}, premiumCouldNotExceedBudget=${candidate.premiumCouldNotExceedBudget}, priceWasTargetAdjusted=${candidate.priceWasTargetAdjusted}, pricedComponentCountByType=${JSON.stringify(pricedComponentCountByType)}, previewComponentCountByType=${JSON.stringify(previewComponentCountByType)}, pricePreviewMismatch=${pricePreviewMismatch}, selectedBecause=${candidate.selectedBecause}`,
+        manualComponentPrice: candidate.manualComponentPrice,
+        servicePriceFactor: candidate.servicePriceFactor,
+        finalPlanPrice: candidate.finalPlanPrice,
+        targetPrice: candidate.targetPrice,
+        actualPrice: candidate.actualPrice,
+        priceDelta: candidate.priceDelta,
+        budgetMin: candidate.budgetMin,
+        budgetMax: candidate.budgetMax,
+        basicTarget: candidate.basicTarget,
+        valueTarget: candidate.valueTarget,
+        premiumTarget: candidate.premiumTarget,
+        premiumAboveBudget: candidate.premiumAboveBudget,
+        premiumCouldNotExceedBudget: candidate.premiumCouldNotExceedBudget,
+        priceWasTargetAdjusted: candidate.priceWasTargetAdjusted,
+        selectedBecause: candidate.selectedBecause,
         estimatedCapacity: candidate.estimatedCapacity,
         rejectedReason: candidate.rejectReason || null
       }
@@ -869,7 +1050,7 @@ function supportsLighting(productSystem) {
 
 function getBudgetUpperBound(budgetRange) {
   if (budgetRange === "3,000以下") return 3000;
-  if (budgetRange === "18,000+") return Infinity;
+  if (String(budgetRange || "").includes("以上")) return Infinity;
   const values = String(budgetRange || "").match(/[\d,]+/g)?.map((value) => Number(value.replace(/,/g, ""))) || [];
   return values[values.length - 1] || 0;
 }
@@ -884,7 +1065,7 @@ function pushUnique(list, itemName) {
 
 export function recommendSystem({ spaceUse = "", budget = "", demands = [] }) {
   if (budget === "3,000以下") return "碳钢立柱衣柜";
-  if (budget === "3,000 - 5,000") return "铝日式立柱衣柜";
+  if (budget === "3,000 - 6,000") return "铝日式立柱衣柜";
   if (spaceUse === "客厅展示") return demands.includes("收藏品") ? "铝立柱衣柜" : "铝托底式衣柜";
   if (spaceUse === "书房收纳") return "铝立柱衣柜";
   if (spaceUse === "玄关收纳") return "铝托底式衣柜";
@@ -894,7 +1075,7 @@ export function recommendSystem({ spaceUse = "", budget = "", demands = [] }) {
 export function buildPlanRecommendation(answers) {
   const dimensions = { width: 3600, depth: 2800, height: 2700, layoutType: "I型", ...(answers.dimensions || {}) };
   const demands = getSelectedDemands(answers);
-  const budget = answers.budget || "8,000 - 12,000";
+  const budget = answers.budget || "9,000 - 12,000";
   const budgetRange = parseBudgetRange(budget);
   const areaFactor = Math.max(0.82, Math.min(1.42, (dimensions.width * dimensions.depth) / 10080000));
   const demandProfile = calculateDemandProfile(answers);
