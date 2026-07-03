@@ -929,12 +929,15 @@ export function calculateDesign(config, data) {
   const placements = normalizePlacements(rawPlacements, activeWalls, room.height)
     .map((placement) => addPlacementDimensions(placement, activeWalls, cuttingRules))
     .map((placement) => {
+      const isClientDrawerDoublePlacement = placement.componentType === "drawerDouble"
+        && (placement.topDrawerSku || placement.bottomDrawerSku);
+      const explicitProduct = placement.productSku ? productBySku[placement.productSku] : null;
       const preferredProduct = resolveAiPlannerPreferredProduct({
         placement,
         productsByType,
         seriesId
       });
-      const product = preferredProduct || bomCalculator.resolvePlacementProduct?.({
+      const product = isClientDrawerDoublePlacement ? null : explicitProduct || preferredProduct || bomCalculator.resolvePlacementProduct?.({
         placement,
         productsByType,
         productByType,
@@ -982,6 +985,12 @@ export function calculateDesign(config, data) {
   });
 
   placements.forEach((placement) => {
+    if (
+      placement.componentType === "drawerDouble"
+      && (placement.topDrawerSku || placement.bottomDrawerSku)
+    ) {
+      return;
+    }
     const component = productBySku[placement.productSku] || productByType[placement.componentType];
     if (typeof bomCalculator.addPlacementBom === "function") {
       bomCalculator.addPlacementBom({
@@ -1612,17 +1621,21 @@ function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCu
     ? selectAiPlannerLargestFittingWidth(placement, bay.innerBayWidth)
     : null;
   const moduleWidth = cuttingRules.fixedModuleTypes.includes(placement.componentType)
-    ? preferredWidthSelection?.selectedWidth || normalizeFixedModuleWidthForRules(
+    ? preferredWidthSelection
+      ? preferredWidthSelection.selectedWidth
+      : normalizeFixedModuleWidthForRules(
       placement.moduleWidth || placement.standardWidth || bay.postCenterDistance,
       cuttingRules.fixedModuleWidths
     )
     : null;
-  const visualScaleWidth = cuttingRules.getVisualScaleWidth(
-    placement.componentType,
-    bay.innerBayWidth,
-    componentCutLength,
-    moduleWidth
-  );
+  const visualScaleWidth = preferredWidthSelection
+    ? bay.innerBayWidth
+    : cuttingRules.getVisualScaleWidth(
+      placement.componentType,
+      bay.innerBayWidth,
+      componentCutLength,
+      moduleWidth
+    );
   return {
     ...placement,
     moduleWidth,
@@ -1645,8 +1658,7 @@ function addPlacementDimensions(placement, activeWalls, cuttingRules = defaultCu
 }
 
 function isJapaneseAiFixedModulePlacement(placement) {
-  return placement?.source === "candidate"
-    && ["trouserRack", "jewelryBox"].includes(placement.componentType)
+  return ["trouserRack", "jewelryBox"].includes(placement?.componentType)
     && Number(placement.preferredWidth) > 0;
 }
 

@@ -1,8 +1,15 @@
 import { PLAN_LEVELS } from "../rules/commonRules.js?v=closet-rules-preview-20260621-11";
 import {
   buildPlanRuleOutput,
+  getClosetRules,
   getPlanPriceFromRules
-} from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
+} from "../rules/demandRules.js?v=component-upgrade-rules-20260627-01";
+import {
+  isFixedWidthAccessory,
+  selectPreferredAccessoryBay
+} from "../rules/placementStrategy.js?v=fixed-accessory-placement-20260627-01";
+import { getClearanceValue } from "../rules/storageRules.js?v=storage-rules-20260625-01";
+import { getCuttingRules } from "../series/index.js?v=cache-20260621-02";
 import {
   PLANNER_COMPONENT_MAP,
   WALL_MOUNTED_PLACEMENT_RULES,
@@ -10,9 +17,12 @@ import {
   resolveWallMountedShelfType
 } from "../config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
 import {
+  JAPANESE_CASE_LAYOUT_RULES,
   findSimilarJapaneseCases,
-  getJapaneseCaseDistributionTarget
-} from "./japaneseCaseLibrary.js?v=japanese-case-library-20260622-02";
+  getJapaneseCaseDistributionTarget,
+  japaneseCaseLibrary
+} from "./japaneseCaseLibrary.js?v=case-matching-layout-20260627-01";
+import { JAPANESE_UPGRADE_POLICY } from "./japaneseUpgradePolicy.js?v=japanese-upgrade-policy-20260630-01";
 
 const PLAN_TYPES = ["basic", "value", "premium"];
 const PLAN_NAMES = {
@@ -22,7 +32,7 @@ const PLAN_NAMES = {
 };
 const SHELF_TYPES = new Set(["woodShelf", "glassShelf", "shoeShelf", "shoesShelf"]);
 const CAPACITY_SHELF_TYPES = new Set(["woodShelf", "glassShelf"]);
-const SHOE_SHELF_MIN_GAP = 180;
+const SHOE_SHELF_MIN_GAP = getClearanceValue("shoeShelf", "verticalGap", 180);
 const DENSE_SHELF_MIN_GAP = 300;
 const EXPERIENCE_TYPES = new Set(["jewelryBox", "trouserRack", "glassShelf", "mixedStorage"]);
 const UPGRADE_COMPONENTS = new Set(["cabinet", "trouserRack", "jewelryBox", "glassShelf", "mixedStorage"]);
@@ -54,11 +64,6 @@ const JAPANESE_CLOSET_AI_PRICES = {
   jewelryBoxWithShelf: 700,
   trouserRackWithShelf: 660
 };
-const JAPANESE_CLOSET_SERVICE_PRICE_FACTORS = {
-  basic: 1.35,
-  value: 1.32,
-  premium: 1.30
-};
 const JAPANESE_VISIBLE_UPGRADE_COMPONENTS = new Set([
   "cabinet", "trouserRack", "jewelryBox", "glassShelf"
 ]);
@@ -66,9 +71,74 @@ const JAPANESE_FUNCTIONAL_COMPONENTS = new Set([
   "singleRail", "doubleRail", "woodShelf", "cabinet", "jewelryBox", "trouserRack"
 ]);
 const JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS = Object.freeze([900, 800, 700, 600, 500]);
+const JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW = getClearanceValue("trouserRack", "below", 600);
+const JAPANESE_LONG_HANG_MIN_CLEARANCE_BELOW = getClearanceValue("longClothes", "below", 1350);
+const JAPANESE_SHORT_HANG_MIN_CLEARANCE_BELOW = getClearanceValue("shortHang", "below", 700);
+const JAPANESE_JEWELRY_BOX_GAP_ABOVE_CABINET = 20;
+const JAPANESE_CABINET_MODEL_HEIGHT = 500;
+const JAPANESE_TROUSER_RACK_HEIGHTS = Object.freeze([950, 1050, 900, 1100]);
+const JAPANESE_SHORT_HANG_CAPACITY_PER_RAIL = 20;
+const JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT = JAPANESE_UPGRADE_POLICY.preserve.upperRail2000.height;
+const JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT = JAPANESE_UPGRADE_POLICY.preserve.upperRail2000.minHeight;
+const JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT = JAPANESE_UPGRADE_POLICY.preserve.upperRail2000.maxHeight;
+const JAPANESE_PRESERVED_FUNCTIONAL_SHELF_MIN_HEIGHT = JAPANESE_UPGRADE_POLICY.preserve.functionalShelf.minHeight;
+const JAPANESE_PRESERVED_FUNCTIONAL_SHELF_MAX_HEIGHT = JAPANESE_UPGRADE_POLICY.preserve.functionalShelf.maxHeight;
+const JAPANESE_SHOE_CAPACITY_PRESERVE_REMOVAL_MIN_HEIGHT =
+  JAPANESE_UPGRADE_POLICY.preserve.shoeCapacity.highRailShelfRemovalMinHeight;
+const JAPANESE_ONE_FUNCTIONAL_SHELF_PER_LOWER_FUNCTIONAL_ZONE =
+  JAPANESE_UPGRADE_POLICY.premiumFunctionalShelf.oneFunctionalShelfPerLowerFunctionalZone;
+const JAPANESE_STANDARD_SUPPLEMENTAL_RAIL_HEIGHTS = Object.freeze([1050, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT]);
+const JAPANESE_PREMIUM_SHELF_TOP_MARGIN = JAPANESE_UPGRADE_POLICY.premiumFunctionalShelf.topMargin;
+const JAPANESE_PREMIUM_SHELF_RAIL_GAP = JAPANESE_UPGRADE_POLICY.premiumFunctionalShelf.railGap;
+const JAPANESE_SUPPLEMENTAL_RAIL_ALLOWED_ROLES = new Set([
+  "shoeShelfZone", "shelfZone", "storageAccessoryZone"
+]);
+const JAPANESE_SUPPLEMENTAL_RAIL_SUPPORT_COMPONENTS = new Set([
+  "woodShelf", "cabinet", "jewelryBox", "trouserRack"
+]);
+const JAPANESE_TROUSER_RACK_BLOCKING_COMPONENTS = new Set([
+  "cabinet", "woodShelf", "glassShelf", "shoeShelf", "shoesShelf",
+  "drawer", "basket", "storageBox", "jewelryBox", "mixedStorage"
+]);
+const JAPANESE_LOWER_FUNCTIONAL_STORAGE_SUPPORTS = new Set(
+  JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.storageSupports
+);
+const JAPANESE_LOWER_FUNCTIONAL_ZONE_COMPONENTS = new Set(
+  JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.components
+);
 const JAPANESE_CASE_MATCH_WEIGHT = 0.20;
 const JAPANESE_CASE_SCORE_MAX = 25;
+const CASE_MATCHING_DISTANCE_PENALTY_WEIGHT = 1.25;
+const CASE_MATCHING_PROFILE_AFFINITY_WEIGHT = 3.5;
 const JAPANESE_CASE_TOLERANCE = Object.freeze({ basic: 0.30, value: 0.20, premium: 0.15 });
+const CANDIDATE_QA_SELECTION_WINDOW = 10;
+const PLACEMENT_CAPACITY_ZONE_ITEM_TYPES = Object.freeze({
+  shortHangZone: "shortClothes",
+  longHangZone: "longClothes",
+  shoeZone: "shoes",
+  bagZone: "bags",
+  beddingZone: "bedding",
+  luggageZone: "luggage",
+  trouserZone: "trousers",
+  jewelryZone: "jewelry",
+  displayZone: "display",
+  bookZone: "books"
+});
+const PLACEMENT_CAPACITY_COMPONENT_ALIASES = Object.freeze({
+  shoeShelf: "woodShelf",
+  shoesShelf: "woodShelf"
+});
+const JAPANESE_PLACEMENT_DIMENSION_FIELDS = Object.freeze([
+  "postProfileWidth",
+  "rawBayWidth",
+  "postCenterDistance",
+  "innerBayWidth",
+  "usableComponentWidth",
+  "componentCutLength",
+  "cutLength",
+  "visualScaleWidth",
+  "widthSource"
+]);
 
 let lastStats = {
   generatedCount: 0,
@@ -92,17 +162,53 @@ let lastStats = {
   secondaryCaseIds: [],
   caseMatchWeight: 0,
   caseDistributionTarget: {},
+  caseMatching: {
+    enabled: false,
+    selectedCaseId: null,
+    selectedPersona: "",
+    score: 0,
+    topCandidates: [],
+    userRequirementVector: {}
+  },
+  caseMatchingRuleLoad: {
+    attempted: false,
+    loaded: false,
+    error: null,
+    fallbackToLegacy: true
+  },
+  componentUpgrade: {},
+  caseLayoutTemplate: [],
+  resolvedSkeleton: [],
+  forbiddenPatternViolations: {},
+  tierUpgradeRulesApplied: {},
+  bayRoleComponents: {},
+  candidateQa: {
+    passed: true,
+    issues: [],
+    summary: {},
+    selectionMode: "diagnosticOnly",
+    attemptedTierSets: 0,
+    selectedAttemptIndex: 0,
+    failedAttemptCount: 0,
+    capacitySource: "estimatedFallback",
+    capacityByPlan: {},
+    capacityDiff: [],
+    capacityContributions: [],
+    missingWidthFallbackCount: 0
+  },
   heatmap: {}
 };
 
 export function generateCandidatePlans(answers = {}, rulesData = {}) {
   const normalized = normalizeAnswers(answers);
-  normalized.matchedJapaneseCases = getSelectedSeriesId(normalized) === "japanese-closet"
-    ? (answers.matchedJapaneseCases || findSimilarJapaneseCases(answers))
+  const isJapaneseCloset = getSelectedSeriesId(normalized) === "japanese-closet";
+  normalized.matchedJapaneseCases = isJapaneseCloset
+    ? (answers.matchedJapaneseCases || matchJapaneseCasesByRules(answers, rulesData.caseMatchingRules))
     : [];
   normalized.primaryJapaneseCase = normalized.matchedJapaneseCases[0] || null;
+  normalized.caseMatching = normalized.primaryJapaneseCase?.caseMatching || null;
+  normalized.componentUpgradeRules = rulesData.caseMatchingRules?.componentUpgradeRules || [];
   normalized.japaneseHardRequirements = getJapaneseHardRequirements(normalized);
-  if (normalized.primaryJapaneseCase) applyPrimaryJapaneseCaseNeeds(normalized);
   const supportedTypes = getSupportedTypes(getSelectedSeriesId(normalized));
   const candidates = [];
   PLAN_TYPES.forEach((planType) => {
@@ -111,11 +217,17 @@ export function generateCandidatePlans(answers = {}, rulesData = {}) {
       .forEach((candidate) => candidates.push(candidate));
   });
 
-  const filtered = candidates.filter((candidate) => filterCandidatePlan(candidate, {
+  let filtered = candidates.filter((candidate) => filterCandidatePlan(candidate, {
     answers: normalized,
     supportedTypes,
     rulesData
   }));
+  const usesJapaneseBudgetFallback = isJapaneseCloset && !filtered.length;
+  if (usesJapaneseBudgetFallback) {
+    filtered = candidates
+      .filter((candidate) => candidate.rejectReason === "budgetExceeded")
+      .map(cloneJapaneseBudgetFallbackCandidate);
+  }
   filtered.forEach((candidate) => {
     candidate.scores = scoreCandidatePlan(candidate, normalized);
   });
@@ -163,6 +275,10 @@ export function generateCandidatePlans(answers = {}, rulesData = {}) {
     caseDistributionTarget: normalized.primaryJapaneseCase
       ? getJapaneseCaseDistributionTarget(normalized.primaryJapaneseCase)
       : {},
+    caseMatching: normalized.caseMatching || buildDisabledCaseMatchingDebug(normalized),
+    caseMatchingRuleLoad: rulesData.caseMatchingRuleLoad || buildDefaultCaseMatchingRuleLoad(rulesData.caseMatchingRules),
+    componentUpgrade: {},
+    japaneseBudgetFallbackUsed: usesJapaneseBudgetFallback && filtered.length > 0,
     heatmap: Object.fromEntries(PLAN_TYPES.map((planType) => [
       planType,
       heatmap[planType].map(toCandidateDebugSummary)
@@ -170,6 +286,247 @@ export function generateCandidatePlans(answers = {}, rulesData = {}) {
   };
   console.log("[candidate-plan-engine]", lastStats);
   return valid;
+}
+
+function cloneJapaneseBudgetFallbackCandidate(candidate) {
+  return {
+    ...candidate,
+    rejectReason: null,
+    japaneseBudgetFallbackSource: true,
+    placements: (candidate.placements || []).map((placement) => ({ ...placement })),
+    parameters: { ...(candidate.parameters || {}) },
+    configPreset: {
+      ...(candidate.configPreset || {}),
+      componentQuantities: { ...(candidate.configPreset?.componentQuantities || {}) },
+      explicitPlacements: (candidate.configPreset?.explicitPlacements || []).map((placement) => ({ ...placement }))
+    }
+  };
+}
+
+export function matchJapaneseCasesByRules(answers = {}, caseMatchingRules = null, limit = 10) {
+  const profiles = caseMatchingRules?.caseProfiles || [];
+  if (!profiles.length) {
+    return findSimilarJapaneseCases(answers, limit);
+  }
+  const userRequirementVector = buildCaseMatchingRequirementVector(answers);
+  const answeredRequirementKeys = getAnsweredCaseMatchingRequirementKeys(answers);
+  const tagsById = caseMatchingRules?.caseTagsById || new Map();
+  const profileById = new Map(profiles.map((profile) => [profile.caseId, profile]));
+  const scoredCases = japaneseCaseLibrary
+    .map((caseData) => {
+      const profile = profileById.get(caseData.caseId);
+      if (!profile) return null;
+      const tagRow = tagsById.get(caseData.caseId) || {};
+      const scoreBreakdown = buildCaseMatchingScoreBreakdown(
+        userRequirementVector,
+        profile.scores || {},
+        answeredRequirementKeys,
+        profile,
+        tagRow
+      );
+      const score = scoreBreakdown.finalScore;
+      return {
+        ...caseData,
+        score: roundScore(score),
+        matchedReason: profile.persona || profile.primaryType || "CaseMatchingRules.xlsx",
+        persona: profile.persona || "",
+        primaryType: profile.primaryType || "",
+        priorityTag: profile.priorityTag || "",
+        tags: tagRow.tags || [],
+        avoidWhen: tagRow.avoidWhen || [],
+        caseMatching: {
+          enabled: true,
+          selectedCaseId: "",
+          selectedPersona: "",
+          score: 0,
+          topCandidates: [],
+          userRequirementVector,
+          scoreBreakdown
+        }
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score
+      || Number(right.layoutTemplate?.length || 0) - Number(left.layoutTemplate?.length || 0)
+      || left.caseId.localeCompare(right.caseId));
+  const topCandidates = scoredCases.slice(0, Math.max(1, Number(limit) || 10)).map((caseData) => ({
+    caseId: caseData.caseId,
+    persona: caseData.persona,
+    score: caseData.score,
+    scoreBreakdown: cloneCaseMatchingScoreBreakdown(caseData.caseMatching?.scoreBreakdown),
+    tags: [...(caseData.tags || [])]
+  }));
+  const selected = scoredCases[0] || null;
+  const debug = {
+    enabled: true,
+    selectedCaseId: selected?.caseId || null,
+    selectedPersona: selected?.persona || "",
+    score: selected?.score || 0,
+    topCandidates,
+    userRequirementVector,
+    scoreBreakdown: cloneCaseMatchingScoreBreakdown(selected?.caseMatching?.scoreBreakdown)
+  };
+  return scoredCases.slice(0, Math.max(1, Number(limit) || 10)).map((caseData) => ({
+    ...caseData,
+    caseMatching: {
+      ...debug,
+      scoreBreakdown: cloneCaseMatchingScoreBreakdown(caseData.caseMatching?.scoreBreakdown)
+    }
+  }));
+}
+
+function buildCaseMatchingRequirementVector(answers = {}) {
+  const source = answers.needs
+    || (answers.demands && !Array.isArray(answers.demands) ? answers.demands : null)
+    || answers.demandsWeights
+    || answers.needWeights
+    || {};
+  return {
+    shortClothes: demandScore(source, answers, "shortClothes", "短衣"),
+    longClothes: demandScore(source, answers, "longClothes", "长衣"),
+    shoes: demandScore(source, answers, "shoes", "鞋子"),
+    bags: demandScore(source, answers, "bags", "包包"),
+    bedding: demandScore(source, answers, "bedding", "被褥"),
+    luggage: demandScore(source, answers, "luggage", "行李箱"),
+    jewelry: demandScore(source, answers, "jewelry", "首饰"),
+    trouser: demandScore(source, answers, "trousers", "裤子")
+  };
+}
+
+function buildCaseMatchingScoreBreakdown(
+  userRequirementVector,
+  caseProfileScores,
+  answeredRequirementKeys = null,
+  profile = {},
+  tagRow = {}
+) {
+  const answeredKeys = answeredRequirementKeys instanceof Set
+    ? answeredRequirementKeys
+    : new Set(Object.keys(userRequirementVector || {}));
+  const perItemContribution = {};
+  const perItemPenalty = {};
+  Object.entries(userRequirementVector || {}).forEach(([key, userScore]) => {
+    const normalizedUserScore = Number(userScore) || 0;
+    const caseScore = Number(caseProfileScores[key]) || 0;
+    perItemContribution[key] = roundScore(normalizedUserScore * caseScore);
+    perItemPenalty[key] = answeredKeys.has(key)
+      ? roundScore(Math.abs(normalizedUserScore - caseScore) * CASE_MATCHING_DISTANCE_PENALTY_WEIGHT)
+      : 0;
+  });
+  const baseScore = roundScore(Object.values(perItemContribution)
+    .reduce((sum, value) => sum + Number(value || 0), 0));
+  const distancePenalty = roundScore(Object.values(perItemPenalty)
+    .reduce((sum, value) => sum + Number(value || 0), 0));
+  const profileAffinityAdjustment = getCaseMatchingProfileAffinityAdjustment(
+    userRequirementVector,
+    caseProfileScores,
+    profile,
+    tagRow
+  );
+  return {
+    baseScore,
+    distancePenalty,
+    profileAffinityAdjustment,
+    finalScore: roundScore(baseScore - distancePenalty + profileAffinityAdjustment),
+    perItemContribution,
+    perItemPenalty
+  };
+}
+
+function getCaseMatchingProfileAffinityAdjustment(
+  userRequirementVector = {},
+  caseProfileScores = {},
+  profile = {},
+  tagRow = {}
+) {
+  const shortScore = Number(userRequirementVector.shortClothes) || 0;
+  const longScore = Number(userRequirementVector.longClothes) || 0;
+  if (shortScore < 4 || shortScore - longScore < 2) return 0;
+  const profileText = [
+    profile.primaryType,
+    profile.persona,
+    profile.priorityTag,
+    ...(tagRow.tags || []),
+    ...(tagRow.avoidWhen || [])
+  ].join(" ").toLowerCase();
+  const caseShortScore = Number(caseProfileScores.shortClothes) || 0;
+  const caseLongScore = Number(caseProfileScores.longClothes) || 0;
+  const isShortHeavyProfile = profileText.includes("shortclothesheavy")
+    || profileText.includes("middleshort")
+    || profileText.includes("short-heavy")
+    || profileText.includes("短衣");
+  if (!isShortHeavyProfile || caseShortScore < 4 || caseShortScore < caseLongScore) return 0;
+  return roundScore(CASE_MATCHING_PROFILE_AFFINITY_WEIGHT);
+}
+
+function getAnsweredCaseMatchingRequirementKeys(answers = {}) {
+  const source = answers.needs
+    || (answers.demands && !Array.isArray(answers.demands) ? answers.demands : null)
+    || answers.demandsWeights
+    || answers.needWeights
+    || {};
+  const hasAnswer = (englishKey, chineseKey) => (
+    Object.prototype.hasOwnProperty.call(source, englishKey)
+    || Object.prototype.hasOwnProperty.call(source, chineseKey)
+    || Object.prototype.hasOwnProperty.call(answers, englishKey)
+    || Object.prototype.hasOwnProperty.call(answers, chineseKey)
+    || Object.prototype.hasOwnProperty.call(answers.demandQuantityProfile || {}, chineseKey)
+  );
+  return new Set([
+    ["shortClothes", "短衣"],
+    ["longClothes", "长衣"],
+    ["shoes", "鞋子"],
+    ["bags", "包包"],
+    ["bedding", "被褥"],
+    ["luggage", "行李箱"],
+    ["jewelry", "首饰"],
+    ["trouser", "裤子", "trousers"]
+  ].filter(([key, chineseKey, aliasKey]) => (
+    hasAnswer(key, chineseKey) || (aliasKey && hasAnswer(aliasKey, chineseKey))
+  )).map(([key]) => key));
+}
+
+function cloneCaseMatchingScoreBreakdown(scoreBreakdown = {}) {
+  return {
+    ...scoreBreakdown,
+    perItemContribution: { ...(scoreBreakdown.perItemContribution || {}) },
+    perItemPenalty: { ...(scoreBreakdown.perItemPenalty || {}) }
+  };
+}
+
+function cloneComponentUpgradeDebug(debug = null) {
+  if (!debug) return null;
+  return {
+    ...debug,
+    appliedActions: (debug.appliedActions || []).map((item) => ({ ...item })),
+    skippedActions: (debug.skippedActions || []).map((item) => ({ ...item })),
+    protectedCoreZones: [...(debug.protectedCoreZones || [])]
+  };
+}
+
+function demandScore(source, answers, englishKey, chineseKey) {
+  const value = source[englishKey] ?? source[chineseKey] ?? answers[englishKey] ?? answers[chineseKey] ?? 0;
+  return Math.max(0, Math.min(5, Number(value) || 0));
+}
+
+function buildDisabledCaseMatchingDebug(answers = {}) {
+  return {
+    enabled: false,
+    selectedCaseId: null,
+    selectedPersona: "",
+    score: 0,
+    topCandidates: [],
+    userRequirementVector: buildCaseMatchingRequirementVector(answers)
+  };
+}
+
+function buildDefaultCaseMatchingRuleLoad(caseMatchingRules = null) {
+  return {
+    attempted: Boolean(caseMatchingRules),
+    loaded: caseMatchingRules?.enabled === true,
+    error: caseMatchingRules?.error || null,
+    fallbackToLegacy: caseMatchingRules?.enabled !== true
+  };
 }
 
 export function filterCandidatePlan(candidate, { answers, supportedTypes }) {
@@ -183,6 +540,18 @@ export function filterCandidatePlan(candidate, { answers, supportedTypes }) {
   if (getSelectedSeriesId(answers) === "japanese-closet"
     && !validateJapaneseBayCoverage(candidate)) {
     return rejectCandidate(candidate, "japaneseEmptyBay");
+  }
+  if (getSelectedSeriesId(answers) === "japanese-closet") {
+    candidate.japanesePlacementValidationDebug = getJapanesePlacementValidationDiagnostics(placements);
+    const invalidAccessoryPlacement = candidate.japanesePlacementValidationDebug
+      .find((item) => !item.isValidPlacement);
+    if (invalidAccessoryPlacement) {
+      return rejectCandidate(candidate, invalidAccessoryPlacement.invalidReason);
+    }
+    candidate.forbiddenPatternViolations = getJapaneseCaseForbiddenPatternViolations(candidate);
+    if (candidate.forbiddenPatternViolations.length) {
+      return rejectCandidate(candidate, candidate.forbiddenPatternViolations[0].id);
+    }
   }
   if (placements.some((placement) => placement.componentType === "LUGGAGE_ZONE")) {
     return rejectCandidate(candidate, "fakeComponent");
@@ -233,9 +602,7 @@ export function filterCandidatePlan(candidate, { answers, supportedTypes }) {
   if (!validateShortHangHeights(placements)) {
     return rejectCandidate(candidate, "shortHangHeightInvalid");
   }
-  if (!validateShoeGaps(placements)) {
-    return rejectCandidate(candidate, "shoeShelfGapTooSmall");
-  }
+  candidate.shoeShelfGapWarning = !validateShoeGaps(placements);
   const shelfUsabilityRejectReason = getShelfUsabilityRejectReason(placements);
   if (shelfUsabilityRejectReason) {
     return rejectCandidate(candidate, shelfUsabilityRejectReason);
@@ -260,7 +627,7 @@ export function scoreCandidatePlan(candidate, answers) {
     : 1;
   const layoutScore = scoreLayout(candidate, answers) * 30
     * (getSelectedSeriesId(answers) === "japanese-closet" ? casePenaltyFactor : 1);
-  const visualScore = scoreVisual(candidate) * 20;
+  const visualScore = 0;
   const budgetScore = scoreBudget(candidate) * 10;
   const upgradeScore = scoreUpgrade(candidate, answers);
   const caseMatchBonus = getSelectedSeriesId(answers) === "japanese-closet"
@@ -318,7 +685,6 @@ function getJapaneseCaseDistributionMetrics(candidate, primaryCase) {
 export function selectRecommendedCandidates(candidates = [], answers = {}) {
   const normalizedAnswers = normalizeAnswers(answers);
   normalizedAnswers.japaneseHardRequirements = getJapaneseHardRequirements(normalizedAnswers);
-  if (normalizedAnswers.primaryJapaneseCase) applyPrimaryJapaneseCaseNeeds(normalizedAnswers);
   const seriesId = getSelectedSeriesId(normalizedAnswers);
   const supportedTypes = getSupportedTypes(seriesId);
   if (seriesId === "japanese-closet") {
@@ -347,7 +713,8 @@ export function selectRecommendedCandidates(candidates = [], answers = {}) {
     reasons.push("premiumReselectedForDifference");
   }
 
-  const selected = [basic, value, premium];
+  const selected = getOrderedTierSet([basic, value, premium]);
+  attachCandidateQaResult(selected);
   const missingPlanTypes = PLAN_TYPES.filter((planType, index) => !selected[index]);
   updateMissingPlanStats(missingPlanTypes, selected);
   updatePlanSimilarityStats(selected, reasons);
@@ -355,91 +722,1881 @@ export function selectRecommendedCandidates(candidates = [], answers = {}) {
 }
 
 function selectJapaneseClosetCandidates(candidates, answers, supportedTypes) {
-  const reasons = [];
   const targets = getJapaneseClosetTargetPrices(answers);
-  const basicCandidates = getTierCandidates(candidates, "basic");
-  const valueCandidates = getTierCandidates(candidates, "value");
-  const premiumCandidates = getTierCandidates(candidates, "premium");
-
-  const basic = selectJapaneseCandidateByTarget(
-    basicCandidates,
-    null,
-    "basic",
-    targets.basic,
-    { min: targets.basicMin, max: targets.basicMax }
-  )
-    || cloneCandidateForTier([...candidates].sort((a, b) => (
-      Math.abs(Number(a.estimatedPrice || 0) - targets.basic)
-      - Math.abs(Number(b.estimatedPrice || 0) - targets.basic)
-    ))[0], "basic");
-  applyJapaneseCaseLayoutTemplate(basic, answers, "basic");
-  annotateJapaneseSelection(basic, targets.basic, "closestToBudgetLowerAnchor", targets);
-
-  let value = selectJapaneseCandidateByTarget(
-    valueCandidates,
-    basic,
-    "value",
-    targets.value,
-    { min: targets.budgetMin, max: targets.budgetMax }
-  );
-  if (!value) {
-    value = createJapaneseTargetFallbackCandidate(
-      basic,
-      answers,
-      supportedTypes,
-      "value",
-      targets.value,
-      { min: targets.budgetMin, max: targets.budgetMax }
-    );
-    reasons.push("valueDerivedTowardTargetPrice");
-  } else {
-    reasons.push("valueSelectedInsideBudgetWithDifference");
-  }
-  applyJapaneseCaseLayoutTemplate(value, answers, "value");
-  value = enforceJapaneseHardRequirements(value, basic, answers, supportedTypes, "value");
-  annotateJapaneseSelection(value, targets.value, "insideBudgetWithUpgrade", targets);
-
-  let premium = selectJapaneseCandidateByTarget(
-    premiumCandidates,
-    value,
-    "premium",
-    targets.premium,
-    { min: targets.budgetMax, max: targets.premiumMax, strictMin: true }
-  );
-  if (!premium) {
-    premium = createJapaneseTargetFallbackCandidate(
-      value,
-      answers,
-      supportedTypes,
-      "premium",
-      targets.premium,
-      { min: targets.budgetMax, max: targets.premiumMax, strictMin: true }
-    );
-    premium ||= [...premiumCandidates].sort((a, b) => (
-      Number(b.finalPlanPrice ?? b.estimatedPrice ?? 0)
-      - Number(a.finalPlanPrice ?? a.estimatedPrice ?? 0)
-    ))[0] || null;
-    reasons.push("premiumDerivedAboveBudget");
-  } else {
-    reasons.push("premiumSelectedAboveBudgetWithDifference");
-  }
-  premium = ensureJapanesePremiumAnchorPrice(premium, value, answers, supportedTypes, targets);
-  applyJapaneseCaseLayoutTemplate(premium, answers, "premium");
-  premium = enforceJapaneseHardRequirements(premium, value, answers, supportedTypes, "premium");
-  annotateJapaneseSelection(
-    premium,
-    targets.premium,
-    premium?.premiumCouldNotExceedBudget
-      ? "highestRealCandidateCouldNotExceedBudget"
-      : "aboveBudgetIdealAnchor",
+  const availability = getCandidateBudgetAvailability(answers);
+  const bayCount = Math.max(1, Number(availability?.bayCount || 1));
+  const sourceSelection = selectJapaneseSkeletonSource(candidates, bayCount);
+  if (!sourceSelection.candidate) return [];
+  const skeleton = buildJapaneseLayoutSkeleton(answers, bayCount);
+  const selectedResult = buildJapaneseSkeletonTierSet(
+    sourceSelection.candidate,
+    answers,
+    skeleton,
+    supportedTypes,
     targets
   );
-
-  const selected = [basic, value, premium];
+  const selected = selectedResult.selected;
+  attachCandidateQaResult(selected);
+  const basic = selected[0];
+  const value = selected[1];
+  const premium = selected[2];
+  const valueResult = selectedResult.valueResult;
+  const premiumResult = selectedResult.premiumResult;
+  attachJapanesePriceOrderDebug(selected);
+  attachJapaneseTierDifferenceDebug(selected, skeleton, {
+    fallbackUsed: sourceSelection.fallbackUsed || valueResult.fallbackUsed || premiumResult.fallbackUsed,
+    fallbackReason: [
+      sourceSelection.fallbackReason,
+      valueResult.fallbackReason,
+      premiumResult.fallbackReason
+    ].filter(Boolean).join("; ") || "none"
+  });
+  Object.assign(lastStats, {
+    budgetAvailability: {
+      ...(lastStats.budgetAvailability || {}),
+      basicTargetPrice: targets.basic,
+      valueTargetPrice: targets.value,
+      premiumTargetPrice: targets.premium
+    },
+    budgetMin: targets.budgetMin,
+    budgetMax: targets.budgetMax,
+    budgetMid: targets.budgetMid,
+    basicMin: targets.basicMin,
+    basicMax: targets.basicMax,
+    basicTarget: targets.basic,
+    basicBelowBudgetFallback: basic?.basicBelowBudgetFallback || false,
+    priceWasTargetAdjusted: false,
+    primaryCaseId: answers.primaryJapaneseCase?.caseId || null,
+    caseLayoutTemplate: answers.primaryJapaneseCase?.layoutTemplate || [],
+    resolvedSkeleton: skeleton,
+    forbiddenPatternViolations: Object.fromEntries(selected.map((candidate) => [
+      candidate.planType,
+      candidate.forbiddenPatternViolations || []
+    ])),
+    tierUpgradeRulesApplied: Object.fromEntries(selected.map((candidate) => [
+      candidate.planType,
+      candidate.tierUpgradeRulesApplied || {}
+    ])),
+    bayRoleComponents: Object.fromEntries(selected.map((candidate) => [
+      candidate.planType,
+      candidate.bayRoleComponents || []
+    ])),
+    componentUpgrade: Object.fromEntries(selected.map((candidate) => [
+      candidate.planType,
+      candidate.componentUpgrade || null
+    ])),
+    skeleton,
+    basicComponents: basic.componentCountByType,
+    valueComponents: value.componentCountByType,
+    premiumComponents: premium.componentCountByType,
+    baseBayPrice: basic.baseBayPrice,
+    basePlanPrice: basic.basePlanPrice,
+    basicUpgradeList: basic.basicUpgradeList,
+    valueUpgradeList: value.valueUpgradeList,
+    premiumUpgradeList: premium.premiumUpgradeList,
+    basicPriceBreakdown: basic.priceBreakdown,
+    valuePriceBreakdown: value.priceBreakdown,
+    premiumPriceBreakdown: premium.priceBreakdown,
+    caseUsedForLayoutOnly: false,
+    basicVsValueDifferent: basic.basicVsValueDifferent,
+    valueVsPremiumDifferent: premium.valueVsPremiumDifferent,
+    visibleUpgradeCountBasicToValue: value.visibleUpgradeCountBasicToValue,
+    visibleUpgradeCountValueToPremium: premium.visibleUpgradeCountValueToPremium,
+    priceOrderValid: premium.priceOrderValid,
+    fallbackUsed: premium.fallbackUsed,
+    fallbackReason: premium.fallbackReason
+  });
   const missingPlanTypes = PLAN_TYPES.filter((planType, index) => !selected[index]);
   updateMissingPlanStats(missingPlanTypes, selected);
-  updatePlanSimilarityStats(selected, reasons);
+  updatePlanSimilarityStats(selected, [premium.fallbackReason]
+    .filter((reason) => reason && reason !== "none"));
   return selected.filter(Boolean);
+}
+
+function buildJapaneseSkeletonTierSet(sourceCandidate, answers, skeleton, supportedTypes, targets) {
+  const basic = buildJapaneseSkeletonTierCandidate(
+    sourceCandidate,
+    answers,
+    skeleton,
+    "basic",
+    targets
+  );
+  const valueResult = buildJapaneseUpgradedTierCandidate(
+    basic,
+    answers,
+    skeleton,
+    "value",
+    supportedTypes,
+    targets
+  );
+  const value = valueResult.candidate;
+  const premiumResult = buildJapaneseUpgradedTierCandidate(
+    value,
+    answers,
+    skeleton,
+    "premium",
+    supportedTypes,
+    targets
+  );
+  const premium = premiumResult.candidate;
+
+  basic.basicBelowBudgetFallback = getCandidateRealPrice(basic) < targets.budgetMin;
+  annotateJapaneseSelection(basic, targets.basic, "caseSkeletonBasic", targets);
+  annotateJapaneseSelection(value, targets.value, "caseSkeletonValueUpgrade", targets);
+  annotateJapaneseSelection(premium, targets.premium, "caseSkeletonPremiumUpgrade", targets);
+
+  return {
+    selected: [basic, value, premium],
+    valueResult,
+    premiumResult
+  };
+}
+
+function selectJapaneseSkeletonSource(candidates, bayCount) {
+  const exactBasic = getJapaneseExactBasicSources(candidates, bayCount);
+  const exactAnyTier = getJapaneseExactAnyTierSources(candidates, bayCount);
+  const pool = exactBasic.length ? exactBasic : exactAnyTier.length ? exactAnyTier : candidates;
+  const candidate = sortJapaneseSkeletonSources(pool)[0] || null;
+  return {
+    candidate,
+    fallbackUsed: !exactBasic.length,
+    fallbackReason: exactBasic.length ? "" : exactAnyTier.length
+      ? "noBasicSourceAtSkeletonBayCount"
+      : "noSourceAtSkeletonBayCount"
+  };
+}
+
+function selectJapaneseSkeletonSourceCandidates(candidates, bayCount) {
+  const exactBasic = getJapaneseExactBasicSources(candidates, bayCount);
+  const exactAnyTier = getJapaneseExactAnyTierSources(candidates, bayCount);
+  const pool = exactBasic.length ? exactBasic : exactAnyTier.length ? exactAnyTier : candidates;
+  return sortJapaneseSkeletonSources(pool).slice(0, CANDIDATE_QA_SELECTION_WINDOW);
+}
+
+function getJapaneseExactBasicSources(candidates, bayCount) {
+  return candidates.filter((candidate) => candidate.planType === "basic"
+    && Number(candidate.parameters?.bayCount || candidate.configPreset?.bayCount) === bayCount);
+}
+
+function getJapaneseExactAnyTierSources(candidates, bayCount) {
+  return candidates.filter((candidate) => (
+    Number(candidate.parameters?.bayCount || candidate.configPreset?.bayCount) === bayCount
+  ));
+}
+
+function sortJapaneseSkeletonSources(candidates) {
+  return [...candidates].sort((left, right) => (
+    Number(right.scores?.caseMatchBonus || 0) - Number(left.scores?.caseMatchBonus || 0)
+    || Number(right.scores?.layoutScore || 0) - Number(left.scores?.layoutScore || 0)
+    || Number(right.scores?.totalScore || 0) - Number(left.scores?.totalScore || 0)
+  ));
+}
+
+function buildJapaneseLayoutSkeleton(answers, bayCount) {
+  const caseTemplate = answers.primaryJapaneseCase?.layoutTemplate || [];
+  const templateRoles = caseTemplate.length === bayCount
+    ? caseTemplate.map((entry) => entry.role || entry.zone)
+    : getJapaneseRuleTemplateRoles(bayCount);
+  return templateRoles.map((sourceRole, bayIndex) => ({
+    bayIndex,
+    sourceRole,
+    role: resolveJapaneseConditionalRole(sourceRole, answers.needs || {}),
+    zone: resolveJapaneseConditionalRole(sourceRole, answers.needs || {})
+  }));
+}
+
+function getJapaneseRuleTemplateRoles(bayCount) {
+  const exact = JAPANESE_CASE_LAYOUT_RULES.bayTemplates[bayCount];
+  if (exact) return [...exact];
+  const base = [...JAPANESE_CASE_LAYOUT_RULES.bayTemplates[6]];
+  while (base.length < bayCount) base.splice(base.length - 1, 0, "shortHangZone");
+  return base.slice(0, bayCount);
+}
+
+function resolveJapaneseConditionalRole(role, needs) {
+  if (role === "longHangOrShoeZone") {
+    return Number(needs.鞋子 || 0) > 0 ? "shoeShelfZone" : "longHangZone";
+  }
+  if (role === "trouserOrShortHangZone") {
+    return Number(needs.裤子 || 0) >= 2 ? "trouserZone" : "shortHangZone";
+  }
+  return role;
+}
+
+function buildJapaneseSkeletonTierCandidate(source, answers, skeleton, planType, targets) {
+  const candidate = cloneCandidateForTier(source, planType);
+  candidate.planId = `${planType}:case-skeleton:${answers.primaryJapaneseCase?.caseId || "auto"}`;
+  candidate.parameters.bayCount = skeleton.length;
+  candidate.configPreset.bayCount = skeleton.length;
+  candidate.placements = [];
+  skeleton.forEach((entry) => initializeJapaneseSkeletonBay(
+    candidate.placements,
+    entry,
+    answers,
+    planType
+  ));
+  candidate.skeleton = skeleton.map((item) => ({ ...item }));
+  candidate.layoutTemplate = answers.primaryJapaneseCase?.layoutTemplate || [];
+  candidate.caseLayoutTemplate = candidate.layoutTemplate;
+  candidate.basicUpgradeList = [];
+  applyJapaneseBasicLowCostUpgrades(candidate, answers, skeleton, targets);
+  finalizeJapaneseSkeletonCandidate(candidate, answers, planType);
+  return candidate;
+}
+
+function initializeJapaneseSkeletonBay(placements, entry, answers, planType) {
+  const { bayIndex, role, sourceRole } = entry;
+  const add = (zoneType, componentType, heightFromFloor, extra = {}) => {
+    placements.push({
+      ...placement(zoneType, componentType, bayIndex, heightFromFloor),
+      templateRole: role,
+      templateZone: role,
+      ...extra
+    });
+  };
+  if (role === "shortHangZone") {
+    add("shortHangZone", "singleRail", 1050, { isBaseRail: true });
+    add("shortHangZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, { isBaseRail: true });
+    return;
+  }
+  if (role === "longHangZone") {
+    add("longHangZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, { isBaseRail: true });
+    return;
+  }
+  if (role === "shoeShelfZone") {
+    if (planType === "basic" && isLowBudgetJapaneseBasic(answers)) {
+      add("shortHangZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, {
+        isBaseRail: true,
+        shoeDemandFloorStorage: true,
+        floorStorageReason: "lowBudgetUsesFloorStorage"
+      });
+      return;
+    }
+    const range = JAPANESE_CASE_LAYOUT_RULES.tierUpgradeRules[planType]?.shoeShelfRange || [1, 3];
+    const shelfCount = Number(answers.needs?.鞋子 || 0) > 0 ? Math.max(1, range[1]) : 1;
+    getJapaneseShelfHeights(role).slice(0, shelfCount)
+      .forEach((height) => add("shoeZone", "woodShelf", height));
+    if (sourceRole === "longHangOrShoeZone") {
+      add("shortHangZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, {
+        isBaseRail: true,
+        source: "longHangOrShoeZonePreservedHighRail",
+        sourceRole
+      });
+    }
+    return;
+  }
+  if (role === "shelfZone") {
+    if (planType === "basic") {
+      add("storageZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, { isBaseRail: true });
+    } else {
+      getJapaneseShelfHeights(role).slice(0, planType === "premium" ? 5 : 3)
+        .forEach((height) => add("storageZone", "woodShelf", height));
+    }
+    return;
+  }
+  if (role === "trouserZone") {
+    add("shortHangZone", "singleRail", 1050, { isBaseRail: true });
+    add("shortHangZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, { isBaseRail: true });
+    return;
+  }
+  if (role === "luggageZone") {
+    placements.push({
+      zoneType: "luggageZone",
+      componentType: "",
+      wallId: "back",
+      bayIndex,
+      heightFromFloor: 0,
+      reservedHeight: 800,
+      templateRole: role,
+      templateZone: role
+    });
+    add("luggageZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, { isBaseRail: true });
+    return;
+  }
+  add(role === "jewelryZone" ? "jewelryZone" : "storageZone", "singleRail", JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, {
+    isBaseRail: true
+  });
+}
+
+function buildJapaneseUpgradedTierCandidate(
+  baseCandidate,
+  answers,
+  skeleton,
+  planType,
+  supportedTypes,
+  targets
+) {
+  const candidate = cloneCandidateForTier(baseCandidate, planType);
+  if (planType === "premium") {
+    removeJapanesePremiumShoeShelfFunctionalShelves(candidate, skeleton, answers);
+  }
+  candidate.planId = `${planType}:case-skeleton:${answers.primaryJapaneseCase?.caseId || "auto"}`;
+  candidate.skeleton = skeleton.map((item) => ({ ...item }));
+  const usedBays = new Set();
+  const needs = answers.needs || {};
+  const upgradeList = [];
+  let fallbackUsed = false;
+  let fallbackReason = "";
+  if (planType === "value") {
+    applyJapaneseValueUpgrades(
+      candidate,
+      answers,
+      skeleton,
+      supportedTypes,
+      targets,
+      usedBays,
+      upgradeList
+    );
+  } else {
+    applyJapanesePremiumUpgrades(
+      candidate,
+    answers,
+    skeleton,
+    supportedTypes,
+    targets,
+    usedBays,
+    upgradeList
+  );
+  }
+  if (countJapaneseUpgradePoints(upgradeList) < 2) {
+    fallbackUsed = true;
+    fallbackReason = `${planType}RequiredAdditionalVisibleUpgradeSearch`;
+    addJapaneseShelfUpgrade(candidate, skeleton, upgradeList, 2, "", {
+      budgetMax: targets.budgetMax,
+      skipShoeShelfZone: isMediumJapaneseShoeDemand(answers)
+    });
+    replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList);
+  }
+  finalizeJapaneseSkeletonCandidate(candidate, answers, planType);
+  if (planType === "value" && preserveJapaneseMediumShoeUpperRails(candidate, answers, skeleton)) {
+    finalizeJapaneseSkeletonCandidate(candidate, answers, planType);
+  }
+  if (planType === "premium" && getCandidateRealPrice(candidate) <= getCandidateRealPrice(baseCandidate)) {
+    fallbackUsed = true;
+    fallbackReason ||= "premiumNeededRealPriceUpgrade";
+    addJapaneseShelfUpgrade(candidate, skeleton, upgradeList, 2, "", { budgetMax: targets.budgetMax });
+    finalizeJapaneseSkeletonCandidate(candidate, answers, planType);
+  }
+  candidate[`${planType}UpgradeList`] = upgradeList;
+  const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
+  candidate.premiumHardRequirements = {
+    requiresTrouserRack: requirements.requiresTrouserRack,
+    requiresJewelryBox: requirements.requiresJewelryBox,
+    requiresCabinet: requirements.requiresCabinet
+  };
+  candidate.premiumRequirementStatus = getJapaneseRequirementStatus(candidate, answers, requirements);
+  candidate.caseLibraryAppliedAs = "layoutReferenceOnly";
+  candidate.caseUsedForLayoutOnly = true;
+  candidate.hardRuleOverrideCase = false;
+  return { candidate, fallbackUsed, fallbackReason };
+}
+
+function applyJapaneseBasicLowCostUpgrades(candidate, answers, skeleton, targets) {
+  const upgradeList = candidate.basicUpgradeList;
+  const hasShoeDemand = Number(answers.needs?.鞋子 || 0) > 0;
+  if (hasShoeDemand && isLowBudgetJapaneseBasic(answers, targets)) {
+    const debug = candidate.componentUpgrade || createComponentUpgradeDebug(candidate, answers, skeleton, targets);
+    candidate.componentUpgrade = debug;
+    debug.skippedActions.push({
+      action: "EnsureShoeShelfCount",
+      upgradeType: "Add",
+      addComponent: "WoodShelf",
+      reason: "lowBudgetUsesFloorStorage"
+    });
+  } else if (hasShoeDemand) {
+    ensureJapaneseShoeShelfCount(candidate, skeleton, upgradeList, 3, targets);
+  }
+  applyJapaneseComponentUpgradeRules(candidate, answers, skeleton, targets, upgradeList, {
+    mode: "budgetTopUp",
+    planType: "basic"
+  });
+  const targetPrice = Math.max(
+    skeleton.length * JAPANESE_CLOSET_AI_PRICES.basicHangGroup,
+    Number(targets.budgetMin || 0)
+  );
+  let guard = 0;
+  while (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) < targetPrice - 50 && guard < 12) {
+    const upgraded = replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList);
+    if (!upgraded) break;
+    guard += 1;
+  }
+}
+
+function isLowBudgetJapaneseBasic(answers = {}, targets = {}) {
+  const label = String(answers.budgetRange || answers.budget || "");
+  const budgetMax = Number(targets.budgetMax || 0);
+  return label.includes("3,000以下") || (budgetMax > 0 && budgetMax <= 3000);
+}
+
+function applyJapaneseValueUpgrades(
+  candidate,
+  answers,
+  skeleton,
+  supportedTypes,
+  targets,
+  usedBays,
+  upgradeList
+) {
+  applyJapaneseComponentUpgradeRules(candidate, answers, skeleton, targets, upgradeList, {
+    mode: "tierUpgrade",
+    planType: "value",
+    supportedTypes,
+    usedBays
+  });
+  const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
+  if (shouldAddStorageCabinetByDemand(answers)
+    && supportedTypes.has("cabinet")
+    && addJapaneseSkeletonUpgrade(candidate, "cabinet", skeleton, answers, usedBays)) {
+    upgradeList.push(japaneseUpgradeDebug("cabinet", 800));
+  }
+  const optionalDemandUpgrades = [
+    ...(requirements.valuePrefersTrouserRack ? ["trouserRack"] : []),
+    ...(requirements.valuePrefersJewelryBox ? ["jewelryBox"] : [])
+  ];
+  for (const componentType of optionalDemandUpgrades) {
+    const price = componentType === "trouserRack" ? 660 : 700;
+    if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) + price > targets.budgetMax) continue;
+    if (!supportedTypes.has(componentType)) continue;
+    if (addJapaneseSkeletonUpgrade(candidate, componentType, skeleton, answers, usedBays)) {
+      upgradeList.push(japaneseUpgradeDebug(componentType, price));
+      break;
+    }
+  }
+  if (Number(answers.needs?.鞋子 || 0) > 0) {
+    const remainingBudget = Math.max(0, targets.budgetMax
+      - getJapaneseUnroundedPlanPrice(candidate, skeleton.length));
+    const currentShoeShelves = candidate.placements.filter((item) => (
+      item.componentType === "woodShelf" && item.templateRole === "shoeShelfZone"
+    )).length;
+    const affordableTarget = Math.min(5, currentShoeShelves + Math.floor(remainingBudget / 160));
+    const shoeShelfTarget = isMediumJapaneseShoeDemand(answers)
+      ? Math.max(3, currentShoeShelves)
+      : Math.max(3, affordableTarget);
+    ensureJapaneseShoeShelfCount(candidate, skeleton, upgradeList, shoeShelfTarget, targets);
+  }
+  ensureJapaneseDedicatedShelfCount(candidate, skeleton, upgradeList, 3);
+  if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) < Number(targets.value || 0) - 50) {
+    replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList);
+  }
+  while (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) < Number(targets.value || 0) - 80) {
+    if (!replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList)) break;
+  }
+}
+
+function applyJapanesePremiumUpgrades(
+  candidate,
+  answers,
+  skeleton,
+  supportedTypes,
+  targets,
+  usedBays,
+  upgradeList
+) {
+  applyJapaneseComponentUpgradeRules(candidate, answers, skeleton, targets, upgradeList, {
+    mode: "tierUpgrade",
+    planType: "premium",
+    supportedTypes,
+    usedBays
+  });
+  const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
+  const requiredComponents = [
+    ...(requirements.requiresTrouserRack ? ["trouserRack"] : []),
+    ...(requirements.requiresJewelryBox ? ["jewelryBox"] : [])
+  ];
+  requiredComponents.forEach((componentType) => {
+    if (candidate.placements.some((item) => item.componentType === componentType)) return;
+    if (!supportedTypes.has(componentType)) return;
+    if (addJapaneseSkeletonUpgrade(candidate, componentType, skeleton, answers, usedBays, true)) {
+      upgradeList.push(japaneseUpgradeDebug(
+        componentType,
+        componentType === "trouserRack" ? 660 : 700
+      ));
+    }
+  });
+  if (shouldAddStorageCabinetByDemand(answers)
+    && supportedTypes.has("cabinet")
+    && !candidate.placements.some((item) => item.componentType === "cabinet")
+    && addJapaneseSkeletonUpgrade(candidate, "cabinet", skeleton, answers, usedBays, true)) {
+    upgradeList.push(japaneseUpgradeDebug("cabinet", 800));
+  }
+  if (Number(answers.needs?.鞋子 || 0) > 0) {
+    ensureJapaneseShoeShelfCount(candidate, skeleton, upgradeList, 7, targets);
+  }
+  ensureJapaneseDedicatedShelfCount(candidate, skeleton, upgradeList, 5);
+  if (countJapaneseUpgradePoints(upgradeList) < 2
+    && shouldAddStorageCabinetByDemand(answers)
+    && supportedTypes.has("cabinet")
+    && addJapaneseSkeletonUpgrade(candidate, "cabinet", skeleton, answers, usedBays, true)) {
+    upgradeList.push(japaneseUpgradeDebug("cabinet", 800));
+  }
+  if (countJapaneseUpgradePoints(upgradeList) < 2) {
+    addJapaneseShelfUpgrade(candidate, skeleton, upgradeList, 2);
+  }
+  if (countJapaneseUpgradePoints(upgradeList) < 2) {
+    replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList);
+  }
+}
+
+function applyJapaneseComponentUpgradeRules(
+  candidate,
+  answers,
+  skeleton,
+  targets = {},
+  upgradeList = [],
+  options = {}
+) {
+  const rules = getExecutableComponentUpgradeRules(answers);
+  const debug = candidate.componentUpgrade || createComponentUpgradeDebug(candidate, answers, skeleton, targets);
+  candidate.componentUpgrade = debug;
+  if (!rules.length) {
+    debug.enabled = false;
+    debug.reason = "noComponentUpgradeRules";
+    debug.budgetAfter = getJapaneseUnroundedPlanPrice(candidate, skeleton.length);
+    return debug;
+  }
+  debug.enabled = true;
+  const budgetMin = Number(targets.budgetMin || 0);
+  const budgetMax = Number(targets.budgetMax || Infinity);
+  for (const rule of rules) {
+    const currentPrice = getJapaneseUnroundedPlanPrice(candidate, skeleton.length);
+    if (budgetMin > 0 && currentPrice >= budgetMin && currentPrice <= budgetMax) {
+      debug.reason = "alreadyInBudgetRange";
+      break;
+    }
+    if (isCoreReplacementRule(rule) && isCoreHangingProtected(answers, debug)) {
+      debug.skippedActions.push(componentUpgradeSkip(rule, "protectedCoreRequirement"));
+      continue;
+    }
+    if (!isComponentUpgradeRuleAllowed(rule, answers, debug, options)) {
+      debug.skippedActions.push(componentUpgradeSkip(rule, "noSpace"));
+      continue;
+    }
+    if (isAddShelfAboveRailRule(rule)) {
+      const result = addJapaneseShelfAboveRailUpgrade(candidate, answers, skeleton, upgradeList, rule, targets);
+      if (result.added > 0) {
+        debug.appliedActions.push({
+          action: getComponentUpgradeRuleValue(rule, "upgradeAction"),
+          upgradeType: getComponentUpgradeRuleValue(rule, "upgradeType"),
+          addComponent: getComponentUpgradeRuleValue(rule, "addComponent"),
+          count: result.added,
+          reason: options.mode === "budgetTopUp" ? "budgetTopUpAddAbove" : "tierAddAbove"
+        });
+      } else {
+        debug.skippedActions.push(componentUpgradeSkip(rule, result.reason || "noSpace"));
+      }
+      continue;
+    }
+    debug.skippedActions.push(componentUpgradeSkip(rule, "unsupportedInV1"));
+  }
+  debug.budgetAfter = getJapaneseUnroundedPlanPrice(candidate, skeleton.length);
+  if (!debug.reason) {
+    debug.reason = debug.appliedActions.length ? "rulesApplied" : "noRuleApplied";
+  }
+  return debug;
+}
+
+function getExecutableComponentUpgradeRules(answers = {}) {
+  return [...(answers.componentUpgradeRules || [])]
+    .filter((rule) => getComponentUpgradeRuleValue(rule, "upgradeAction"))
+    .sort((left, right) => Number(getComponentUpgradeRuleValue(left, "priority") || 999)
+      - Number(getComponentUpgradeRuleValue(right, "priority") || 999)
+      || String(getComponentUpgradeRuleValue(left, "upgradeAction"))
+        .localeCompare(String(getComponentUpgradeRuleValue(right, "upgradeAction"))));
+}
+
+function createComponentUpgradeDebug(candidate, answers, skeleton, targets) {
+  return {
+    enabled: false,
+    appliedActions: [],
+    skippedActions: [],
+    budgetBefore: getJapaneseUnroundedPlanPrice(candidate, skeleton.length),
+    budgetAfter: getJapaneseUnroundedPlanPrice(candidate, skeleton.length),
+    protectedCoreZones: getProtectedCoreZones(answers),
+    reason: "",
+    budgetMin: Number(targets.budgetMin || 0),
+    budgetMax: Number(targets.budgetMax || 0)
+  };
+}
+
+function isAddShelfAboveRailRule(rule = {}) {
+  return normalizeRuleText(getComponentUpgradeRuleValue(rule, "upgradeType")) === "addabove"
+    && normalizeRuleText(getComponentUpgradeRuleValue(rule, "addComponent")).includes("woodshelf")
+    && normalizeRuleText(getComponentUpgradeRuleValue(rule, "addComponent")).includes("aboverail");
+}
+
+function isCoreReplacementRule(rule = {}) {
+  const type = normalizeRuleText(getComponentUpgradeRuleValue(rule, "upgradeType"));
+  const target = normalizeRuleText(
+    getComponentUpgradeRuleValue(rule, "upgradeTarget") || getComponentUpgradeRuleValue(rule, "fromZone")
+  );
+  return type.includes("replace") && target.includes("hangingzone");
+}
+
+function isComponentUpgradeRuleAllowed(rule = {}, answers = {}, debug = {}, options = {}) {
+  const type = normalizeRuleText(getComponentUpgradeRuleValue(rule, "upgradeType"));
+  const component = normalizeRuleText(getComponentUpgradeRuleValue(rule, "addComponent"));
+  if (type.includes("replace")) {
+    return !isCoreHangingProtected(answers, debug)
+      && Number(getComponentUpgradeRuleValue(rule, "maxCoreReplacement")
+        || getComponentUpgradeRuleValue(rule, "maxReplaceRatio") || 0) > 0;
+  }
+  if (component.includes("cabinet")) return shouldAddStorageCabinetByDemand(answers);
+  if (component.includes("jewelry")) return Number(answers.needs?.首饰 || 0) > 0;
+  if (component.includes("trouser")) return Number(answers.needs?.裤子 || 0) > 0;
+  if (isAddShelfAboveRailRule(rule)) return true;
+  return options.mode !== "budgetTopUp";
+}
+
+function shouldAddStorageCabinetByDemand(answers = {}) {
+  const needs = answers.needs || {};
+  return Number(needs.包包 || 0) > 0
+    || Number(needs.被褥 || 0) > 0
+    || Number(needs.行李箱 || 0) > 0;
+}
+
+function isCoreHangingProtected(answers = {}, debug = {}) {
+  return (debug.protectedCoreZones || getProtectedCoreZones(answers)).length > 0;
+}
+
+function getProtectedCoreZones(answers = {}) {
+  const needs = answers.needs || {};
+  const caseData = answers.primaryJapaneseCase || {};
+  const text = [
+    caseData.persona,
+    caseData.primaryType,
+    caseData.priorityTag,
+    ...(caseData.tags || [])
+  ].join(" ").toLowerCase();
+  const shortHeavy = Number(needs.短衣 || 0) >= 2
+    || text.includes("short")
+    || text.includes("hanging")
+    || text.includes("挂衣")
+    || text.includes("短衣");
+  const longHeavy = Number(needs.长衣 || 0) >= 2
+    || text.includes("hanging")
+    || text.includes("long")
+    || text.includes("挂衣");
+  return [
+    ...(shortHeavy ? ["shortHangZone"] : []),
+    ...(longHeavy ? ["longHangZone"] : [])
+  ];
+}
+
+function addJapaneseShelfAboveRailUpgrade(candidate, answers, skeleton, upgradeList, rule, targets = {}) {
+  const roomHeight = Math.max(
+    2200,
+    Number(answers.roomHeight || answers.dimensions?.height || candidate.configPreset?.roomHeight || candidate.parameters?.roomHeight || 0)
+  );
+  const budgetMin = Number(targets.budgetMin || 0);
+  const budgetMax = Number(targets.budgetMax || Infinity);
+  let added = 0;
+  if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) >= budgetMin) {
+    return { added: 0, reason: "noSpace" };
+  }
+  const hangingBays = [...skeleton]
+    .filter((entry) => ["shortHangZone", "longHangZone", "trouserZone", "storageAccessoryZone"].includes(entry.role))
+    .sort((left, right) => left.bayIndex - right.bayIndex);
+  for (const { bayIndex, role } of hangingBays) {
+    const currentPrice = getJapaneseUnroundedPlanPrice(candidate, skeleton.length);
+    if (budgetMin > 0 && currentPrice >= budgetMin && currentPrice <= budgetMax) break;
+    if (currentPrice + JAPANESE_CLOSET_AI_PRICES.woodShelf > budgetMax) {
+      return { added, reason: added ? "" : "budgetExceeded" };
+    }
+    const bayPlacements = candidate.placements.filter((item) => (
+      Number(item.bayIndex) === Number(bayIndex)
+      && (item.wallId || "back") === "back"
+      && item.componentType
+    ));
+    if (JAPANESE_ONE_FUNCTIONAL_SHELF_PER_LOWER_FUNCTIONAL_ZONE
+      && bayPlacements.some((item) => item.componentType === "woodShelf" && item.isPremiumHangingShelfUpgrade)) continue;
+    const rails = bayPlacements
+      .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+      .sort((left, right) => Number(right.heightFromFloor || 0) - Number(left.heightFromFloor || 0));
+    if (!rails.length) continue;
+    if (!isJapanesePremiumFunctionalShelfBayEligible(bayPlacements, role)) continue;
+    const shelfCandidate = getJapanesePremiumHangingShelfCandidates(bayPlacements, role, roomHeight)
+      .find((candidate) => !bayPlacements.some((item) => (
+        intervalsOverlap(intervalFor(item), [
+          candidate.heightFromFloor,
+          candidate.heightFromFloor + COMPONENT_HEIGHTS.woodShelf
+        ])
+      )));
+    if (!shelfCandidate) continue;
+    const shelf = placement("storageZone", "woodShelf", bayIndex, shelfCandidate.heightFromFloor);
+    shelf.templateRole = role;
+    shelf.templateZone = role;
+    shelf.source = shelfCandidate.source;
+    shelf.upgradeAction = getComponentUpgradeRuleValue(rule, "upgradeAction");
+    shelf.upgradeType = getComponentUpgradeRuleValue(rule, "upgradeType");
+    shelf.isAboveRailUpgrade = shelfCandidate.kind === "upper";
+    shelf.isPremiumHangingShelfUpgrade = true;
+    shelf.premiumShelfStrategy = shelfCandidate.kind;
+    shelf.associatedLowerFeature = shelfCandidate.associatedLowerFeature;
+    shelf.lowerFunctionalZoneType = shelfCandidate.lowerFunctionalZoneType;
+    shelf.lowerFunctionalZoneComponentType = shelfCandidate.lowerFunctionalZoneComponentType;
+    candidate.placements.push(shelf);
+    upgradeList.push(japaneseUpgradeDebug("woodShelf", JAPANESE_CLOSET_AI_PRICES.woodShelf, bayIndex));
+    console.log("[candidate-plan-engine] premium functional shelf", {
+      bayIndex,
+      templateRole: role,
+      railHeights: rails.map((rail) => Number(rail.heightFromFloor || 0)),
+      lowerFunctionalZoneType: shelf.lowerFunctionalZoneType,
+      shelfHeight: shelf.heightFromFloor,
+      associatedLowerFeature: shelf.associatedLowerFeature,
+      associatedWith2000Rail: false
+    });
+    added += 1;
+  }
+  return { added, reason: added ? "" : "noSpace" };
+}
+
+function getJapanesePremiumHangingShelfCandidates(bayPlacements = [], role = "", roomHeight = 2700) {
+  return getJapaneseLowerFunctionalShelfCandidates(bayPlacements, role, roomHeight);
+}
+
+function getJapaneseLowerFunctionalShelfCandidates(bayPlacements = [], role = "", roomHeight = 2700) {
+  const rails = bayPlacements
+    .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+    .sort((left, right) => Number(left.heightFromFloor || 0) - Number(right.heightFromFloor || 0));
+  const railHeights = rails.map((rail) => Number(rail.heightFromFloor || 0));
+  const highRailHeight = railHeights.find((height) => (
+    height >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+    && height <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+  ));
+  if (!highRailHeight) return [];
+  const lowerFunctionalZones = getJapaneseLowerFunctionalZones(bayPlacements);
+  return lowerFunctionalZones
+    .map((candidate) => ({
+      ...candidate,
+      shelfTop: candidate.heightFromFloor + COMPONENT_HEIGHTS.woodShelf,
+      highRailHeight
+    }))
+    .filter((candidate) => (
+      candidate.heightFromFloor > 0
+      && candidate.heightFromFloor + COMPONENT_HEIGHTS.woodShelf <= roomHeight - JAPANESE_PREMIUM_SHELF_TOP_MARGIN
+      && candidate.heightFromFloor + COMPONENT_HEIGHTS.woodShelf < highRailHeight
+    ));
+}
+
+function getJapaneseLowerFunctionalZones(bayPlacements = []) {
+  const railZones = bayPlacements
+    .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+    .map((item) => ({
+      placement: item,
+      height: Number(item.heightFromFloor || 0)
+    }))
+    .filter(({ height }) => (
+      height >= JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.minHeight
+      && height <= JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.maxHeight
+    ))
+    .map(({ placement, height }) => {
+      const supportTop = height + (COMPONENT_HEIGHTS[placement.componentType] || COMPONENT_HEIGHTS.singleRail) / 2;
+      return {
+        heightFromFloor: supportTop + JAPANESE_PREMIUM_SHELF_RAIL_GAP,
+        supportTop,
+        associatedLowerFeature: "lowerFunctionalZone",
+        lowerFunctionalZoneType: JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.zoneType,
+        lowerFunctionalZoneComponentType: placement.componentType,
+        kind: "lower",
+        source: "ComponentUpgradeRules:lowerFunctionalZoneStorage"
+      };
+    });
+  const accessoryZones = bayPlacements
+    .filter((item) => JAPANESE_LOWER_FUNCTIONAL_ZONE_COMPONENTS.has(item.componentType))
+    .map((item) => {
+      const supportTop = getJapaneseLowerFunctionalZoneSupportTop(item);
+      return {
+        heightFromFloor: supportTop + DENSE_SHELF_MIN_GAP,
+        supportTop,
+        associatedLowerFeature: "lowerFunctionalZone",
+        lowerFunctionalZoneType: item.componentType,
+        lowerFunctionalZoneComponentType: item.componentType,
+        kind: "lower",
+        source: "ComponentUpgradeRules:lowerFunctionalZoneStorage"
+      };
+    });
+  return [...railZones, ...accessoryZones]
+    .sort((left, right) => Number(left.supportTop || 0) - Number(right.supportTop || 0));
+}
+
+function getJapaneseLowerFunctionalZoneSupportTop(placement = {}) {
+  const explicitHeight = Number(
+    placement.actualHeight
+    ?? placement.componentHeight
+    ?? placement.height
+    ?? placement.modelHeight
+  );
+  if (Number.isFinite(explicitHeight) && explicitHeight > 0) {
+    return Number(placement.heightFromFloor || 0) + explicitHeight;
+  }
+  if (JAPANESE_LOWER_FUNCTIONAL_STORAGE_SUPPORTS.has(placement.componentType)
+    && !COMPONENT_HEIGHTS[placement.componentType]) {
+    return Number(placement.heightFromFloor || 0) + JAPANESE_CABINET_MODEL_HEIGHT;
+  }
+  return intervalFor(placement)[1];
+}
+
+function getJapaneseUpperHangingShelfCandidates(bayPlacements = [], roomHeight = 2700) {
+  const topRail = bayPlacements
+    .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+    .sort((left, right) => Number(right.heightFromFloor || 0) - Number(left.heightFromFloor || 0))[0];
+  if (!topRail) return [];
+  const railHeight = Number(topRail.heightFromFloor || 0);
+  const heightFromFloor = railHeight + JAPANESE_PREMIUM_SHELF_RAIL_GAP;
+  if (heightFromFloor + COMPONENT_HEIGHTS.woodShelf > roomHeight - JAPANESE_PREMIUM_SHELF_TOP_MARGIN) {
+    return [];
+  }
+  return [{
+    heightFromFloor,
+    kind: "upper",
+    source: "ComponentUpgradeRules:upperRailStorage"
+  }];
+}
+
+function getJapanesePremiumShelfRailClearance(role) {
+  return role === "longHangZone"
+    ? JAPANESE_LONG_HANG_MIN_CLEARANCE_BELOW
+    : JAPANESE_SHORT_HANG_MIN_CLEARANCE_BELOW;
+}
+
+function componentUpgradeSkip(rule = {}, reason) {
+  return {
+    action: getComponentUpgradeRuleValue(rule, "upgradeAction") || "",
+    upgradeType: getComponentUpgradeRuleValue(rule, "upgradeType") || "",
+    addComponent: getComponentUpgradeRuleValue(rule, "addComponent") || "",
+    priority: getComponentUpgradeRuleValue(rule, "priority"),
+    protectCoreRequirement: getComponentUpgradeRuleValue(rule, "protectCoreRequirement"),
+    maxCoreReplacement: getComponentUpgradeRuleValue(rule, "maxCoreReplacement"),
+    maxReplaceRatio: getComponentUpgradeRuleValue(rule, "maxReplaceRatio"),
+    reason
+  };
+}
+
+function getComponentUpgradeRuleValue(rule = {}, field) {
+  const aliases = {
+    upgradeAction: ["upgradeAction", "UpgradeAction"],
+    fromZone: ["fromZone", "FromZone"],
+    addComponent: ["addComponent", "ToZone / AddComponent", "ToZone", "AddComponent"],
+    condition: ["condition", "Condition"],
+    priority: ["priority", "Priority"],
+    note: ["note", "Note", "Notes"],
+    upgradeType: ["upgradeType", "UpgradeType"],
+    upgradeTarget: ["upgradeTarget", "UpgradeTarget"],
+    protectCoreRequirement: ["protectCoreRequirement", "ProtectCoreRequirement"],
+    maxCoreReplacement: ["maxCoreReplacement", "MaxCoreReplacement"],
+    maxReplaceRatio: ["maxReplaceRatio", "MaxReplaceRatio"]
+  };
+  return (aliases[field] || [field]).map((key) => rule[key])
+    .find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function normalizeRuleText(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function addJapaneseShelfUpgrade(candidate, skeleton, upgradeList, quantity = 1, preferredZone = "", options = {}) {
+  const allowedRoles = new Set(["shoeShelfZone", "shelfZone"]);
+  const orderedBays = [...skeleton]
+    .filter((entry) => allowedRoles.has(entry.role))
+    .filter((entry) => !(options.skipShoeShelfZone && entry.role === "shoeShelfZone"))
+    .sort((left, right) => (
+      Number(left.role !== preferredZone) - Number(right.role !== preferredZone)
+      || right.bayIndex - left.bayIndex
+    ));
+  let addedCount = 0;
+  for (let attempt = 0; attempt < quantity; attempt += 1) {
+    let added = false;
+    for (const { bayIndex, role } of orderedBays) {
+      const existingShelves = candidate.placements.filter((item) => (
+        item.bayIndex === bayIndex && item.componentType === "woodShelf"
+      ));
+      const limit = role === "shoeShelfZone"
+        ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shoeZone.maxWoodShelves
+        : JAPANESE_CASE_LAYOUT_RULES.componentLimits.shelfZone.maxWoodShelves;
+      if (existingShelves.length >= limit) continue;
+      const heightFromFloor = getJapaneseShelfHeights(role)
+        .find((height) => (
+          !existingShelves.some((item) => Math.abs(item.heightFromFloor - height) < 100)
+          && isJapaneseShelfUpgradeHeightAllowedForRails(
+            candidate.placements,
+            bayIndex,
+            role,
+            height,
+            { planType: candidate.planType }
+          )
+        ));
+      if (heightFromFloor == null) continue;
+      const budgetMax = Number(options.budgetMax || Infinity);
+      if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) + JAPANESE_CLOSET_AI_PRICES.woodShelf > budgetMax) {
+        continue;
+      }
+      const shelf = placement(role === "shoeShelfZone" ? "shoeZone" : "storageZone", "woodShelf", bayIndex, heightFromFloor);
+      shelf.templateRole = role;
+      shelf.templateZone = role;
+      if (candidate.placements.some((item) => item.bayIndex === bayIndex
+        && intervalsOverlap(intervalFor(item), intervalFor(shelf)))) continue;
+      candidate.placements.push(shelf);
+      upgradeList.push(japaneseUpgradeDebug("woodShelf", 160, bayIndex));
+      added = true;
+      addedCount += 1;
+      break;
+    }
+    if (!added) break;
+  }
+  return addedCount;
+}
+
+function isJapaneseShelfUpgradeHeightAllowedForRails(
+  placements = [],
+  bayIndex,
+  role = "",
+  heightFromFloor = 0,
+  options = {}
+) {
+  if (options.planType !== "premium") return true;
+  const bayPlacements = placements.filter((item) => Number(item.bayIndex) === Number(bayIndex));
+  if (!isJapanesePremiumFunctionalShelfBayEligible(bayPlacements, role)) return false;
+  const bayRails = bayPlacements
+    .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+    .map((item) => Number(item.heightFromFloor || 0))
+    .filter((height) => height > 0);
+  const highRail = bayRails.find((height) => (
+    height >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+    && height <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+  ));
+  if (!highRail || heightFromFloor + COMPONENT_HEIGHTS.woodShelf >= highRail) return false;
+  const lowerFunctionalZone = getJapaneseLowerFunctionalZones(bayPlacements)[0];
+  if (!lowerFunctionalZone) return false;
+  return heightFromFloor >= lowerFunctionalZone.heightFromFloor;
+}
+
+function isJapanesePremiumFunctionalShelfBayEligible(bayPlacements = [], role = "") {
+  if (!["shortHangZone", "longHangZone", "trouserZone", "storageAccessoryZone"].includes(role)) {
+    return false;
+  }
+  const railHeights = bayPlacements
+    .filter((item) => ["singleRail", "doubleRail"].includes(item.componentType))
+    .map((item) => Number(item.heightFromFloor || 0))
+    .filter((height) => height > 0);
+  const hasHighRail = railHeights.some((height) => (
+    height >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+    && height <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+  ));
+  if (!hasHighRail) return false;
+  return getJapaneseLowerFunctionalZones(bayPlacements).length > 0;
+}
+
+function removeJapanesePremiumShoeShelfFunctionalShelves(candidate, skeleton = [], answers = {}) {
+  if (Number(answers.needs?.鞋子 || 0) > 0) return;
+  const shoeBayIndexes = new Set(skeleton
+    .filter((entry) => entry.role === "shoeShelfZone")
+    .map((entry) => Number(entry.bayIndex)));
+  candidate.placements = candidate.placements.filter((item) => {
+    if (!shoeBayIndexes.has(Number(item.bayIndex)) || item.componentType !== "woodShelf") return true;
+    const bayPlacements = candidate.placements.filter((placement) => (
+      Number(placement.bayIndex) === Number(item.bayIndex)
+    ));
+    const hasPreservedHighRail = bayPlacements.some((placement) => (
+      ["singleRail", "doubleRail"].includes(placement.componentType)
+      && Number(placement.heightFromFloor || 0) >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+      && Number(placement.heightFromFloor || 0) <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+    ));
+    return !hasPreservedHighRail
+      || Number(item.heightFromFloor || 0) < JAPANESE_SHOE_CAPACITY_PRESERVE_REMOVAL_MIN_HEIGHT;
+  });
+}
+
+function ensureJapaneseShoeShelfCount(candidate, skeleton, upgradeList, targetCount, targets = {}) {
+  const shoeBays = skeleton.filter((entry) => entry.role === "shoeShelfZone");
+  if (!shoeBays.length) return 0;
+  const currentCount = candidate.placements.filter((item) => (
+    item.componentType === "woodShelf" && item.templateRole === "shoeShelfZone"
+  )).length;
+  return addJapaneseShelfUpgrade(
+    candidate,
+    skeleton,
+    upgradeList,
+    Math.max(0, targetCount - currentCount),
+    "shoeShelfZone",
+    { budgetMax: targets.budgetMax }
+  );
+}
+
+function isMediumJapaneseShoeDemand(answers = {}) {
+  return Number(answers.needs?.鞋子 || 0) === 2;
+}
+
+function preserveJapaneseMediumShoeUpperRails(candidate, answers, skeleton = []) {
+  if (!isMediumJapaneseShoeDemand(answers)) return false;
+  let added = false;
+  skeleton
+    .filter((entry) => entry.role === "shoeShelfZone")
+    .forEach((entry) => {
+      const bayIndex = Number(entry.bayIndex);
+      const bayPlacements = candidate.placements.filter((item) => Number(item.bayIndex) === bayIndex);
+      const upperRailPlacement = bayPlacements.find((item) => (
+        ["singleRail", "doubleRail"].includes(item.componentType)
+        && Number(item.heightFromFloor || 0) >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+        && Number(item.heightFromFloor || 0) <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+      ));
+      if (upperRailPlacement) {
+        upperRailPlacement.heightFromFloor = JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT + 30;
+        added = true;
+        return;
+      }
+      const upperRail = placement("shortHangZone", "singleRail", bayIndex, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT + 30);
+      upperRail.templateRole = entry.role;
+      upperRail.templateZone = entry.role;
+      upperRail.sourceRole = entry.sourceRole;
+      upperRail.isBaseRail = true;
+      candidate.placements.push(upperRail);
+      added = true;
+    });
+  return added;
+}
+
+function ensureJapaneseDedicatedShelfCount(candidate, skeleton, upgradeList, targetCount) {
+  const shelfBays = skeleton.filter((entry) => entry.role === "shelfZone");
+  if (!shelfBays.length) return 0;
+  const shelfBayIndexes = new Set(shelfBays.map((entry) => entry.bayIndex));
+  candidate.placements = candidate.placements.filter((item) => !(
+    shelfBayIndexes.has(item.bayIndex)
+    && ["singleRail", "doubleRail"].includes(item.componentType)
+  ));
+  const currentCount = candidate.placements.filter((item) => (
+    item.componentType === "woodShelf" && shelfBayIndexes.has(item.bayIndex)
+  )).length;
+  return addJapaneseShelfUpgrade(
+    candidate,
+    skeleton,
+    upgradeList,
+    Math.max(0, targetCount - currentCount),
+    "shelfZone"
+  );
+}
+
+function getJapaneseShelfHeights(role) {
+  return role === "shoeShelfZone"
+    ? [250, 470, 690, 910, 1130, 1350, 1570]
+    : [300, 700, 1100, 1500, 1900];
+}
+
+function replaceJapaneseBaseRailWithDouble(candidate, skeleton, upgradeList) {
+  const replacementTargets = skeleton
+    .map((entry) => ({
+      bayIndex: entry.bayIndex,
+      role: entry.role,
+      intendedTargetHeight: getJapaneseDoubleRailIntendedTargetHeight(entry.role),
+      targetReason: getJapaneseDoubleRailTargetReason(entry.role)
+    }))
+    .filter((entry) => entry.intendedTargetHeight != null)
+    .sort((left, right) => left.bayIndex - right.bayIndex);
+  const target = replacementTargets.find((entry) => candidate.placements.some((item) => (
+    item.componentType === "singleRail"
+    && item.isBaseRail
+    && Number(item.bayIndex) === Number(entry.bayIndex)
+    && Math.abs(Number(item.heightFromFloor || 0) - entry.intendedTargetHeight) < 1
+  )));
+  if (!target) return false;
+  const replacement = candidate.placements.find((item) => (
+    item.componentType === "singleRail"
+    && item.isBaseRail
+    && Number(item.bayIndex) === Number(target.bayIndex)
+    && Math.abs(Number(item.heightFromFloor || 0) - target.intendedTargetHeight) < 1
+  ));
+  if (!replacement) return false;
+  const actualTargetHeight = Number(replacement.heightFromFloor || 0);
+  replacement.componentType = "doubleRail";
+  replacement.isBaseRail = false;
+  replacement.isBaseRailReplacement = true;
+  replacement.intendedTargetHeight = target.intendedTargetHeight;
+  replacement.actualTargetHeight = actualTargetHeight;
+  replacement.targetReason = target.targetReason;
+  replacement.wasTargetRedirected = actualTargetHeight !== target.intendedTargetHeight;
+  upgradeList.push({
+    ...japaneseUpgradeDebug("doubleRailReplacement", 50, replacement.bayIndex),
+    intendedTargetHeight: target.intendedTargetHeight,
+    actualTargetHeight,
+    targetReason: target.targetReason,
+    wasTargetRedirected: replacement.wasTargetRedirected
+  });
+  console.log("[candidate-plan-engine] doubleRail upgrade target", {
+    bayIndex: replacement.bayIndex,
+    intendedTargetHeight: target.intendedTargetHeight,
+    actualTargetHeight,
+    targetReason: target.targetReason,
+    wasTargetRedirected: replacement.wasTargetRedirected
+  });
+  return true;
+}
+
+function getJapaneseDoubleRailIntendedTargetHeight(role = "") {
+  if (["shortHangZone", "trouserZone"].includes(role)) return 1050;
+  if (role === "longHangZone") return JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT;
+  return null;
+}
+
+function getJapaneseDoubleRailTargetReason(role = "") {
+  if (role === "shortHangZone") return JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.zoneType;
+  if (role === "trouserZone") return "trouserZoneLowerRail";
+  if (role === "longHangZone") return "longHangHighRail";
+  return "";
+}
+
+function countJapaneseUpgradePoints(upgradeList = []) {
+  const shelfCount = upgradeList.filter((item) => item.componentType === "woodShelf").length;
+  return upgradeList.filter((item) => [
+    "cabinet", "trouserRack", "jewelryBox", "doubleRailReplacement"
+  ].includes(item.componentType)).length + Math.floor(shelfCount / 2);
+}
+
+function japaneseUpgradeDebug(componentType, price, bayIndex = null) {
+  return { componentType, price, ...(bayIndex == null ? {} : { bayIndex }) };
+}
+
+function getJapaneseUnroundedPlanPrice(candidate, bayCount) {
+  return calculateJapaneseClosetPrice(candidate.placements, bayCount, candidate.planType).manualComponentPrice;
+}
+
+function addJapaneseSkeletonUpgrade(
+  candidate,
+  componentType,
+  skeleton,
+  answers,
+  usedBays,
+  allowUsedBay = false
+) {
+  const preferredRoles = componentType === "cabinet"
+    ? new Set(["storageAccessoryZone", "jewelryZone"])
+    : componentType === "trouserRack"
+      ? new Set(["trouserZone", "shortHangZone", "storageAccessoryZone", "jewelryZone"])
+      : new Set(["storageAccessoryZone", "jewelryZone", "trouserZone", "shortHangZone"]);
+  const functionalBays = skeleton.filter((item) => ![
+    "longHangZone", "shoeShelfZone", "luggageZone", "shelfZone"
+  ].includes(item.role));
+  const isFixedAccessory = isFixedWidthAccessory(componentType);
+  if (isFixedAccessory) {
+    applyJapanesePlacementDimensions(candidate, answers);
+  }
+  const existingOrder = [...functionalBays].sort((left, right) => (
+    Number(!preferredRoles.has(left.role)) - Number(!preferredRoles.has(right.role))
+    || Number(usedBays.has(left.bayIndex)) - Number(usedBays.has(right.bayIndex))
+    || left.bayIndex - right.bayIndex
+  ));
+  const beforeOrder = isFixedAccessory
+    ? withJapaneseAccessoryBayWidths(existingOrder, answers.roomWidth, skeleton.length, candidate.placements)
+    : existingOrder;
+  const ordered = isFixedAccessory
+    ? selectJapanesePreferredAccessoryBays(
+      beforeOrder,
+      componentType,
+      answers.roomWidth,
+      skeleton.length,
+      candidate.placements,
+      "addJapaneseSkeletonUpgrade"
+    )
+    : existingOrder;
+  const afterOrder = isFixedAccessory
+    ? withJapaneseAccessoryBayWidths(ordered, answers.roomWidth, skeleton.length, candidate.placements)
+    : ordered;
+  const skippedBays = [];
+  for (const bay of ordered) {
+    const bayIndex = getJapaneseAccessoryCandidateBayIndex(bay);
+    const role = bay.role;
+    if (!allowUsedBay && usedBays.has(bayIndex)) {
+      skippedBays.push({
+        bayIndex,
+        role,
+        reason: "occupied"
+      });
+      continue;
+    }
+    const preservedFunctionalShelves = componentType === "trouserRack"
+      ? getJapaneseTrouserRackPreservedFunctionalShelves(candidate.placements, bayIndex)
+      : [];
+    const removedLowRails = componentType === "trouserRack"
+      ? removeJapaneseLowRailsForTrouser(candidate.placements, bayIndex)
+      : [];
+    const componentIndex = 0;
+    let added = addJapaneseTemplateComponent(
+      candidate.placements,
+      componentType,
+      role,
+      bayIndex,
+      componentIndex,
+      answers,
+      skeleton.length,
+      isFixedAccessory ? { preferredWidth: getJapaneseAccessoryModuleWidthForBay(bay) } : {}
+    );
+    if (!added && componentType !== "trouserRack") {
+      const removableShelf = candidate.placements.findIndex((item) => (
+        item.bayIndex === bayIndex
+        && item.componentType === "woodShelf"
+        && item.zoneType !== "shoeZone"
+      ));
+      if (removableShelf >= 0) {
+        candidate.placements.splice(removableShelf, 1);
+        added = addJapaneseTemplateComponent(
+          candidate.placements,
+          componentType,
+          role,
+          bayIndex,
+          componentIndex,
+          answers,
+          skeleton.length,
+          isFixedAccessory ? { preferredWidth: getJapaneseAccessoryModuleWidthForBay(bay) } : {}
+        );
+      }
+    }
+    if (!added) {
+      candidate.placements.push(...removedLowRails);
+      skippedBays.push({
+        bayIndex,
+        role,
+        reason: "noEligiblePlacement"
+      });
+      continue;
+    }
+    if (componentType === "trouserRack") {
+      restoreJapaneseTrouserRackFunctionalShelves(candidate.placements, preservedFunctionalShelves);
+    }
+    usedBays.add(bayIndex);
+    if (isFixedAccessory) {
+      logJapaneseSkeletonUpgradePlacementStrategyDebug({
+        candidate,
+        componentType,
+        beforeOrder,
+        afterOrder,
+        selectedBayIndex: bayIndex,
+        skippedBays,
+        reason: "selectedByPlacementStrategy"
+      });
+    }
+    return true;
+  }
+  if (isFixedAccessory) {
+    logJapaneseSkeletonUpgradePlacementStrategyDebug({
+      candidate,
+      componentType,
+      beforeOrder,
+      afterOrder,
+      selectedBayIndex: null,
+      skippedBays,
+      reason: "noCandidate"
+    });
+  }
+  if (componentType === "trouserRack") {
+    candidate.trouserRackPlacementBlocked = true;
+  }
+  return false;
+}
+
+function getJapaneseTrouserRackPreservedFunctionalShelves(placements, bayIndex) {
+  return placements.filter((item) => (
+    Number(item.bayIndex) === Number(bayIndex)
+    && item.componentType === "woodShelf"
+    && item.zoneType !== "shoeZone"
+    && Number(item.heightFromFloor || 0) >= 1150
+    && Number(item.heightFromFloor || 0) <= 1250
+  )).map((item) => ({ ...item }));
+}
+
+function restoreJapaneseTrouserRackFunctionalShelves(placements, preservedShelves = []) {
+  preservedShelves.forEach((shelf) => {
+    const exists = placements.some((item) => (
+      Number(item.bayIndex) === Number(shelf.bayIndex)
+      && item.componentType === "woodShelf"
+      && item.zoneType === shelf.zoneType
+      && Math.abs(Number(item.heightFromFloor || 0) - Number(shelf.heightFromFloor || 0)) < 1
+    ));
+    if (!exists) placements.push({ ...shelf });
+  });
+}
+
+function removeJapaneseLowRailsForTrouser(placements, bayIndex) {
+  const removed = placements.filter((item) => (
+    Number(item.bayIndex) === Number(bayIndex)
+    && ["singleRail", "doubleRail"].includes(item.componentType)
+    && Number(item.heightFromFloor) < 1450
+  ));
+  removed.forEach((item) => removePlacement(placements, item));
+  return removed;
+}
+
+function finalizeJapaneseSkeletonCandidate(candidate, answers, planType) {
+  candidate.autoSupplementalRailDebug = addJapaneseDemandDrivenShortRails(candidate, answers);
+  repairJapaneseCaseLayout(candidate);
+  applyJapanesePlacementDimensions(candidate, answers);
+  finalizeDerivedCandidate(candidate, candidate, answers, planType, 1, 0);
+  candidate.bayPlan = buildJapaneseBayPlan(candidate.placements, candidate.parameters?.bayCount);
+  candidate.templateViolationCount = countJapaneseTemplateViolations(
+    candidate.placements,
+    candidate.parameters?.bayCount
+  );
+  candidate.componentCountByType = countBy(
+    candidate.placements.filter((item) => item.componentType),
+    (item) => item.componentType
+  );
+  candidate.caseLayoutTemplate = answers.primaryJapaneseCase?.layoutTemplate || [];
+  candidate.resolvedSkeleton = (candidate.skeleton || []).map((item) => ({ ...item }));
+  candidate.forbiddenPatternViolations = getJapaneseCaseForbiddenPatternViolations(candidate);
+  candidate.japanesePlacementValidationDebug = getJapanesePlacementValidationDiagnostics(candidate.placements);
+  candidate.tierUpgradeRulesApplied = {
+    ...(JAPANESE_CASE_LAYOUT_RULES.tierUpgradeRules[planType] || {})
+  };
+  candidate.bayRoleComponents = buildJapaneseBayRoleComponents(candidate);
+}
+
+function applyJapanesePlacementDimensions(candidate, answers = {}) {
+  if (candidate?.configPreset?.productSystemId !== "japanese-closet"
+    && getSelectedSeriesId(answers) !== "japanese-closet") return;
+  const cuttingRules = getCuttingRules("japanese-closet");
+  if (!cuttingRules) return;
+  const wallMetrics = getJapaneseCandidateWallMetrics(candidate, answers, cuttingRules);
+  (candidate.placements || []).forEach((placement) => {
+    if (!placement?.componentType) return;
+    const wallId = placement.wallId || "back";
+    const metrics = wallMetrics[wallId] || wallMetrics.back;
+    if (!metrics) return;
+    const moduleWidth = getJapanesePlacementModuleWidth(placement, metrics.innerBayWidth, cuttingRules);
+    const componentCutLength = cuttingRules.getCutLength?.(
+      placement.componentType,
+      metrics.innerBayWidth
+    );
+    const visualScaleWidth = isFixedWidthAccessory(placement.componentType)
+      ? metrics.innerBayWidth
+      : cuttingRules.getVisualScaleWidth?.(
+        placement.componentType,
+        metrics.innerBayWidth,
+        componentCutLength,
+        moduleWidth
+      );
+    Object.assign(placement, {
+      postProfileWidth: metrics.postProfileWidth,
+      rawBayWidth: metrics.rawBayWidth,
+      postCenterDistance: metrics.postCenterDistance,
+      innerBayWidth: metrics.innerBayWidth,
+      usableComponentWidth: metrics.innerBayWidth,
+      ...(Number.isFinite(Number(componentCutLength))
+        ? {
+          componentCutLength: Number(componentCutLength),
+          cutLength: Number(componentCutLength)
+        }
+        : {}),
+      ...(Number.isFinite(Number(visualScaleWidth))
+        ? { visualScaleWidth: Number(visualScaleWidth) }
+        : {}),
+      widthSource: "japaneseCuttingRules"
+    });
+  });
+}
+
+function getJapaneseCandidateWallMetrics(candidate, answers, cuttingRules) {
+  const roomWidth = Number(candidate?.configPreset?.roomWidth ?? answers.roomWidth) || 0;
+  const roomDepth = Number(candidate?.configPreset?.roomDepth ?? answers.roomDepth) || 0;
+  const backBayCount = Math.max(1, Number(candidate?.parameters?.bayCount
+    || candidate?.configPreset?.bayCount) || 1);
+  const sideBayCount = Math.max(1, Math.ceil(roomDepth / Math.max(1, cuttingRules.maxPostSpanMm || roomDepth || 1)));
+  const createMetrics = (length, bayCount) => {
+    const postProfileWidth = Number(cuttingRules.postProfileWidthMm) || 0;
+    const rawBayWidth = Number(length) / Math.max(1, Number(bayCount) || 1);
+    const innerBayWidth = Number(cuttingRules.getInnerBayWidth?.(length, bayCount)) || 0;
+    return {
+      postProfileWidth,
+      rawBayWidth,
+      postCenterDistance: rawBayWidth,
+      innerBayWidth
+    };
+  };
+  return {
+    back: createMetrics(roomWidth, backBayCount),
+    left: createMetrics(roomDepth, sideBayCount),
+    right: createMetrics(roomDepth, sideBayCount)
+  };
+}
+
+function getJapanesePlacementModuleWidth(placement, innerBayWidth, cuttingRules) {
+  if (isFixedWidthAccessory(placement.componentType)) return null;
+  const explicit = Number(placement.moduleWidth ?? placement.preferredWidth ?? placement.standardWidth);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  if (!cuttingRules.fixedModuleTypes?.includes(placement.componentType)) return null;
+  return (cuttingRules.fixedModuleWidths || [])
+    .find((width) => Number(width) >= Number(innerBayWidth))
+    || (cuttingRules.fixedModuleWidths || [])[0]
+    || null;
+}
+
+function repairJapaneseCaseLayout(candidate) {
+  const placements = candidate.placements || [];
+  alignJapaneseJewelryBoxWithCabinet(placements);
+  const roleByBay = new Map((candidate.skeleton || []).map((entry) => [entry.bayIndex, entry.role]));
+  roleByBay.forEach((role, bayIndex) => {
+    let items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+    items.filter((item) => item.componentType === "cabinet")
+      .forEach((item) => { item.heightFromFloor = 0; });
+    normalizeJapaneseAccessoryPlacementsInBay(placements, bayIndex);
+    if (role === "longHangZone") {
+      items.filter((item) => !["singleRail", "doubleRail"].includes(item.componentType)
+        && !item.isAboveRailUpgrade)
+        .forEach((item) => removePlacement(placements, item));
+    }
+    if (role === "shoeShelfZone") {
+      items.filter((item) => ["cabinet", "trouserRack", "jewelryBox"].includes(item.componentType))
+        .forEach((item) => removePlacement(placements, item));
+    }
+    items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+    trimJapaneseComponents(items, placements, ["cabinet"], 1);
+    trimJapaneseComponents(items, placements, ["trouserRack", "jewelryBox"], 1);
+    const railLimit = getJapaneseRailLimit(role, items);
+    trimJapaneseComponents(items, placements, ["singleRail", "doubleRail"], railLimit);
+    const shelfLimit = role === "shoeShelfZone"
+      ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shoeZone.maxWoodShelves
+      : role === "shelfZone"
+        ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shelfZone.maxWoodShelves
+        : JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxWoodShelves;
+    trimJapaneseComponents(items, placements, ["woodShelf"], shelfLimit);
+    items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+    const railCount = items.filter((item) => ["singleRail", "doubleRail"].includes(item.componentType)).length;
+    const ordinaryShelves = items.filter((item) => item.componentType === "woodShelf"
+      && role !== "shoeShelfZone");
+    if (railCount && ordinaryShelves.length >= 3) {
+      ordinaryShelves.slice(2).forEach((item) => removePlacement(placements, item));
+    }
+    items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+    if (role !== "shoeShelfZone"
+      && items.length > JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxFunctionalComponents) {
+      items.filter((item) => item.componentType === "woodShelf")
+        .slice(0, items.length - JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxFunctionalComponents)
+        .forEach((item) => removePlacement(placements, item));
+    }
+    if (!placements.some((item) => item.bayIndex === bayIndex && item.componentType)) {
+      const fallback = role === "shoeShelfZone"
+        ? placement("shoeZone", "woodShelf", bayIndex, 250)
+        : role === "shelfZone"
+          ? placement("storageZone", "woodShelf", bayIndex, 700)
+          : placement(
+            role === "longHangZone" ? "longHangZone" : "shortHangZone",
+            "singleRail",
+            bayIndex,
+            JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT
+          );
+      fallback.templateRole = role;
+      fallback.templateZone = role;
+      placements.push(fallback);
+    }
+  });
+}
+
+function alignJapaneseJewelryBoxWithCabinet(placements = []) {
+  const jewelryBox = placements.find((item) => item.componentType === "jewelryBox");
+  const cabinet = placements.find((item) => item.componentType === "cabinet");
+  if (!jewelryBox || !cabinet) return;
+  const cabinetBayHasTrouserRack = placements.some((item) => (
+    item.componentType === "trouserRack"
+    && (item.wallId || "back") === (cabinet.wallId || "back")
+    && Number(item.bayIndex) === Number(cabinet.bayIndex)
+  ));
+  if (cabinetBayHasTrouserRack) return;
+  jewelryBox.wallId = cabinet.wallId || "back";
+  jewelryBox.bayIndex = Number(cabinet.bayIndex) || 0;
+  jewelryBox.heightFromFloor = getJapaneseCabinetTopForJewelry(cabinet)
+    + JAPANESE_JEWELRY_BOX_GAP_ABOVE_CABINET;
+  jewelryBox.templateRole = cabinet.templateRole || "storageAccessoryZone";
+  jewelryBox.templateZone = cabinet.templateZone || "storageAccessoryZone";
+  jewelryBox.allowCabinetContact = true;
+}
+
+function addJapaneseDemandDrivenShortRails(candidate, answers) {
+  const placements = candidate.placements || [];
+  const shortClothesDemand = getJapaneseShortClothesDemand(answers);
+  const currentShortRails = placements.filter(isJapaneseShortHangRail);
+  const requiredShortHangCapacity = shortClothesDemand;
+  const currentShortHangCapacity = currentShortRails.length * JAPANESE_SHORT_HANG_CAPACITY_PER_RAIL;
+  const requiredAdditionalRails = Math.max(
+    0,
+    Math.ceil((requiredShortHangCapacity - currentShortHangCapacity)
+      / JAPANESE_SHORT_HANG_CAPACITY_PER_RAIL)
+  );
+  const debug = {
+    unusedVerticalSpace: [],
+    supplementalRailCandidateBays: [],
+    shouldAddSupplementalRail: requiredAdditionalRails > 0,
+    currentShortHangCapacity,
+    requiredShortHangCapacity,
+    addedRailCount: 0,
+    addedRealRailCount: 0,
+    addedRailType: "singleRail",
+    addedRailHeight: [],
+    addedRailBayIndex: [],
+    verticalEfficiencyBefore: calculateJapaneseShortHangEfficiency(
+      currentShortHangCapacity,
+      requiredShortHangCapacity
+    ),
+    verticalEfficiencyAfter: calculateJapaneseShortHangEfficiency(
+      currentShortHangCapacity,
+      requiredShortHangCapacity
+    ),
+    blockedReasons: [],
+    addedRailDebug: [],
+    supplementalRailSkippedReason: []
+  };
+  if (!requiredAdditionalRails) return debug;
+
+  const skeleton = candidate.skeleton || [];
+  for (const entry of skeleton) {
+    if (debug.addedRailCount >= requiredAdditionalRails) break;
+    const role = entry.role;
+    const bayIndex = Number(entry.bayIndex) || 0;
+    if (!JAPANESE_SUPPLEMENTAL_RAIL_ALLOWED_ROLES.has(role)) continue;
+    debug.supplementalRailCandidateBays.push({ bayIndex, role });
+    const bayPlacements = placements.filter((item) => (
+      Number(item.bayIndex) === bayIndex
+      && (item.wallId || "back") === "back"
+      && item.componentType
+    ));
+    const rails = bayPlacements.filter((item) => ["singleRail", "doubleRail"].includes(item.componentType));
+    if (rails.length >= 2 || rails.some((item) => item.componentType === "doubleRail")) {
+      debug.blockedReasons.push({ bayIndex, reason: "doubleHangZone" });
+      continue;
+    }
+    const supportItems = bayPlacements.filter((item) => (
+      JAPANESE_SUPPLEMENTAL_RAIL_SUPPORT_COMPONENTS.has(item.componentType)
+    ));
+    if (!supportItems.length) {
+      debug.blockedReasons.push({ bayIndex, reason: "missingFunctionalComponent" });
+      continue;
+    }
+    const supportTop = Math.max(...supportItems.map((item) => intervalFor(item)[1]));
+    const upperLimit = rails.length
+      ? Math.min(...rails.map((item) => intervalFor(item)[0]))
+      : JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT;
+    const unusedVerticalSpace = upperLimit - supportTop;
+    debug.unusedVerticalSpace.push({ bayIndex, role, supportTop, upperLimit, unusedVerticalSpace });
+    if (unusedVerticalSpace < JAPANESE_SHORT_HANG_MIN_CLEARANCE_BELOW) {
+      debug.blockedReasons.push({ bayIndex, reason: "insufficientVerticalSpace", unusedVerticalSpace });
+      continue;
+    }
+    const blockingComponentTop = supportTop;
+    const heightCandidates = getJapaneseSupplementalRailHeightCandidates(role)
+      .filter((height) => JAPANESE_STANDARD_SUPPLEMENTAL_RAIL_HEIGHTS.includes(height));
+    const heightFromFloor = heightCandidates.find((height) => (
+      height > blockingComponentTop + JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW
+      && (JAPANESE_STANDARD_SUPPLEMENTAL_RAIL_HEIGHTS.includes(height)
+        ? height <= upperLimit
+        : height < upperLimit - 120)
+    ));
+    if (!heightFromFloor) {
+      debug.blockedReasons.push({
+        bayIndex,
+        reason: "noValidRailHeight",
+        blockingComponentTop,
+        upperLimit,
+        heightCandidates
+      });
+      continue;
+    }
+    if (![1050, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT].includes(heightFromFloor)) {
+      debug.blockedReasons.push({
+        bayIndex,
+        reason: "nonStandardRailHeightBlocked",
+        heightFromFloor,
+        heightCandidates
+      });
+      continue;
+    }
+    const supplementalRail = placement("shortHangZone", "singleRail", bayIndex, heightFromFloor);
+    supplementalRail.templateRole = role;
+    supplementalRail.templateZone = role;
+    supplementalRail.isAutoSupplementalShortRail = true;
+    supplementalRail.source = "shortClothesDemand";
+    const withRail = [...placements, supplementalRail];
+    if (bayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(supplementalRail)))) {
+      debug.blockedReasons.push({ bayIndex, reason: "componentCollision", heightFromFloor, blockingComponentTop });
+      continue;
+    }
+    if (getJapanesePlacementValidationDiagnostics(withRail).some((item) => !item.isValidPlacement)) {
+      debug.blockedReasons.push({ bayIndex, reason: "accessoryClearanceBlocked", heightFromFloor, blockingComponentTop });
+      continue;
+    }
+    placements.push(supplementalRail);
+    debug.addedRailCount += 1;
+    debug.addedRealRailCount += 1;
+    debug.addedRailHeight.push(heightFromFloor);
+    debug.addedRailBayIndex.push(bayIndex);
+    debug.addedRailDebug.push({
+      bayIndex,
+      blockingComponentTop,
+      heightFromFloor,
+      availableVerticalSpace: unusedVerticalSpace
+    });
+  }
+  debug.verticalEfficiencyAfter = calculateJapaneseShortHangEfficiency(
+    currentShortHangCapacity + debug.addedRailCount * JAPANESE_SHORT_HANG_CAPACITY_PER_RAIL,
+    requiredShortHangCapacity
+  );
+  debug.supplementalRailSkippedReason = debug.blockedReasons.map((item) => item.reason);
+  return debug;
+}
+
+function getJapaneseSupplementalRailHeightCandidates(role) {
+  if (role === "longHangZone") return [JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT];
+  if (role === "shortHangZone") return [1050, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT];
+  return [JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, 1050];
+}
+
+function getJapaneseShortClothesDemand(answers = {}) {
+  const quantity = Number(answers.demandQuantityProfile?.短衣?.quantity);
+  if (Number.isFinite(quantity) && quantity > 0) return quantity;
+  const weight = Number(answers.needs?.短衣) || 0;
+  const peopleCount = Number(String(answers.peopleCount || "1").match(/\d+/)?.[0]) || 1;
+  return weight * JAPANESE_SHORT_HANG_CAPACITY_PER_RAIL * peopleCount;
+}
+
+function isJapaneseShortHangRail(item) {
+  if (!["singleRail", "doubleRail"].includes(item.componentType)) return false;
+  if (item.zoneType === "longHangZone" || item.templateRole === "longHangZone") return false;
+  return Number(item.heightFromFloor) < 1450 || item.zoneType === "shortHangZone";
+}
+
+function calculateJapaneseShortHangEfficiency(capacity, demand) {
+  if (!demand) return 1;
+  return Math.min(1, Math.max(0, Number(capacity) || 0) / demand);
+}
+
+function getJapaneseRailLimit(role, items = []) {
+  if (role === "longHangZone") return 1;
+  if (role === "shoeShelfZone") {
+    return items.some((item) => item.isAutoSupplementalShortRail) ? 2 : 1;
+  }
+  return 2;
+}
+
+function trimJapaneseComponents(items, placements, componentTypes, limit) {
+  items.filter((item) => componentTypes.includes(item.componentType)).slice(limit)
+    .forEach((item) => removePlacement(placements, item));
+}
+
+function removePlacement(placements, placementToRemove) {
+  const index = placements.indexOf(placementToRemove);
+  if (index >= 0) placements.splice(index, 1);
+}
+
+function getJapaneseCaseForbiddenPatternViolations(candidate) {
+  const placements = candidate?.placements || [];
+  const bayCount = Math.max(1, Number(candidate?.parameters?.bayCount
+    || candidate?.configPreset?.bayCount || 1));
+  const skeletonRoles = new Map((candidate?.skeleton || candidate?.resolvedSkeleton || [])
+    .map((entry) => [entry.bayIndex, entry.role || entry.zone]));
+  const violations = [];
+  for (let bayIndex = 0; bayIndex < bayCount; bayIndex += 1) {
+    const items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+    const role = skeletonRoles.get(bayIndex) || inferJapaneseBayRole(items);
+    const rails = items.filter((item) => ["singleRail", "doubleRail"].includes(item.componentType));
+    const shelves = items.filter((item) => item.componentType === "woodShelf");
+    const cabinets = items.filter((item) => item.componentType === "cabinet");
+    const accessories = items.filter((item) => ["trouserRack", "jewelryBox"].includes(item.componentType));
+    const addViolation = (id, details = {}) => violations.push({ id, bayIndex, role, ...details });
+    if (!items.length) addViolation("emptyFunctionalBay");
+    if (role !== "shoeShelfZone" && rails.length && shelves.length >= 3) {
+      addViolation("ordinaryDenseShelfUnderRail", { railCount: rails.length, shelfCount: shelves.length });
+    }
+    if (role === "longHangZone") {
+      const blockers = items.filter((item) => !["singleRail", "doubleRail"].includes(item.componentType)
+        && !item.isAboveRailUpgrade);
+      if (rails.length !== 1 || blockers.length
+        || Number(rails[0]?.heightFromFloor || 0) < JAPANESE_CASE_LAYOUT_RULES.componentLimits.longHangZone.minClearHeight) {
+        addViolation("longHangClearanceBlocked");
+      }
+    }
+    if (cabinets.some((item) => Number(item.heightFromFloor || 0) > 300)) addViolation("floatingCabinet");
+    if (cabinets.length > 1) addViolation("multipleCabinetsInBay", { count: cabinets.length });
+    if (accessories.length > 1) addViolation("multipleAccessoryModulesInBay", { count: accessories.length });
+    if (accessories.length && role === "shoeShelfZone" && shelves.length >= 3) {
+      addViolation("accessoryMixedWithDenseShoes");
+    }
+    getJapanesePlacementValidationDiagnostics(items).filter((item) => !item.isValidPlacement)
+      .forEach((item) => addViolation(item.invalidReason, {
+        componentType: item.componentType,
+        heightFromFloor: item.heightFromFloor,
+        clearanceBelow: item.clearanceBelow,
+        blockingComponentsBelow: item.blockingComponentsBelow
+      }));
+    const railLimit = getJapaneseRailLimit(role, items);
+    if (rails.length > railLimit) addViolation("tooManyRailsInNormalBay", { count: rails.length });
+    const shelfLimit = role === "shoeShelfZone"
+      ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shoeZone.maxWoodShelves
+      : role === "shelfZone"
+        ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shelfZone.maxWoodShelves
+        : JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxWoodShelves;
+    if (shelves.length > shelfLimit) addViolation("tooManyShelvesInBay", { count: shelves.length });
+    if (role !== "shoeShelfZone"
+      && items.length > JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxFunctionalComponents) {
+      addViolation("tooManyFunctionalComponents", { count: items.length });
+    }
+    if (role === "luggageZone" && !rails.length) addViolation("luggageZoneMissingUpperRail");
+  }
+  placements.filter((item) => item.isLinkedRailShelf && item.countsAsStorageCapacity !== false)
+    .forEach((item) => violations.push({
+      id: "linkedShelfDoubleCountedAsCapacity",
+      bayIndex: item.bayIndex,
+      role: item.templateRole || item.templateZone || ""
+    }));
+  return violations;
+}
+
+function inferJapaneseBayRole(items) {
+  const explicitRole = items.find((item) => item.templateRole || item.templateZone);
+  if (explicitRole) return normalizeJapaneseTemplateRole(explicitRole.templateRole || explicitRole.templateZone);
+  if (items.some((item) => item.zoneType === "shoeZone")) return "shoeShelfZone";
+  if (items.some((item) => item.zoneType === "longHangZone")) return "longHangZone";
+  if (items.some((item) => item.zoneType === "shortHangZone")) return "shortHangZone";
+  if (items.some((item) => item.zoneType === "luggageZone")) return "luggageZone";
+  return "storageAccessoryZone";
+}
+
+function buildJapaneseBayRoleComponents(candidate) {
+  return (candidate.skeleton || []).map((entry) => ({
+    bayIndex: entry.bayIndex,
+    role: entry.role,
+    components: (candidate.placements || [])
+      .filter((item) => item.bayIndex === entry.bayIndex && item.componentType)
+      .map((item) => ({
+        componentType: item.componentType,
+        zoneType: item.zoneType,
+        heightFromFloor: item.heightFromFloor
+      }))
+  }));
+}
+
+function attachJapaneseTierDifferenceDebug(selected, skeleton, fallback) {
+  const [basic, value, premium] = selected;
+  const basicSignature = stableObjectSignature(basic.componentCountByType);
+  const valueSignature = stableObjectSignature(value.componentCountByType);
+  const premiumSignature = stableObjectSignature(premium.componentCountByType);
+  const basicVsValueDifferent = basicSignature !== valueSignature;
+  const valueVsPremiumDifferent = valueSignature !== premiumSignature;
+  const basicToValue = countJapaneseUpgradePoints(value.valueUpgradeList);
+  const valueToPremium = countJapaneseUpgradePoints(premium.premiumUpgradeList);
+  selected.forEach((candidate) => {
+    candidate.skeleton = skeleton.map((item) => ({ ...item }));
+    candidate.baseBayPrice = basic.baseBayPrice;
+    candidate.basePlanPrice = basic.basePlanPrice;
+    candidate.basicUpgradeList = [...(basic.basicUpgradeList || [])];
+    candidate.valueUpgradeList = [...(value.valueUpgradeList || [])];
+    candidate.premiumUpgradeList = [...(premium.premiumUpgradeList || [])];
+    candidate.basicPriceBreakdown = { ...(basic.priceBreakdown || {}) };
+    candidate.valuePriceBreakdown = { ...(value.priceBreakdown || {}) };
+    candidate.premiumPriceBreakdown = { ...(premium.priceBreakdown || {}) };
+    candidate.caseUsedForLayoutOnly = false;
+    candidate.caseLibraryAppliedAs = "strictCaseLayoutRules";
+    candidate.caseLayoutTemplate = candidate.layoutTemplate || [];
+    candidate.resolvedSkeleton = skeleton.map((item) => ({ ...item }));
+    candidate.forbiddenPatternViolations = getJapaneseCaseForbiddenPatternViolations(candidate);
+    candidate.tierUpgradeRulesApplied = {
+      ...(JAPANESE_CASE_LAYOUT_RULES.tierUpgradeRules[candidate.planType] || {})
+    };
+    candidate.bayRoleComponents = buildJapaneseBayRoleComponents(candidate);
+    candidate.basicComponents = { ...basic.componentCountByType };
+    candidate.valueComponents = { ...value.componentCountByType };
+    candidate.premiumComponents = { ...premium.componentCountByType };
+    candidate.basicVsValueDifferent = basicVsValueDifferent;
+    candidate.valueVsPremiumDifferent = valueVsPremiumDifferent;
+    candidate.visibleUpgradeCountBasicToValue = basicToValue;
+    candidate.visibleUpgradeCountValueToPremium = valueToPremium;
+    candidate.fallbackUsed = Boolean(fallback.fallbackUsed);
+    candidate.fallbackReason = fallback.fallbackReason;
+  });
+}
+
+function reselectJapanesePremiumAboveValue(candidate, premiumCandidates, valueCandidate) {
+  if (!candidate || !valueCandidate) return candidate;
+  const valuePrice = getCandidateRealPrice(valueCandidate);
+  if (getCandidateRealPrice(candidate) > valuePrice) return candidate;
+  const higherCandidate = [...premiumCandidates]
+    .filter((option) => getCandidateRealPrice(option) > valuePrice)
+    .sort((left, right) => (
+      Number(right.scores?.caseMatchBonus || 0) - Number(left.scores?.caseMatchBonus || 0)
+      || getCandidateRealPrice(left) - getCandidateRealPrice(right)
+    ))[0] || null;
+  if (higherCandidate) {
+    higherCandidate.priceOrderFixReason = "reselectedHigherRealPremiumCandidate";
+    return higherCandidate;
+  }
+  const highestCandidate = [candidate, ...premiumCandidates]
+    .sort((left, right) => getCandidateRealPrice(right) - getCandidateRealPrice(left))[0] || candidate;
+  highestCandidate.premiumCouldNotExceedValue = true;
+  highestCandidate.priceOrderFixReason = "noHigherRealPremiumCandidateBeforeDerivation";
+  return highestCandidate;
+}
+
+function attachJapanesePriceOrderDebug(selected) {
+  const [basic, value, premium] = selected;
+  const basicPrice = getCandidateRealPrice(basic);
+  const valuePrice = getCandidateRealPrice(value);
+  const premiumPrice = getCandidateRealPrice(premium);
+  const priceOrderValid = basicPrice < valuePrice && valuePrice < premiumPrice;
+  selected.filter(Boolean).forEach((candidate) => {
+    candidate.basicPrice = basicPrice;
+    candidate.valuePrice = valuePrice;
+    candidate.premiumPrice = premiumPrice;
+    candidate.priceOrderValid = priceOrderValid;
+    candidate.premiumCouldNotExceedValue = Boolean(premium?.premiumCouldNotExceedValue);
+    candidate.priceOrderFixReason = premium?.priceOrderFixReason || (priceOrderValid
+      ? "alreadyStrictlyIncreasing"
+      : "priceOrderStillInvalid");
+  });
+}
+
+function getCandidateRealPrice(candidate) {
+  return Number(candidate?.finalPlanPrice ?? candidate?.estimatedPrice ?? 0);
+}
+
+function selectJapaneseBasicByBudget(candidates, targets) {
+  const pricedCandidates = candidates.map((candidate) => ({
+    candidate,
+    price: getJapaneseCandidatePriceForTier(candidate, "basic")
+  }));
+  const inBand = pricedCandidates
+    .filter(({ price }) => price >= targets.basicMin && price <= targets.basicMax)
+    .sort((left, right) => (
+      Math.abs(left.price - targets.basic) - Math.abs(right.price - targets.basic)
+      || Number(right.candidate.scores?.caseMatchBonus || 0)
+        - Number(left.candidate.scores?.caseMatchBonus || 0)
+    ));
+  if (inBand.length) {
+    return { candidate: inBand[0].candidate, reason: "basicInsideBudgetMidBand" };
+  }
+  const atOrAboveBudget = pricedCandidates
+    .filter(({ price }) => price >= targets.budgetMin)
+    .sort((left, right) => left.price - right.price
+      || Number(right.candidate.scores?.caseMatchBonus || 0)
+        - Number(left.candidate.scores?.caseMatchBonus || 0));
+  if (atOrAboveBudget.length) {
+    return {
+      candidate: atOrAboveBudget[0].candidate,
+      reason: "basicLowestRealCandidateAtOrAboveBudgetMin"
+    };
+  }
+  const belowBudget = pricedCandidates.sort((left, right) => (
+    Math.abs(left.price - targets.basic) - Math.abs(right.price - targets.basic)
+    || right.price - left.price
+  ));
+  return { candidate: belowBudget[0]?.candidate || null, reason: "basicBelowBudgetFallback" };
+}
+
+function prepareJapaneseBasicCandidate(candidate, answers) {
+  return prepareJapaneseTierCandidate(candidate, answers, "basic");
+}
+
+function prepareJapaneseTierCandidate(candidate, answers, planType) {
+  const prepared = cloneCandidateForTier(candidate, planType);
+  if (prepared) finalizeDerivedCandidate(prepared, prepared, answers, planType, 1, 0);
+  return prepared;
+}
+
+function getJapaneseCandidatePriceForTier(candidate) {
+  if (candidate?.manualComponentPrice == null) return getCandidateRealPrice(candidate);
+  return Math.round(Number(candidate.manualComponentPrice || 0) / 100) * 100;
 }
 
 function applyJapaneseCaseLayoutTemplate(candidate, answers, planType) {
@@ -536,15 +2693,26 @@ function addRequiredJapaneseComponent(candidate, componentType, answers, require
     .map((item) => item.bayIndex));
   const candidateBays = [...preferredBays, ...Array.from({ length: bayCount }, (_, bayIndex) => bayIndex)]
     .filter((bayIndex, index, list) => list.indexOf(bayIndex) === index);
+  const orderedCandidateBays = isFixedWidthAccessory(componentType)
+    ? selectJapanesePreferredAccessoryBays(
+      candidateBays,
+      componentType,
+      answers.roomWidth,
+      bayCount,
+      candidate.placements,
+      "addRequiredJapaneseComponent"
+    )
+    : candidateBays;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const added = candidateBays.some((bayIndex) => addJapaneseTemplateComponent(
+    const added = orderedCandidateBays.some((bay) => addJapaneseTemplateComponent(
       candidate.placements,
       componentType,
       templateZone,
-      bayIndex,
+      getJapaneseAccessoryCandidateBayIndex(bay),
       0,
       answers,
-      bayCount
+      bayCount,
+      isFixedWidthAccessory(componentType) ? { preferredWidth: getJapaneseAccessoryModuleWidthForBay(bay) } : {}
     ));
     if (added) {
       candidate.parameters[componentType] = Number(candidate.parameters[componentType] || 0) + 1;
@@ -611,13 +2779,16 @@ function getJapaneseHardRequirements(answers) {
 function ensureJapanesePremiumAnchorPrice(candidate, sourceCandidate, answers, supportedTypes, targets) {
   if (!candidate) return null;
   const bayMinimumPrice = Math.max(0, Number(candidate.parameters?.bayCount || 0)) * 900;
-  const requiredPrice = Math.max(bayMinimumPrice, Number(targets.budgetMax || 0) + 1);
+  const valuePrice = getCandidateRealPrice(sourceCandidate);
+  const requiredPrice = Math.max(bayMinimumPrice, Number(targets.budgetMax || 0) + 1, valuePrice + 1);
   if (Number(candidate.finalPlanPrice || candidate.estimatedPrice || 0) >= requiredPrice) {
     candidate.premiumMinimumPrice = bayMinimumPrice;
     candidate.premiumMinimumMet = true;
     candidate.premiumAboveBudget = Number(candidate.finalPlanPrice || candidate.estimatedPrice || 0)
       > targets.budgetMax;
     candidate.premiumCouldNotExceedBudget = !candidate.premiumAboveBudget;
+    candidate.premiumCouldNotExceedValue = false;
+    candidate.priceOrderFixReason ||= "selectedRealPremiumAboveValue";
     return candidate;
   }
 
@@ -633,7 +2804,7 @@ function ensureJapanesePremiumAnchorPrice(candidate, sourceCandidate, answers, s
     const added = componentType === "jewelryBox"
       ? tryAddTierUpgrade(premium, "jewelryZone", componentType, [1100, 1300], true)
       : componentType === "trouserRack"
-        ? tryAddTierUpgrade(premium, "trouserZone", componentType, [750], true)
+        ? tryAddTierUpgrade(premium, "trouserZone", componentType, [...JAPANESE_TROUSER_RACK_HEIGHTS], true)
         : componentType === "cabinet"
           ? tryAddTierUpgrade(premium, "storageZone", componentType, [0], true)
           : tryAddTierUpgrade(
@@ -661,6 +2832,10 @@ function ensureJapanesePremiumAnchorPrice(candidate, sourceCandidate, answers, s
   premium.premiumAboveBudget = Number(premium.finalPlanPrice || premium.estimatedPrice || 0)
     > targets.budgetMax;
   premium.premiumCouldNotExceedBudget = !premium.premiumAboveBudget;
+  premium.premiumCouldNotExceedValue = getCandidateRealPrice(premium) <= valuePrice;
+  premium.priceOrderFixReason = premium.premiumCouldNotExceedValue
+    ? "highestRealPremiumCouldNotExceedValue"
+    : "derivedWithRealComponentsAboveValue";
   return premium;
 }
 
@@ -699,9 +2874,9 @@ function selectJapaneseCandidateByTarget(
     const bDelta = Math.abs(Number(b.finalPlanPrice ?? b.estimatedPrice ?? 0) - targetPrice);
     const aWithinTarget = aDelta <= targetPrice * 0.10 ? 0 : 1;
     const bWithinTarget = bDelta <= targetPrice * 0.10 ? 0 : 1;
-    return caseMatchDelta
-      || aWithinTarget - bWithinTarget
+    return aWithinTarget - bWithinTarget
       || aDelta - bDelta
+      || caseMatchDelta
       || (baseCandidate
         ? getPlanDifferenceScore(baseCandidate, b) - getPlanDifferenceScore(baseCandidate, a)
         : Number(b.scores?.totalScore || 0) - Number(a.scores?.totalScore || 0));
@@ -799,7 +2974,7 @@ function createJapaneseTargetFallbackCandidate(
       return tryAddTierUpgrade(candidate, "jewelryZone", componentType, [1100, 1300], true);
     }
     if (componentType === "trouserRack") {
-      return tryAddTierUpgrade(candidate, "trouserZone", componentType, [750], true);
+      return tryAddTierUpgrade(candidate, "trouserZone", componentType, [...JAPANESE_TROUSER_RACK_HEIGHTS], true);
     }
     if (componentType === "cabinet") {
       return tryAddTierUpgrade(candidate, "storageZone", componentType, [0], true);
@@ -820,17 +2995,22 @@ function getJapaneseClosetTargetPrices(answers) {
   const budgetMax = Number(selectedRange?.openEnded
     ? availability?.maxPossiblePrice
     : selectedRange?.max ?? parsedRange.max ?? 0);
-  const rangeWidth = Math.max(0, budgetMax - budgetMin);
+  const budgetMid = (budgetMin + budgetMax) / 2;
+  const basicMin = Math.max(budgetMin, budgetMid * 0.8);
+  const basicMax = budgetMid;
+  const premiumMin = budgetMax * 1.05;
+  const premiumMax = budgetMax * 1.20;
   return {
     budgetMin,
     budgetMax,
-    basicMin: roundPriceToHundred(budgetMin * 0.85),
-    basicMax: roundPriceToHundred(budgetMin * 1.05),
-    basic: roundPriceToHundred(budgetMin > 0 ? budgetMin * 0.95 : budgetMax * 0.85),
-    value: roundPriceToHundred(budgetMin + rangeWidth * 0.55),
-    premium: roundPriceToHundred(budgetMax * 1.30),
-    premiumMin: roundPriceToHundred(budgetMax * 1.15),
-    premiumMax: roundPriceToHundred(budgetMax * 1.45)
+    budgetMid,
+    basicMin,
+    basicMax,
+    basic: (basicMin + basicMax) / 2,
+    value: budgetMid,
+    premium: (premiumMin + premiumMax) / 2,
+    premiumMin,
+    premiumMax
   };
 }
 
@@ -843,6 +3023,9 @@ function annotateJapaneseSelection(candidate, targetPrice, selectedBecause, targ
   candidate.selectedBecause = selectedBecause;
   candidate.budgetMin = targets.budgetMin;
   candidate.budgetMax = targets.budgetMax;
+  candidate.budgetMid = targets.budgetMid;
+  candidate.basicMin = targets.basicMin;
+  candidate.basicMax = targets.basicMax;
   candidate.basicTarget = targets.basic;
   candidate.valueTarget = targets.value;
   candidate.premiumTarget = targets.premium;
@@ -873,6 +3056,490 @@ function getCapacityLabelCount(candidate) {
   return new Set((candidate?.estimatedCapacity || []).map((item) => item.label || item.itemType)).size;
 }
 
+export function validateCandidateTierSet(candidatePlans = []) {
+  const byType = new Map((candidatePlans || [])
+    .filter(Boolean)
+    .map((candidate) => [candidate.planType, candidate]));
+  const ordered = PLAN_TYPES.map((planType) => byType.get(planType) || null);
+  const issues = [];
+  const snapshots = Object.fromEntries(ordered
+    .filter(Boolean)
+    .map((candidate) => [candidate.planType, getCandidateQaSnapshot(candidate)]));
+  const addIssue = (issue) => {
+    issues.push({
+      severity: "error",
+      recommendedAction: "rejectInvalidTierSet",
+      ...issue
+    });
+  };
+
+  const missingPlans = PLAN_TYPES.filter((planType) => !byType.has(planType));
+  missingPlans.forEach((planType) => addIssue({
+    ruleId: "QA000",
+    reason: "candidateTierMissing",
+    planType
+  }));
+
+  compareTierPair(snapshots.basic, snapshots.value, "basicToValue", addIssue);
+  compareTierPair(snapshots.value, snapshots.premium, "valueToPremium", addIssue);
+
+  const summary = {
+    planTypes: PLAN_TYPES.filter((planType) => Boolean(snapshots[planType])),
+    prices: Object.fromEntries(Object.entries(snapshots).map(([planType, snapshot]) => [planType, snapshot.price])),
+    componentCounts: Object.fromEntries(Object.entries(snapshots)
+      .map(([planType, snapshot]) => [planType, snapshot.componentCounts])),
+    componentTotals: Object.fromEntries(Object.entries(snapshots)
+      .map(([planType, snapshot]) => [planType, snapshot.componentTotal])),
+    capacities: Object.fromEntries(Object.entries(snapshots).map(([planType, snapshot]) => [planType, snapshot.capacity])),
+    capacitySources: Object.fromEntries(Object.entries(snapshots)
+      .map(([planType, snapshot]) => [planType, snapshot.capacitySource])),
+    issueCount: issues.length
+  };
+  const capacityByPlan = Object.fromEntries(Object.entries(snapshots)
+    .map(([planType, snapshot]) => [planType, snapshot.capacity]));
+  const capacitySource = Object.values(snapshots).every((snapshot) => snapshot.capacitySource === "placementDerived")
+    ? "placementDerived"
+    : "estimatedFallback";
+  const capacityDiff = Object.values(snapshots).flatMap((snapshot) => snapshot.capacityDiff);
+  const capacityContributions = Object.values(snapshots)
+    .flatMap((snapshot) => snapshot.capacityContributions);
+  const missingWidthFallbackCount = capacityContributions
+    .filter((item) => item.fallbackReason === "missingWidthFallback").length;
+
+  return {
+    passed: issues.length === 0,
+    issues,
+    summary,
+    capacitySource,
+    capacityByPlan,
+    capacityDiff,
+    capacityContributions,
+    missingWidthFallbackCount
+  };
+}
+
+function selectQaApprovedTierSet(initialSelected = []) {
+  const initial = getOrderedTierSet(initialSelected);
+  const candidateQa = {
+    ...validateCandidateTierSet(initial),
+    selectionMode: "diagnosticOnly",
+    attemptedTierSets: 1,
+    selectedAttemptIndex: 0,
+    failedAttemptCount: 0,
+    originalSelectedCandidateIds: getTierSetCandidateIds(initial),
+    finalSelectedCandidateIds: getTierSetCandidateIds(initial)
+  };
+  attachCandidateQaResult(initial, candidateQa);
+  return {
+    selected: initial,
+    candidateQa,
+    attempts: [{ selected: initial, qa: candidateQa }]
+  };
+}
+
+function getOrderedTierSet(selected = []) {
+  const byType = new Map((selected || [])
+    .filter(Boolean)
+    .map((candidate) => [candidate.planType, candidate]));
+  return PLAN_TYPES.map((planType, index) => byType.get(planType) || selected[index] || null);
+}
+
+function getQaCandidateWindow(candidates = [], initialCandidate = null) {
+  const window = [];
+  if (initialCandidate) window.push(initialCandidate);
+  candidates.filter(Boolean).forEach((candidate) => {
+    if (window.some((item) => getCandidateQaSelectionKey(item) === getCandidateQaSelectionKey(candidate))) return;
+    window.push(candidate);
+  });
+  return window.slice(0, CANDIDATE_QA_SELECTION_WINDOW);
+}
+
+function getTierSetCandidateIds(selected = []) {
+  return Object.fromEntries(PLAN_TYPES.map((planType, index) => [
+    planType,
+    getCandidateQaId(selected[index])
+  ]));
+}
+
+function getCandidateQaId(candidate) {
+  if (!candidate) return null;
+  return candidate.planId
+    || candidate.configPreset?.candidatePlanId
+    || `${candidate.planType}:${getCandidateRealPrice(candidate)}:${getPlacementSignature(candidate)}`;
+}
+
+function getCandidateQaSelectionKey(candidate) {
+  if (!candidate) return null;
+  return `${getCandidateQaId(candidate)}:${getCandidateRealPrice(candidate)}:${getPlacementSignature(candidate)}`;
+}
+
+function attachCandidateQaResult(selected = [], candidateQa = null) {
+  const ordered = getOrderedTierSet(selected);
+  const resolvedCandidateQa = {
+    ...(candidateQa || validateCandidateTierSet(ordered)),
+    selectionMode: candidateQa?.selectionMode || "diagnosticOnly",
+    attemptedTierSets: candidateQa?.attemptedTierSets ?? 1,
+    selectedAttemptIndex: candidateQa?.selectedAttemptIndex ?? 0,
+    failedAttemptCount: candidateQa?.failedAttemptCount ?? 0,
+    originalSelectedCandidateIds: candidateQa?.originalSelectedCandidateIds || getTierSetCandidateIds(ordered),
+    finalSelectedCandidateIds: candidateQa?.finalSelectedCandidateIds || getTierSetCandidateIds(ordered)
+  };
+  selected.filter(Boolean).forEach((candidate) => {
+    candidate.candidateQa = resolvedCandidateQa;
+    candidate.candidateQaPassed = resolvedCandidateQa.passed;
+    candidate.candidateQaIssues = resolvedCandidateQa.issues;
+  });
+  lastStats.candidateQa = resolvedCandidateQa;
+  return resolvedCandidateQa;
+}
+
+function compareTierPair(lower, higher, failedPair, addIssue) {
+  if (!lower || !higher) return;
+  if (higher.price < lower.price) {
+    addIssue({
+      ruleId: "QA001",
+      reason: "priceMonotonicityFailed",
+      planType: higher.planType,
+      failedPair,
+      valuesCompared: {
+        [lower.planType]: lower.price,
+        [higher.planType]: higher.price
+      }
+    });
+  }
+
+  const categories = unique([...Object.keys(lower.capacity), ...Object.keys(higher.capacity)]);
+  const capacityGains = [];
+  categories.forEach((category) => {
+    const lowerValue = Number(lower.capacity[category] || 0);
+    const higherValue = Number(higher.capacity[category] || 0);
+    if (higherValue > lowerValue) capacityGains.push(category);
+    if (higherValue < lowerValue) {
+      const valuesCompared = {
+        category,
+        [lower.planType]: lowerValue,
+        [higher.planType]: higherValue,
+        failedPair
+      };
+      addIssue({
+        ruleId: "QA002",
+        reason: "storageCapacityMonotonicityFailed",
+        planType: higher.planType,
+        category,
+        failedPair,
+        valuesCompared
+      });
+      addIssue({
+        ruleId: "QA004",
+        reason: "higherTierRegressionFailed",
+        planType: higher.planType,
+        category,
+        failedPair,
+        valuesCompared
+      });
+    }
+  });
+
+  const componentIncreases = getComponentIncreases(lower.componentCounts, higher.componentCounts);
+  if (!componentIncreases.length && !capacityGains.length) {
+    addIssue({
+      ruleId: "QA003",
+      reason: "tierRealComponentDifferenceFailed",
+      planType: higher.planType,
+      failedPair,
+      valuesCompared: {
+        componentCounts: {
+          [lower.planType]: lower.componentCounts,
+          [higher.planType]: higher.componentCounts
+        },
+        capacity: {
+          [lower.planType]: lower.capacity,
+          [higher.planType]: higher.capacity
+        }
+      }
+    });
+  }
+
+  if (higher.price < lower.price && higher.componentTotal <= lower.componentTotal) {
+    addIssue({
+      ruleId: "QA004",
+      reason: "higherTierRegressionFailed",
+      planType: higher.planType,
+      failedPair,
+      valuesCompared: {
+        price: {
+          [lower.planType]: lower.price,
+          [higher.planType]: higher.price
+        },
+        componentTotal: {
+          [lower.planType]: lower.componentTotal,
+          [higher.planType]: higher.componentTotal
+        }
+      }
+    });
+  }
+
+  if (higher.componentTotal < lower.componentTotal && !capacityGains.length) {
+    addIssue({
+      ruleId: "QA004",
+      reason: "higherTierRegressionFailed",
+      planType: higher.planType,
+      failedPair,
+      valuesCompared: {
+        componentTotal: {
+          [lower.planType]: lower.componentTotal,
+          [higher.planType]: higher.componentTotal
+        },
+        capacityGains
+      }
+    });
+  }
+}
+
+function getCandidateQaSnapshot(candidate) {
+  const componentCounts = getComponentCount(candidate);
+  const capacityInfo = getCandidateQaCapacityInfo(candidate);
+  return {
+    planType: candidate.planType,
+    candidatePlanId: candidate.planId || candidate.configPreset?.candidatePlanId || "",
+    price: getCandidateRealPrice(candidate),
+    componentCounts,
+    componentTotal: Object.values(componentCounts).reduce((sum, count) => sum + Number(count || 0), 0),
+    capacity: capacityInfo.capacity,
+    capacitySource: capacityInfo.capacitySource,
+    estimatedCapacity: capacityInfo.estimatedCapacity,
+    placementDerivedCapacity: capacityInfo.placementDerivedCapacity,
+    capacityDiff: capacityInfo.capacityDiff,
+    capacityContributions: capacityInfo.capacityContributions
+  };
+}
+
+function getCandidateCapacityMap(candidate) {
+  return getCandidateQaCapacityInfo(candidate).capacity;
+}
+
+function getCandidateQaCapacityInfo(candidate) {
+  const capacityContributions = calculatePlacementCapacityContributions(candidate);
+  const placementDerivedCapacity = summarizePlacementCapacityContributions(capacityContributions);
+  const estimatedCapacity = getEstimatedCandidateCapacityMap(candidate);
+  const hasPlacementDerivedCapacity = Object.keys(placementDerivedCapacity).length > 0;
+  const capacity = hasPlacementDerivedCapacity ? placementDerivedCapacity : estimatedCapacity;
+  return {
+    capacity,
+    capacitySource: hasPlacementDerivedCapacity ? "placementDerived" : "estimatedFallback",
+    estimatedCapacity,
+    placementDerivedCapacity,
+    capacityDiff: getCandidateCapacityDiff(
+      candidate?.planType || "",
+      estimatedCapacity,
+      placementDerivedCapacity
+    ),
+    capacityContributions
+  };
+}
+
+function getEstimatedCandidateCapacityMap(candidate) {
+  const capacity = {};
+  (candidate?.estimatedCapacity || []).forEach((item) => {
+    const category = normalizeCapacityCategory(item);
+    if (!category) return;
+    capacity[category] = getCapacityNumericValue(item);
+  });
+  return capacity;
+}
+
+export function calculatePlacementDerivedCapacity(candidatePlan) {
+  return summarizePlacementCapacityContributions(
+    calculatePlacementCapacityContributions(candidatePlan)
+  );
+}
+
+function calculatePlacementCapacityContributions(candidatePlan) {
+  const planType = candidatePlan?.planType || "";
+  const contributions = [];
+  const rules = getPlacementCapacityRules();
+  (candidatePlan?.placements || [])
+    .filter((placement) => isRealCapacityPlacement(placement))
+    .forEach((placement, index) => {
+      const capacityEntry = getPlacementCapacityEntry(placement, rules, planType, index);
+      if (!capacityEntry) return;
+      contributions.push(capacityEntry);
+    });
+  return contributions;
+}
+
+function summarizePlacementCapacityContributions(contributions = []) {
+  const capacity = {};
+  contributions.forEach((capacityEntry) => {
+    capacity[capacityEntry.itemType] = roundCapacityValue(
+      Number(capacity[capacityEntry.itemType] || 0) + capacityEntry.contribution
+    );
+  });
+  return capacity;
+}
+
+function getPlacementCapacityRules() {
+  try {
+    return getClosetRules().capacityRules || [];
+  } catch {
+    return [];
+  }
+}
+
+function isRealCapacityPlacement(placement) {
+  if (!placement) return false;
+  if (placement.zoneType === "luggageZone") return !placement.componentType || placement.componentType === "NONE";
+  return Boolean(placement.componentType);
+}
+
+function getPlacementCapacityEntry(placement, rules, planType = "", index = 0) {
+  const itemType = getPlacementCapacityItemType(placement);
+  if (!itemType) return null;
+  const componentType = normalizePlacementCapacityComponent(placement.componentType || "NONE");
+  const rule = findPlacementCapacityRule(rules, componentType, itemType);
+  if (!rule) return null;
+  const baseCapacity = Number(rule.capacity);
+  if (!Number.isFinite(baseCapacity) || baseCapacity <= 0) return null;
+  const scaleInfo = getPlacementCapacityScale(placement, rule);
+  const contribution = roundCapacityValue(baseCapacity * scaleInfo.scale);
+  return {
+    planType,
+    placementId: getPlacementCapacityDebugId(placement, planType, index),
+    componentType: placement.componentType || "NONE",
+    bayIndex: Number(placement.bayIndex) || 0,
+    componentCutLength: numberOrNull(placement.componentCutLength),
+    innerBayWidth: numberOrNull(placement.innerBayWidth),
+    visualScaleWidth: numberOrNull(placement.visualScaleWidth),
+    widthSource: scaleInfo.widthSource,
+    ruleCapacity: baseCapacity,
+    ruleZoneLengthMm: numberOrNull(rule.zoneLengthMm),
+    scale: roundCapacityValue(scaleInfo.scale),
+    contribution,
+    fallbackReason: scaleInfo.fallbackReason,
+    itemType,
+    quantity: contribution
+  };
+}
+
+function getPlacementCapacityItemType(placement) {
+  return PLACEMENT_CAPACITY_ZONE_ITEM_TYPES[placement.zoneType]
+    || PLACEMENT_CAPACITY_ZONE_ITEM_TYPES[placement.templateZone]
+    || PLACEMENT_CAPACITY_ZONE_ITEM_TYPES[placement.templateRole]
+    || "";
+}
+
+function normalizePlacementCapacityComponent(componentType) {
+  const normalized = String(componentType || "NONE").trim() || "NONE";
+  return PLACEMENT_CAPACITY_COMPONENT_ALIASES[normalized] || normalized;
+}
+
+function findPlacementCapacityRule(rules, componentType, itemType) {
+  return rules.find((rule) => rule.componentType === componentType && rule.itemType === itemType)
+    || rules.find((rule) => rule.componentType === componentType && !rule.itemType)
+    || null;
+}
+
+function getPlacementCapacityScale(placement, rule) {
+  const widthInfo = getPlacementCapacityWidth(placement);
+  const zoneLength = Number(rule.zoneLengthMm);
+  if (Number.isFinite(widthInfo.width) && widthInfo.width > 0
+    && Number.isFinite(zoneLength) && zoneLength > 0) {
+    return {
+      scale: widthInfo.width / zoneLength,
+      widthSource: widthInfo.widthSource,
+      fallbackReason: ""
+    };
+  }
+  if (!Number.isFinite(zoneLength) || zoneLength <= 0) {
+    return {
+      scale: 1,
+      widthSource: widthInfo.widthSource,
+      fallbackReason: "unitCapacityRule"
+    };
+  }
+  const quantity = Number(placement.quantity ?? placement.count);
+  if (Number.isFinite(quantity) && quantity > 0) {
+    return {
+      scale: quantity,
+      widthSource: "quantity",
+      fallbackReason: "quantityFallback"
+    };
+  }
+  return {
+    scale: 1,
+    widthSource: "none",
+    fallbackReason: "missingWidthFallback"
+  };
+}
+
+function getPlacementCapacityWidth(placement) {
+  const fields = [
+    "componentCutLength",
+    "cutLength",
+    "innerBayWidth",
+    "usableComponentWidth",
+    "visualScaleWidth",
+    "widthMm",
+    "width",
+    "lengthMm",
+    "length"
+  ];
+  for (const field of fields) {
+    const width = Number(placement?.[field]);
+    if (Number.isFinite(width) && width > 0) {
+      return { width, widthSource: field };
+    }
+  }
+  return { width: null, widthSource: "none" };
+}
+
+function getPlacementCapacityDebugId(placement, planType, index) {
+  return placement.id
+    || placement.placementId
+    || `${planType || "plan"}:${placement.wallId || "back"}:${Number(placement.bayIndex) || 0}:${placement.componentType || "NONE"}:${Number(placement.heightFromFloor) || 0}:${index}`;
+}
+
+function numberOrNull(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function roundCapacityValue(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function getCandidateCapacityDiff(planType, estimatedCapacity = {}, placementDerivedCapacity = {}) {
+  return unique([...Object.keys(estimatedCapacity), ...Object.keys(placementDerivedCapacity)])
+    .map((category) => {
+      const estimated = Number(estimatedCapacity[category] || 0);
+      const placementDerived = Number(placementDerivedCapacity[category] || 0);
+      return {
+        planType,
+        category,
+        estimated,
+        placementDerived,
+        delta: roundCapacityValue(placementDerived - estimated)
+      };
+    });
+}
+
+function normalizeCapacityCategory(item) {
+  return String(item?.itemType || item?.category || item?.key || item?.label || "").trim();
+}
+
+function getCapacityNumericValue(item) {
+  const direct = Number(item?.quantity ?? item?.value ?? item?.count ?? item?.capacity);
+  if (Number.isFinite(direct)) return direct;
+  const text = [item?.estimate, item?.label, item?.displayValue].filter(Boolean).join(" ");
+  const parsed = String(text).match(/[\d.]+/);
+  return parsed ? Number(parsed[0]) : 0;
+}
+
+function getComponentIncreases(lowerCounts = {}, higherCounts = {}) {
+  return unique([...Object.keys(lowerCounts), ...Object.keys(higherCounts)])
+    .filter((componentType) => Number(higherCounts[componentType] || 0) > Number(lowerCounts[componentType] || 0));
+}
+
 export function getLastCandidateEngineStats() {
   return {
     ...lastStats,
@@ -881,6 +3548,27 @@ export function getLastCandidateEngineStats() {
       .map(([planType, reasons]) => [planType, { ...reasons }])),
     candidateRejectTopReasons: [...(lastStats.candidateRejectTopReasons || [])],
     matchedJapaneseCases: [...(lastStats.matchedJapaneseCases || [])],
+    caseMatching: {
+      ...(lastStats.caseMatching || {}),
+      userRequirementVector: { ...(lastStats.caseMatching?.userRequirementVector || {}) },
+      topCandidates: (lastStats.caseMatching?.topCandidates || []).map((candidate) => ({
+        ...candidate,
+        scoreBreakdown: cloneCaseMatchingScoreBreakdown(candidate.scoreBreakdown),
+        tags: [...(candidate.tags || [])]
+      }))
+    },
+    caseMatchingRuleLoad: { ...(lastStats.caseMatchingRuleLoad || {}) },
+    componentUpgrade: Object.fromEntries(Object.entries(lastStats.componentUpgrade || {})
+      .map(([planType, debug]) => [planType, cloneComponentUpgradeDebug(debug)])),
+    candidateQa: {
+      ...(lastStats.candidateQa || { passed: true, issues: [], summary: {} }),
+      issues: [...(lastStats.candidateQa?.issues || [])],
+      summary: { ...(lastStats.candidateQa?.summary || {}) },
+      capacityByPlan: { ...(lastStats.candidateQa?.capacityByPlan || {}) },
+      capacityDiff: [...(lastStats.candidateQa?.capacityDiff || [])],
+      capacityContributions: [...(lastStats.candidateQa?.capacityContributions || [])],
+      missingWidthFallbackCount: lastStats.candidateQa?.missingWidthFallbackCount || 0
+    },
     heatmap: Object.fromEntries(Object.entries(lastStats.heatmap || {})
       .map(([planType, candidates]) => [planType, candidates.map((candidate) => ({ ...candidate }))]))
   };
@@ -891,7 +3579,10 @@ function toJapaneseCaseDebugSummary(caseData) {
     caseId: caseData.caseId,
     score: caseData.score,
     modelPath: caseData.modelPath,
-    matchedReason: caseData.matchedReason
+    matchedReason: caseData.matchedReason,
+    layoutTemplate: caseData.layoutTemplate || [],
+    specialTemplate: Boolean(caseData.specialTemplate),
+    premiumSpecialTemplate: Boolean(caseData.premiumSpecialTemplate)
   };
 }
 
@@ -987,7 +3678,7 @@ function createValueFallbackCandidate(candidate, answers, supportedTypes) {
     added += tryAddTierUpgrade(value, "storageZone", "cabinet", [0], true);
   }
   if (!added && answers.needs.裤子 > 0 && supportedTypes.has("trouserRack")) {
-    added += tryAddTierUpgrade(value, "trouserZone", "trouserRack", [750], true);
+    added += tryAddTierUpgrade(value, "trouserZone", "trouserRack", [...JAPANESE_TROUSER_RACK_HEIGHTS], true);
   }
   if (!added && answers.needs.首饰 > 0 && supportedTypes.has("jewelryBox")) {
     added += tryAddTierUpgrade(value, "jewelryZone", "jewelryBox", [1100, 1300], true);
@@ -1010,7 +3701,7 @@ function createPremiumFallbackCandidate(candidate, answers, supportedTypes) {
     addedUpgradeCount += tryAddTierUpgrade(premium, "jewelryZone", "jewelryBox", [1100, 1300], true);
   }
   if (answers.needs.裤子 > 0 && supportedTypes.has("trouserRack")) {
-    addedUpgradeCount += tryAddTierUpgrade(premium, "trouserZone", "trouserRack", [750], true);
+    addedUpgradeCount += tryAddTierUpgrade(premium, "trouserZone", "trouserRack", [...JAPANESE_TROUSER_RACK_HEIGHTS], true);
   }
   if (supportedTypes.has("cabinet")) {
     addedUpgradeCount += tryAddTierUpgrade(premium, "storageZone", "cabinet", [0], true);
@@ -1034,16 +3725,35 @@ function createPremiumFallbackCandidate(candidate, answers, supportedTypes) {
 function tryAddTierUpgrade(candidate, zoneType, componentType, heights, allowExisting = false) {
   if (!allowExisting && candidate.placements.some((item) => item.componentType === componentType)) return 0;
   const bayCount = Math.max(1, Number(candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 1));
-  for (let bayIndex = bayCount - 1; bayIndex >= 0; bayIndex -= 1) {
-    for (const heightFromFloor of heights) {
+  const existingOrder = Array.from({ length: bayCount }, (_, index) => bayCount - index - 1);
+  const orderedBays = isFixedWidthAccessory(componentType)
+    ? selectJapanesePreferredAccessoryBays(
+      existingOrder,
+      componentType,
+      candidate.configPreset?.roomWidth,
+      bayCount,
+      candidate.placements,
+      "tryAddTierUpgrade"
+    )
+    : existingOrder;
+  for (const bay of orderedBays) {
+    const bayIndex = getJapaneseAccessoryCandidateBayIndex(bay);
+    const removedLowRails = componentType === "trouserRack"
+      && candidate.configPreset?.productSystemId === "japanese-closet"
+      ? removeJapaneseLowRailsForTrouser(candidate.placements, bayIndex)
+      : [];
+    const bayPlacements = candidate.placements.filter((item) => (
+      item.wallId === "back" && Number(item.bayIndex) === bayIndex && item.componentType
+    ));
+    const heightCandidates = getJapaneseAccessoryHeightCandidates(componentType, heights, bayPlacements);
+    for (const heightFromFloor of heightCandidates) {
       const upgrade = placement(zoneType, componentType, bayIndex, heightFromFloor);
-      if (candidate.configPreset?.productSystemId === "japanese-closet"
-        && ["trouserRack", "jewelryBox"].includes(componentType)) {
-        upgrade.preferredWidth = getPreferredJapaneseFixedModuleWidth(
-          candidate.configPreset.roomWidth,
-          bayCount
-        );
-        upgrade.allowedWidths = [...JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS];
+      if (isFixedWidthAccessory(componentType)) {
+        const preferredWidth = getJapaneseAccessoryModuleWidthForBay(bay);
+        if (preferredWidth) {
+          upgrade.preferredWidth = preferredWidth;
+          upgrade.allowedWidths = [preferredWidth];
+        }
       }
       if (candidate.placements.some((item) => item.wallId === upgrade.wallId
         && item.bayIndex === upgrade.bayIndex
@@ -1052,6 +3762,12 @@ function tryAddTierUpgrade(candidate, zoneType, componentType, heights, allowExi
         && item.bayIndex === upgrade.bayIndex
         && item.zoneType === "luggageZone")) continue;
       candidate.placements.push(upgrade);
+      if (candidate.configPreset?.productSystemId === "japanese-closet"
+        && getJapanesePlacementValidationDiagnostics(candidate.placements)
+          .some((item) => !item.isValidPlacement)) {
+        candidate.placements.pop();
+        continue;
+      }
       if (getShelfUsabilityRejectReason(candidate.placements)) {
         candidate.placements.pop();
         continue;
@@ -1062,6 +3778,7 @@ function tryAddTierUpgrade(candidate, zoneType, componentType, heights, allowExi
       candidate.parameters[componentType] = Number(candidate.parameters[componentType] || 0) + 1;
       return 1;
     }
+    candidate.placements.push(...removedLowRails);
   }
   return 0;
 }
@@ -1381,6 +4098,9 @@ function createCandidate(options) {
   if (getSelectedSeriesId(answers) === "japanese-closet" && !answers.primaryJapaneseCase) {
     applyJapaneseCandidatePlacementRules(placements, answers, parameters, planType);
   }
+  if (getSelectedSeriesId(answers) === "japanese-closet") {
+    applyJapanesePlacementDimensions({ placements, parameters }, answers);
+  }
   const configPreset = buildCandidateConfigPreset(answers, planType, planOutput, parameters, placements);
   const japanesePriceBreakdown = getSelectedSeriesId(answers) === "japanese-closet"
     ? calculateJapaneseClosetPrice(placements, parameters.bayCount, planType)
@@ -1400,6 +4120,7 @@ function createCandidate(options) {
     scores: null,
     configPreset,
     parameters,
+    placementStrategyDebug: [...(placements.placementStrategyDebug || [])],
     ...(answers.primaryJapaneseCase
       ? {
         layoutTemplate: answers.primaryJapaneseCase.layoutTemplate || [],
@@ -1413,85 +4134,29 @@ function createCandidate(options) {
 
 function buildJapaneseCaseTemplatePlacements(answers, parameters, planType) {
   const bayCount = Math.max(1, Number(parameters.bayCount) || 1);
-  const hardRequirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
-  const template = [...(answers.primaryJapaneseCase?.layoutTemplate || [])].map((entry) => ({
-    zone: entry.zone,
-    components: [...(entry.components || [])]
-  }));
-  if (!template.some((entry) => entry.zone === "accessoryZone")
-    && (hardRequirements.requiresTrouserRack || hardRequirements.requiresJewelryBox)) {
-    template.push({ zone: "accessoryZone", components: [] });
-  }
-  if (!template.some((entry) => entry.zone === "storageZone") && hardRequirements.requiresCabinet) {
-    template.push({ zone: "storageZone", components: ["cabinet"] });
-  }
-
-  const assignments = template.map((entry, index) => ({
-    entry,
-    bayIndex: getJapaneseTemplateBayIndex(entry, index, template.length, bayCount)
-  }));
+  const skeleton = buildJapaneseLayoutSkeleton(answers, bayCount);
   const placements = [];
-  let valueAccessoryAdded = false;
-  const assignmentPriority = {
-    shortHangZone: 0,
-    longHangZone: 1,
-    luggageZone: 2,
-    accessoryZone: 3,
-    storageZone: 4,
-    shoeZone: 5,
-    shelfZone: 6
-  };
-  [...assignments].sort((left, right) => (
-    Number(assignmentPriority[left.entry.zone] ?? 99) - Number(assignmentPriority[right.entry.zone] ?? 99)
-  )).forEach(({ entry, bayIndex }) => {
-    if (entry.zone === "shoeZone" && bayCount <= 3 && !hardRequirements.requiresShoeZone) return;
-    if (entry.zone === "luggageZone" && bayCount <= 3 && !hardRequirements.requiresLuggageZone) return;
-    let components = [...entry.components];
-    if (entry.zone === "accessoryZone") {
-      components = unique([
-        ...(hardRequirements.requiresTrouserRack ? ["trouserRack"] : []),
-        ...(hardRequirements.requiresJewelryBox ? ["jewelryBox"] : []),
-        ...components
-      ]);
-    }
-    components.forEach((componentType, componentIndex) => {
-      if (planType === "basic" && ["cabinet", "trouserRack", "jewelryBox"].includes(componentType)) return;
-      if (planType === "value" && ["trouserRack", "jewelryBox"].includes(componentType)) {
-        const preferred = (componentType === "trouserRack" && hardRequirements.valuePrefersTrouserRack)
-          || (componentType === "jewelryBox" && hardRequirements.valuePrefersJewelryBox);
-        if (valueAccessoryAdded || (!preferred
-          && (hardRequirements.valuePrefersTrouserRack || hardRequirements.valuePrefersJewelryBox))) return;
-        valueAccessoryAdded = true;
-      }
-      const targetBay = ["trouserRack", "jewelryBox"].includes(componentType)
-        ? findJapaneseAccessoryTemplateBay(placements, assignments, bayIndex, bayCount)
-        : bayIndex;
-      if (targetBay == null) return;
-      addJapaneseTemplateComponent(placements, componentType, entry.zone, targetBay, componentIndex, answers, bayCount);
-    });
-    if (entry.zone === "luggageZone") {
-      placements.push({
-        zoneType: "luggageZone",
-        componentType: "",
-        wallId: "back",
-        bayIndex,
-        heightFromFloor: 0,
-        reservedHeight: 800,
-        templateZone: entry.zone
-      });
-    }
-  });
-
-  const coreEntries = template.filter((entry) => ["shortHangZone", "longHangZone", "storageZone"].includes(entry.zone));
-  for (let bayIndex = 0; bayIndex < bayCount; bayIndex += 1) {
-    if (placements.some((item) => item.bayIndex === bayIndex && item.componentType)) continue;
-    const fallback = coreEntries[bayIndex % Math.max(1, coreEntries.length)]
-      || { zone: "longHangZone", components: ["singleRail"] };
-    fallback.components.slice(0, 2).forEach((componentType, index) => {
-      if (["cabinet", "trouserRack", "jewelryBox"].includes(componentType)) return;
-      addJapaneseTemplateComponent(placements, componentType, fallback.zone, bayIndex, index, answers, bayCount);
+  skeleton.forEach((entry) => initializeJapaneseSkeletonBay(placements, entry, answers, planType));
+  const candidate = { placements, skeleton, parameters: { bayCount }, configPreset: { bayCount } };
+  const usedBays = new Set();
+  const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
+  if (planType !== "basic") {
+    addJapaneseSkeletonUpgrade(candidate, "cabinet", skeleton, answers, usedBays, true);
+    const accessories = planType === "value"
+      ? [
+        ...(requirements.valuePrefersTrouserRack ? ["trouserRack"] : []),
+        ...(requirements.valuePrefersJewelryBox ? ["jewelryBox"] : [])
+      ].slice(0, 1)
+      : [
+        ...(requirements.requiresTrouserRack ? ["trouserRack"] : []),
+        ...(requirements.requiresJewelryBox ? ["jewelryBox"] : [])
+      ];
+    accessories.forEach((componentType) => {
+      addJapaneseSkeletonUpgrade(candidate, componentType, skeleton, answers, usedBays, true);
     });
   }
+  repairJapaneseCaseLayout(candidate);
+  placements.placementStrategyDebug = [...(candidate.placementStrategyDebug || [])];
   return placements;
 }
 
@@ -1522,40 +4187,151 @@ function findJapaneseAccessoryTemplateBay(placements, assignments, preferredBay,
     ?? null;
 }
 
-function addJapaneseTemplateComponent(placements, componentType, templateZone, bayIndex, componentIndex, answers, bayCount) {
+function addJapaneseTemplateComponent(
+  placements,
+  componentType,
+  templateZone,
+  bayIndex,
+  componentIndex,
+  answers,
+  bayCount,
+  placementOptions = {}
+) {
   const bayPlacements = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
   const counts = countBy(bayPlacements, (item) => item.componentType);
+  const role = normalizeJapaneseTemplateRole(templateZone);
+  const accessoryCount = bayPlacements.filter((item) => ["trouserRack", "jewelryBox"]
+    .includes(item.componentType)).length;
+  const railCount = bayPlacements.filter((item) => ["singleRail", "doubleRail"]
+    .includes(item.componentType)).length;
+  const shelfLimit = role === "shoeShelfZone"
+    ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shoeZone.maxWoodShelves
+    : role === "shelfZone"
+      ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shelfZone.maxWoodShelves
+      : JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxWoodShelves;
+  const railLimit = role === "shoeShelfZone"
+    ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.shoeZone.maxRails
+    : role === "longHangZone"
+      ? JAPANESE_CASE_LAYOUT_RULES.componentLimits.longHangZone.maxRails
+      : JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxRails;
   if (componentType === "cabinet" && Number(counts.cabinet || 0) >= 1) return false;
   if (["trouserRack", "jewelryBox"].includes(componentType)
-    && bayPlacements.some((item) => ["trouserRack", "jewelryBox"].includes(item.componentType))) return false;
-  if (componentType === "woodShelf" && Number(counts.woodShelf || 0) >= 3) return false;
+    && (accessoryCount >= 1 || role === "shoeShelfZone" || role === "longHangZone")) return false;
+  if (componentType === "woodShelf" && Number(counts.woodShelf || 0) >= shelfLimit) return false;
   if (["singleRail", "doubleRail"].includes(componentType)
-    && bayPlacements.filter((item) => ["singleRail", "doubleRail"].includes(item.componentType)).length >= 2) return false;
+    && railCount >= railLimit) return false;
+  if (role === "longHangZone" && !["singleRail", "doubleRail"].includes(componentType)) return false;
+  if (role !== "shoeShelfZone" && railCount > 0
+    && componentType === "woodShelf" && Number(counts.woodShelf || 0) >= 2) return false;
+  if (role !== "shoeShelfZone"
+    && bayPlacements.length >= JAPANESE_CASE_LAYOUT_RULES.componentLimits.normalBay.maxFunctionalComponents) {
+    if (!isAllowedJapaneseTrouserRackFunctionalShelfUpgrade(componentType, bayPlacements)) return false;
+  }
 
   const zoneType = componentType === "trouserRack"
     ? "trouserZone"
     : componentType === "jewelryBox" ? "jewelryZone"
-      : templateZone === "accessoryZone" || templateZone === "shelfZone" ? "storageZone" : templateZone;
-  const heights = getJapaneseTemplateHeights(componentType, zoneType);
-  const heightFromFloor = heights[Math.min(componentIndex, heights.length - 1)];
-  const candidate = placement(zoneType, componentType, bayIndex, heightFromFloor);
-  candidate.templateZone = templateZone;
-  if (["trouserRack", "jewelryBox"].includes(componentType)) {
-    candidate.preferredWidth = getPreferredJapaneseFixedModuleWidth(answers.roomWidth, bayCount);
-    candidate.allowedWidths = [...JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS];
+      : role === "shoeShelfZone" ? "shoeZone"
+        : role === "shortHangZone" ? "shortHangZone"
+          : role === "longHangZone" ? "longHangZone"
+            : role === "luggageZone" ? "luggageZone" : "storageZone";
+  const heights = getJapaneseAccessoryHeightCandidates(
+    componentType,
+    getJapaneseTemplateHeights(componentType, zoneType),
+    bayPlacements
+  );
+  for (const heightFromFloor of rotateHeightCandidates(heights, componentIndex)) {
+    const candidate = placement(zoneType, componentType, bayIndex, heightFromFloor);
+    candidate.templateRole = role;
+    candidate.templateZone = role;
+    const fixedAccessoryPreferredWidth = isFixedWidthAccessory(componentType)
+      ? Number(placementOptions.preferredWidth)
+        || getPreferredJapaneseFixedModuleWidth(answers?.roomWidth, bayCount)
+      : null;
+    if (fixedAccessoryPreferredWidth > 0) {
+      candidate.preferredWidth = fixedAccessoryPreferredWidth;
+      candidate.allowedWidths = [fixedAccessoryPreferredWidth];
+    }
+    if (bayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(candidate)))) continue;
+    if (getJapanesePlacementValidationDiagnostics([...bayPlacements, candidate])
+      .some((item) => !item.isValidPlacement)) continue;
+    placements.push(candidate);
+    return true;
   }
-  if (bayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(candidate)))) return false;
-  placements.push(candidate);
-  return true;
+  return false;
+}
+
+function isAllowedJapaneseTrouserRackFunctionalShelfUpgrade(componentType, bayPlacements = []) {
+  if (componentType !== "trouserRack") return false;
+  const hasHighRail = bayPlacements.some((item) => (
+    ["singleRail", "doubleRail"].includes(item.componentType)
+    && Number(item.heightFromFloor || 0) >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+    && Number(item.heightFromFloor || 0) <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+  ));
+  const hasPreservedLowerFunctionalShelf = bayPlacements.some((item) => (
+    item.componentType === JAPANESE_UPGRADE_POLICY.preserve.functionalShelf.componentType
+    && !JAPANESE_UPGRADE_POLICY.preserve.functionalShelf.excludedZoneTypes.includes(item.zoneType)
+    && Number(item.heightFromFloor || 0) >= JAPANESE_PRESERVED_FUNCTIONAL_SHELF_MIN_HEIGHT
+    && Number(item.heightFromFloor || 0) <= JAPANESE_PRESERVED_FUNCTIONAL_SHELF_MAX_HEIGHT
+  ));
+  const hasLowerRail = bayPlacements.some((item) => (
+    ["singleRail", "doubleRail"].includes(item.componentType)
+    && Number(item.heightFromFloor || 0) >= JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.minHeight
+    && Number(item.heightFromFloor || 0) <= JAPANESE_UPGRADE_POLICY.lowerFunctionalZone.lowerRail.maxHeight
+  ));
+  return hasHighRail && hasPreservedLowerFunctionalShelf && !hasLowerRail;
+}
+
+function normalizeJapaneseTemplateRole(value) {
+  const aliases = {
+    shoeZone: "shoeShelfZone",
+    storageZone: "storageAccessoryZone",
+    accessoryZone: "storageAccessoryZone"
+  };
+  return aliases[value] || value || "storageAccessoryZone";
 }
 
 function getJapaneseTemplateHeights(componentType, zoneType) {
   if (componentType === "cabinet") return [0];
-  if (componentType === "trouserRack") return [750];
+  if (componentType === "trouserRack") return [...JAPANESE_TROUSER_RACK_HEIGHTS];
   if (componentType === "jewelryBox") return [1100, 1300];
   if (componentType === "woodShelf") return zoneType === "shoeZone" ? [250, 500, 750] : [700, 1200, 2050];
-  if (zoneType === "shortHangZone") return [1050, 2000];
+  if (zoneType === "shortHangZone") return [1050, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT];
   return [1650];
+}
+
+function getJapaneseAccessoryHeightCandidates(componentType, heights, bayPlacements = []) {
+  if (componentType !== "jewelryBox") return heights;
+  const cabinet = bayPlacements.find((item) => item.componentType === "cabinet");
+  if (!cabinet) return heights;
+  const cabinetTop = getJapaneseCabinetTopForJewelry(cabinet);
+  return [
+    cabinetTop + JAPANESE_JEWELRY_BOX_GAP_ABOVE_CABINET,
+    ...heights
+  ].filter((height, index, list) => list.indexOf(height) === index);
+}
+
+function rotateHeightCandidates(heights = [], preferredIndex = 0) {
+  if (!heights.length) return [];
+  const index = Math.max(0, Math.min(heights.length - 1, Number(preferredIndex) || 0));
+  return [
+    ...heights.slice(index),
+    ...heights.slice(0, index)
+  ];
+}
+
+function normalizeJapaneseAccessoryPlacementsInBay(placements, bayIndex) {
+  const items = placements.filter((item) => item.bayIndex === bayIndex && item.componentType);
+  const cabinet = items.find((item) => item.componentType === "cabinet");
+  const jewelryBox = items.find((item) => item.componentType === "jewelryBox");
+  if (!cabinet || !jewelryBox) return;
+  jewelryBox.heightFromFloor = getJapaneseCabinetTopForJewelry(cabinet)
+    + JAPANESE_JEWELRY_BOX_GAP_ABOVE_CABINET;
+  jewelryBox.allowCabinetContact = true;
+}
+
+function getJapaneseCabinetTopForJewelry(cabinet) {
+  return (Number(cabinet?.heightFromFloor) || 0) + JAPANESE_CABINET_MODEL_HEIGHT;
 }
 
 function buildJapaneseBayPlan(placements, bayCount) {
@@ -1569,18 +4345,10 @@ function buildJapaneseBayPlan(placements, bayCount) {
 }
 
 function countJapaneseTemplateViolations(placements, bayCount) {
-  return Array.from({ length: Math.max(1, Number(bayCount) || 1) }, (_, bayIndex) => (
-    placements.filter((item) => item.bayIndex === bayIndex && item.componentType)
-  )).reduce((total, items) => {
-    const counts = countBy(items, (item) => item.componentType);
-    const accessoryCount = items.filter((item) => ["trouserRack", "jewelryBox"].includes(item.componentType)).length;
-    const railCount = items.filter((item) => ["singleRail", "doubleRail"].includes(item.componentType)).length;
-    return total
-      + Math.max(0, Number(counts.cabinet || 0) - 1)
-      + Math.max(0, accessoryCount - 1)
-      + Math.max(0, Number(counts.woodShelf || 0) - 3)
-      + Math.max(0, railCount - 2);
-  }, 0);
+  return getJapaneseCaseForbiddenPatternViolations({
+    placements,
+    parameters: { bayCount }
+  }).length;
 }
 
 function buildAbstractPlacements(answers, parameters, planType, supportedTypes) {
@@ -1602,7 +4370,7 @@ function buildAbstractPlacements(answers, parameters, planType, supportedTypes) 
       ? getWallMountedHangSlot(answers.layoutType, hangIndex, bayCursor)
       : { wallId: "back", bayIndex: bayCursor };
     placements.push(placement("shortHangZone", "singleRail", slot.bayIndex, 1050, slot.wallId));
-    placements.push(placement("shortHangZone", "singleRail", slot.bayIndex, 2000, slot.wallId));
+    placements.push(placement("shortHangZone", "singleRail", slot.bayIndex, JAPANESE_PRESERVED_UPPER_RAIL_HEIGHT, slot.wallId));
     hangIndex += 1;
     if (slot.wallId === "back") bayCursor += 1;
   }
@@ -1618,12 +4386,7 @@ function buildAbstractPlacements(answers, parameters, planType, supportedTypes) 
   const restrictedComponentBays = answers.roomDepth < 650
     ? componentBays.filter((slot) => slot.wallId === "back")
     : componentBays;
-  distributePlacements(placements, "trouserZone", "trouserRack", parameters.trouserRack, componentBays, [750]);
-  const preferredFixedModuleWidth = getPreferredJapaneseFixedModuleWidth(answers.roomWidth, parameters.bayCount);
-  placements.filter((item) => ["trouserRack", "jewelryBox"].includes(item.componentType)).forEach((item) => {
-    item.preferredWidth = preferredFixedModuleWidth;
-    item.allowedWidths = [...JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS];
-  });
+  distributePlacements(placements, "trouserZone", "trouserRack", parameters.trouserRack, componentBays, [...JAPANESE_TROUSER_RACK_HEIGHTS]);
   distributePlacements(
     placements,
     "jewelryZone",
@@ -1632,10 +4395,6 @@ function buildAbstractPlacements(answers, parameters, planType, supportedTypes) 
     [...getRestrictedPlacementBays(restrictedComponentBays, componentBays, parameters.jewelryBox)].reverse(),
     [1100, 1300]
   );
-  placements.filter((item) => item.componentType === "jewelryBox").forEach((item) => {
-    item.preferredWidth = preferredFixedModuleWidth;
-    item.allowedWidths = [...JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS];
-  });
   distributePlacements(
     placements,
     "storageZone",
@@ -1782,6 +4541,186 @@ function getPreferredJapaneseFixedModuleWidth(roomWidth, bayCount) {
     || JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS[JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS.length - 1];
 }
 
+function selectJapanesePreferredAccessoryBays(
+  candidateBays,
+  componentType,
+  roomWidth,
+  bayCount,
+  placements = [],
+  generatedBy = ""
+) {
+  const enrichedBays = withJapaneseAccessoryBayWidths(candidateBays, roomWidth, bayCount, placements);
+  const ordered = selectPreferredAccessoryBay(enrichedBays, componentType);
+  logJapanesePlacementStrategySelection(componentType, enrichedBays, ordered[0], generatedBy);
+  return ordered;
+}
+
+function withJapaneseAccessoryBayWidths(candidateBays, roomWidth, bayCount, placements = []) {
+  const fallbackWidth = getPreferredJapaneseFixedModuleWidth(roomWidth, bayCount);
+  return candidateBays.map((bay) => {
+    const normalizedBay = bay && typeof bay === "object"
+      ? { ...bay }
+      : { bayIndex: Number(bay) || 0 };
+    const widthInfo = getJapaneseAccessoryBayWidthInfo(normalizedBay, placements, fallbackWidth);
+    return {
+      ...normalizedBay,
+      accessoryBayWidth: widthInfo.bayWidth,
+      accessoryBayWidthSource: widthInfo.widthSource
+    };
+  });
+}
+
+function getJapaneseAccessoryCandidateBayIndex(bay) {
+  return Number(bay && typeof bay === "object" ? bay.bayIndex : bay) || 0;
+}
+
+function getJapaneseAccessoryBayWidthInfo(bay, placements = [], fallbackWidth = null) {
+  const directFields = ["width", "innerBayWidth", "usableComponentWidth", "rawBayWidth", "postCenterDistance"];
+  for (const field of directFields) {
+    const width = getPositiveNumber(bay?.[field]);
+    if (width != null) return { bayWidth: width, widthSource: `bay.${field}` };
+  }
+
+  const placement = findJapaneseAccessoryBayPlacement(placements, bay);
+  const placementFields = ["innerBayWidth", "usableComponentWidth"];
+  for (const field of placementFields) {
+    const width = getPositiveNumber(placement?.[field]);
+    if (width != null) return { bayWidth: width, widthSource: `placement.${field}` };
+  }
+
+  return {
+    bayWidth: getPositiveNumber(fallbackWidth),
+    widthSource: "fallback.roomWidthPerBay"
+  };
+}
+
+function findJapaneseAccessoryBayPlacement(placements = [], bay) {
+  const bayIndex = getJapaneseAccessoryCandidateBayIndex(bay);
+  const wallId = bay && typeof bay === "object" ? bay.wallId || "back" : "back";
+  return (placements || []).find((placement) => (
+    (placement.wallId || "back") === wallId
+    && Number(placement.bayIndex) === bayIndex
+    && (
+      getPositiveNumber(placement.innerBayWidth) != null
+      || getPositiveNumber(placement.usableComponentWidth) != null
+    )
+  ));
+}
+
+function logJapanesePlacementStrategySelection(componentType, inputBays, selectedBay, generatedBy) {
+  if (!isFixedWidthAccessory(componentType)) return;
+  const placementStrategyInput = inputBays.map((bay) => ({
+    bayIndex: getJapaneseAccessoryCandidateBayIndex(bay),
+    role: bay.role || bay.templateRole || bay.templateZone || "",
+    widthSource: bay.accessoryBayWidthSource || "none",
+    bayWidth: getPositiveNumber(bay.accessoryBayWidth),
+    fixedWidthRank: getJapaneseFixedWidthRankLabel(bay.accessoryBayWidth)
+  }));
+  const selectedBayInfo = selectedBay ? {
+    bayIndex: getJapaneseAccessoryCandidateBayIndex(selectedBay),
+    bayWidth: getPositiveNumber(selectedBay.accessoryBayWidth),
+    widthSource: selectedBay.accessoryBayWidthSource || "none",
+    reason: "fixedWidthAccessoryWidthPriority"
+  } : null;
+  const debugEntry = {
+    componentType,
+    generatedBy,
+    placementStrategyInput,
+    selectedBay: selectedBayInfo
+  };
+  console.log("[ai-planner] placement-strategy", debugEntry);
+  const debugTarget = getPlannerPlacementStrategyDebugTarget();
+  if (debugTarget) {
+    debugTarget.__aiPlannerPlacementStrategyDebug ||= [];
+    debugTarget.__aiPlannerPlacementStrategyDebug.push(debugEntry);
+  }
+}
+
+function logJapaneseSkeletonUpgradePlacementStrategyDebug({
+  candidate,
+  componentType,
+  beforeOrder,
+  afterOrder,
+  selectedBayIndex,
+  skippedBays = [],
+  reason = ""
+}) {
+  if (!isFixedWidthAccessory(componentType)) return;
+  const numericSelectedBayIndex = getPositiveNumber(selectedBayIndex) != null
+    ? Number(selectedBayIndex)
+    : null;
+  const selectedBay = numericSelectedBayIndex == null
+    ? null
+    : afterOrder.find((bay) => (
+      getJapaneseAccessoryCandidateBayIndex(bay) === numericSelectedBayIndex
+    ));
+  const debugEntry = {
+    functionName: "addJapaneseSkeletonUpgrade",
+    componentType,
+    beforeOrder: beforeOrder.map(toJapaneseSkeletonUpgradeBayDebug),
+    afterOrder: afterOrder.map(toJapaneseSkeletonUpgradeBayDebug),
+    selectedBayIndex: numericSelectedBayIndex,
+    selectedBayWidth: getPositiveNumber(selectedBay?.accessoryBayWidth),
+    widthSource: selectedBay?.accessoryBayWidthSource || null,
+    reason,
+    skippedBays
+  };
+  if (candidate && typeof candidate === "object") {
+    candidate.placementStrategyDebug ||= [];
+    candidate.placementStrategyDebug.push(debugEntry);
+  }
+  console.log("[ai-planner] addJapaneseSkeletonUpgrade placement-strategy", debugEntry);
+  const debugTarget = getPlannerPlacementStrategyDebugTarget();
+  if (debugTarget) {
+    debugTarget.__aiPlannerPlacementStrategyDebug ||= [];
+    debugTarget.__aiPlannerPlacementStrategyDebug.push(debugEntry);
+  }
+}
+
+function getPlannerPlacementStrategyDebugTarget() {
+  if (typeof window !== "undefined") return window;
+  if (typeof globalThis !== "undefined") return globalThis;
+  return null;
+}
+
+function toJapaneseSkeletonUpgradeBayDebug(bay) {
+  return {
+    bayIndex: getJapaneseAccessoryCandidateBayIndex(bay),
+    role: bay.role || bay.templateRole || bay.templateZone || "",
+    widthSource: bay.accessoryBayWidthSource || "none",
+    bayWidth: getPositiveNumber(bay.accessoryBayWidth),
+    fixedWidthRank: getJapaneseFixedWidthRankLabel(bay.accessoryBayWidth)
+  };
+}
+
+function getJapaneseFixedWidthRankLabel(width) {
+  const numericWidth = getPositiveNumber(width);
+  if (numericWidth == null) return "other";
+  return JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS.find((allowedWidth) => numericWidth >= allowedWidth) || "other";
+}
+
+function getJapaneseAccessoryModuleWidthForBay(bay) {
+  const width = getPositiveNumber(
+    bay?.accessoryBayWidth
+    ?? bay?.preferredWidth
+    ?? bay?.moduleWidth
+    ?? bay?.standardWidth
+    ?? bay?.innerBayWidth
+    ?? bay?.usableComponentWidth
+    ?? bay?.rawBayWidth
+    ?? bay?.postCenterDistance
+    ?? bay?.width
+  );
+  if (width == null) return null;
+  return JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS.find((allowedWidth) => width >= allowedWidth)
+    || JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS[JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS.length - 1];
+}
+
+function getPositiveNumber(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
 function getWallMountedHangSlot(layoutType, hangIndex, backBayIndex) {
   const walls = layoutType === "U型"
     ? ["back", "left", "right"]
@@ -1917,14 +4856,25 @@ function buildCandidateExplicitPlacements(placements = []) {
       bayIndex: Number(item.bayIndex) || 0,
       heightFromFloor: Number(item.heightFromFloor) || 0,
       zoneType: item.zoneType || "",
-      ...(["trouserRack", "jewelryBox"].includes(item.componentType) && item.preferredWidth
-        ? {
-          preferredWidth: item.preferredWidth,
-          allowedWidths: [...(item.allowedWidths || JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS)]
-        }
+      ...(item.isAutoSupplementalShortRail
+        ? { isAutoSupplementalShortRail: true }
         : {}),
+      ...getJapanesePlacementDimensionFields(item),
       source: "candidate"
     }));
+}
+
+function getJapanesePlacementDimensionFields(placement) {
+  return JAPANESE_PLACEMENT_DIMENSION_FIELDS.reduce((result, field) => {
+    const value = placement?.[field];
+    if (typeof value === "string" && value) {
+      result[field] = value;
+      return result;
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) result[field] = numeric;
+    return result;
+  }, {});
 }
 
 function overrideRequirement(requirements, zoneType, componentType, quantity) {
@@ -1957,52 +4907,58 @@ function estimateCandidatePrice(budgetRange, planType, parameters, rulesData) {
 }
 
 function calculateJapaneseClosetPrice(placements = [], bayCount = 0, planType = "basic") {
-  const placementsByBay = groupPlacements(placements.filter((item) => item.componentType));
-  for (let bayIndex = 0; bayIndex < Math.max(0, Number(bayCount) || 0); bayIndex += 1) {
-    placementsByBay[`back:${bayIndex}`] ||= [];
-  }
-
-  const manualComponentPrice = Object.values(placementsByBay).reduce((total, bayPlacements) => {
-    const counts = countBy(bayPlacements, (item) => item.componentType);
-    const ordinaryWoodShelves = bayPlacements.filter((item) => (
-      item.componentType === "woodShelf" && item.zoneType !== "shoeZone"
-    )).length;
-    const hasCabinet = Number(counts.cabinet || 0) > 0;
-    const railUnits = Number(counts.singleRail || 0) + Number(counts.doubleRail || 0) * 2;
-    const isStorageGroup = hasCabinet && railUnits === 0 && ordinaryWoodShelves >= 2;
-    const isHangGroup = !isStorageGroup && railUnits > 0;
-
-    let bayPrice = isStorageGroup
-      ? JAPANESE_CLOSET_AI_PRICES.storageGroup
-      : isHangGroup
-        ? JAPANESE_CLOSET_AI_PRICES.basicHangGroup
-        : JAPANESE_CLOSET_AI_PRICES.woodTop;
-
-    const includedSingleRails = isHangGroup ? Math.min(2, Number(counts.singleRail || 0)) : 0;
-    const includedCabinets = isStorageGroup ? Math.min(1, Number(counts.cabinet || 0)) : 0;
-    const includedWoodShelves = isStorageGroup ? Math.min(2, ordinaryWoodShelves) : 0;
-
-    bayPrice += Math.max(0, Number(counts.singleRail || 0) - includedSingleRails)
-      * JAPANESE_CLOSET_AI_PRICES.singleRail;
-    bayPrice += Number(counts.doubleRail || 0) * JAPANESE_CLOSET_AI_PRICES.doubleRail;
-    bayPrice += Math.max(0, ordinaryWoodShelves - includedWoodShelves)
-      * JAPANESE_CLOSET_AI_PRICES.woodShelf;
-    bayPrice += bayPlacements.filter((item) => (
-      item.componentType === "woodShelf" && item.zoneType === "shoeZone"
-    )).length * JAPANESE_CLOSET_AI_PRICES.woodShelf;
-    bayPrice += Math.max(0, Number(counts.cabinet || 0) - includedCabinets)
-      * JAPANESE_CLOSET_AI_PRICES.cabinet;
-    bayPrice += Number(counts.jewelryBox || 0) * JAPANESE_CLOSET_AI_PRICES.jewelryBoxWithShelf;
-    bayPrice += Number(counts.trouserRack || 0) * JAPANESE_CLOSET_AI_PRICES.trouserRackWithShelf;
-    return total + bayPrice;
-  }, 0);
-  const servicePriceFactor = JAPANESE_CLOSET_SERVICE_PRICE_FACTORS[planType]
-    || JAPANESE_CLOSET_SERVICE_PRICE_FACTORS.basic;
-  const finalPlanPrice = Math.round((manualComponentPrice * servicePriceFactor) / 100) * 100;
+  const normalizedBayCount = Math.max(0, Number(bayCount) || 0);
+  const counts = countBy(placements.filter((item) => item.componentType), (item) => item.componentType);
+  const baseBayPrice = JAPANESE_CLOSET_AI_PRICES.basicHangGroup;
+  const basePlanPrice = normalizedBayCount * baseBayPrice;
+  const woodShelfPrice = Number(counts.woodShelf || 0) * JAPANESE_CLOSET_AI_PRICES.woodShelf;
+  const cabinetPrice = Number(counts.cabinet || 0) * JAPANESE_CLOSET_AI_PRICES.cabinet;
+  const trouserRackPrice = Number(counts.trouserRack || 0)
+    * JAPANESE_CLOSET_AI_PRICES.trouserRackWithShelf;
+  const jewelryBoxPrice = Number(counts.jewelryBox || 0)
+    * JAPANESE_CLOSET_AI_PRICES.jewelryBoxWithShelf;
+  const doubleRailUpgradePrice = Number(counts.doubleRail || 0)
+    * (JAPANESE_CLOSET_AI_PRICES.doubleRail - JAPANESE_CLOSET_AI_PRICES.singleRail);
+  const includedRailSlots = normalizedBayCount * 2;
+  const usedRailSlots = Number(counts.singleRail || 0) + Number(counts.doubleRail || 0);
+  const supplementalRailCount = placements.filter((item) => item.isAutoSupplementalShortRail).length;
+  const additionalSingleRailCount = Math.max(
+    supplementalRailCount,
+    usedRailSlots - includedRailSlots
+  );
+  const additionalSingleRailPrice = Math.max(0, additionalSingleRailCount)
+    * JAPANESE_CLOSET_AI_PRICES.singleRail;
+  const manualComponentPrice = basePlanPrice
+    + woodShelfPrice
+    + cabinetPrice
+    + trouserRackPrice
+    + jewelryBoxPrice
+    + doubleRailUpgradePrice
+    + additionalSingleRailPrice;
+  const servicePriceFactor = 1;
+  const finalPlanPrice = Math.round(manualComponentPrice / 100) * 100;
+  const priceBreakdown = {
+    baseBayPrice,
+    bayCount: normalizedBayCount,
+    basePlanPrice,
+    woodShelfPrice,
+    cabinetPrice,
+    trouserRackPrice,
+    jewelryBoxPrice,
+    doubleRailUpgradePrice,
+    supplementalRailCount,
+    additionalSingleRailCount,
+    additionalSingleRailPrice,
+    manualComponentPrice,
+    finalPlanPrice
+  };
   return {
+    baseBayPrice,
+    basePlanPrice,
     manualComponentPrice,
     servicePriceFactor,
     finalPlanPrice,
+    priceBreakdown,
     priceWasTargetAdjusted: false
   };
 }
@@ -2052,18 +5008,6 @@ function scoreLayout(candidate, answers) {
   const maxShare = Math.max(0, ...Object.values(bayCounts)) / Math.max(1, candidate.placements.length);
   if (maxShare <= 0.6) score += 0.1;
   return clamp(score, 0, 1);
-}
-
-function scoreVisual(candidate) {
-  const shelfHeights = candidate.placements.filter((placement) => SHELF_TYPES.has(placement.componentType))
-    .map((placement) => placement.heightFromFloor);
-  const aligned = shelfHeights.length <= 1
-    ? 1
-    : 1 - Math.min(1, unique(shelfHeights).length / shelfHeights.length);
-  const cabinetsAtBottom = candidate.placements
-    .filter((placement) => placement.componentType === "cabinet")
-    .every((placement) => placement.heightFromFloor <= 300);
-  return clamp(0.55 + aligned * 0.3 + (cabinetsAtBottom ? 0.15 : 0), 0, 1);
 }
 
 function scoreBudget(candidate) {
@@ -2148,8 +5092,37 @@ function toCandidateDebugSummary(candidate) {
     distributionDelta: candidate.scores?.distributionDelta || {},
     premiumHardRequirements: candidate.premiumHardRequirements || null,
     premiumRequirementStatus: candidate.premiumRequirementStatus || null,
+    componentUpgrade: {
+      ...cloneComponentUpgradeDebug(candidate.componentUpgrade),
+      placementStrategyDebug: candidate.placementStrategyDebug || []
+    },
+    placementStrategyDebug: candidate.placementStrategyDebug || [],
     caseLibraryAppliedAs: candidate.caseLibraryAppliedAs || "layoutReferenceOnly",
     hardRuleOverrideCase: candidate.hardRuleOverrideCase || false,
+    skeleton: candidate.skeleton || [],
+    caseLayoutTemplate: candidate.caseLayoutTemplate || candidate.layoutTemplate || [],
+    resolvedSkeleton: candidate.resolvedSkeleton || candidate.skeleton || [],
+    forbiddenPatternViolations: candidate.forbiddenPatternViolations || [],
+    tierUpgradeRulesApplied: candidate.tierUpgradeRulesApplied || {},
+    bayRoleComponents: candidate.bayRoleComponents || [],
+    baseBayPrice: candidate.baseBayPrice,
+    basePlanPrice: candidate.basePlanPrice,
+    basicUpgradeList: candidate.basicUpgradeList || [],
+    valueUpgradeList: candidate.valueUpgradeList || [],
+    premiumUpgradeList: candidate.premiumUpgradeList || [],
+    basicPriceBreakdown: candidate.basicPriceBreakdown || {},
+    valuePriceBreakdown: candidate.valuePriceBreakdown || {},
+    premiumPriceBreakdown: candidate.premiumPriceBreakdown || {},
+    caseUsedForLayoutOnly: candidate.caseUsedForLayoutOnly,
+    basicComponents: candidate.basicComponents || {},
+    valueComponents: candidate.valueComponents || {},
+    premiumComponents: candidate.premiumComponents || {},
+    basicVsValueDifferent: candidate.basicVsValueDifferent,
+    valueVsPremiumDifferent: candidate.valueVsPremiumDifferent,
+    visibleUpgradeCountBasicToValue: candidate.visibleUpgradeCountBasicToValue,
+    visibleUpgradeCountValueToPremium: candidate.visibleUpgradeCountValueToPremium,
+    fallbackUsed: candidate.fallbackUsed,
+    fallbackReason: candidate.fallbackReason,
     layoutTemplate: candidate.layoutTemplate || [],
     bayPlan: candidate.bayPlan || [],
     templateViolationCount: candidate.templateViolationCount || 0,
@@ -2157,18 +5130,31 @@ function toCandidateDebugSummary(candidate) {
     manualComponentPrice: candidate.manualComponentPrice,
     servicePriceFactor: candidate.servicePriceFactor,
     finalPlanPrice: candidate.finalPlanPrice,
+    basicPrice: candidate.basicPrice,
+    valuePrice: candidate.valuePrice,
+    premiumPrice: candidate.premiumPrice,
+    priceOrderValid: candidate.priceOrderValid,
+    premiumCouldNotExceedValue: candidate.premiumCouldNotExceedValue,
+    priceOrderFixReason: candidate.priceOrderFixReason,
     targetPrice: candidate.targetPrice,
     actualPrice: candidate.actualPrice,
     priceDelta: candidate.priceDelta,
     priceWasTargetAdjusted: candidate.priceWasTargetAdjusted,
     budgetMin: candidate.budgetMin,
     budgetMax: candidate.budgetMax,
+    budgetMid: candidate.budgetMid,
+    basicMin: candidate.basicMin,
+    basicMax: candidate.basicMax,
     basicTarget: candidate.basicTarget,
+    basicBelowBudgetFallback: candidate.basicBelowBudgetFallback,
     valueTarget: candidate.valueTarget,
     premiumTarget: candidate.premiumTarget,
     premiumAboveBudget: candidate.premiumAboveBudget,
     premiumCouldNotExceedBudget: candidate.premiumCouldNotExceedBudget,
     selectedBecause: candidate.selectedBecause,
+    japanesePlacementValidationDebug: candidate.japanesePlacementValidationDebug || [],
+    autoSupplementalRailDebug: candidate.autoSupplementalRailDebug || null,
+    trouserRackPlacementBlocked: candidate.trouserRackPlacementBlocked === true,
     estimatedCapacity: candidate.estimatedCapacity,
     bayCount: candidate.parameters?.bayCount || 0,
     zoneDistribution: countBy(candidate.placements, (placement) => placement.zoneType),
@@ -2186,7 +5172,7 @@ function validateLongHangClearance(placements) {
     .filter((item) => item.zoneType === "longHangZone" && item.componentType === "singleRail")
     .every((rail) => items
       .filter((item) => item.heightFromFloor < rail.heightFromFloor && item.componentType)
-      .every((item) => rail.heightFromFloor - intervalFor(item)[1] >= 1350)));
+      .every((item) => rail.heightFromFloor - intervalFor(item)[1] >= JAPANESE_LONG_HANG_MIN_CLEARANCE_BELOW)));
 }
 
 function validateShortHangHeights(placements) {
@@ -2196,12 +5182,100 @@ function validateShortHangHeights(placements) {
     || (rail.heightFromFloor >= 1900 && rail.heightFromFloor <= 2050));
 }
 
+function getJapanesePlacementValidationDiagnostics(placements = []) {
+  return placements
+    .filter((placement) => ["trouserRack", "jewelryBox"].includes(placement.componentType))
+    .map((placement) => validateJapaneseAccessoryPlacement(placement, placements));
+}
+
+function validateJapaneseAccessoryPlacement(placement, placements = []) {
+  if (placement.componentType === "trouserRack") return validateTrouserRackClearance(placement, placements);
+  if (placement.componentType === "jewelryBox") return validateJewelryBoxAboveCabinet(placement, placements);
+  return {
+    bayIndex: placement.bayIndex,
+    componentType: placement.componentType,
+    heightFromFloor: Number(placement.heightFromFloor) || 0,
+    clearanceBelow: null,
+    blockingComponentsBelow: [],
+    isValidPlacement: true,
+    invalidReason: ""
+  };
+}
+
+function validateTrouserRackClearance(trouserRack, placements = []) {
+  const rackHeight = Number(trouserRack.heightFromFloor) || 0;
+  const clearanceStart = rackHeight - JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW;
+  const sameBayPlacements = placements.filter((item) => item !== trouserRack
+    && item.componentType
+    && item.wallId === trouserRack.wallId
+    && Number(item.bayIndex) === Number(trouserRack.bayIndex));
+  const blockingComponentsBelow = sameBayPlacements
+    .filter((item) => JAPANESE_TROUSER_RACK_BLOCKING_COMPONENTS.has(item.componentType))
+    .map((item) => ({
+      placement: item,
+      range: intervalFor(item)
+    }))
+    .filter(({ range }) => range[1] > clearanceStart && range[0] < rackHeight)
+    .map(({ placement: item, range }) => ({
+      componentType: item.componentType,
+      heightFromFloor: Number(item.heightFromFloor) || 0,
+      minY: range[0],
+      maxY: range[1]
+    }));
+  return {
+    bayIndex: trouserRack.bayIndex,
+    componentType: trouserRack.componentType,
+    heightFromFloor: rackHeight,
+    clearanceBelow: JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW,
+    blockingComponentsBelow,
+    isValidPlacement: blockingComponentsBelow.length === 0,
+    invalidReason: blockingComponentsBelow.length ? "trouserRackClearanceBlocked" : ""
+  };
+}
+
+function validateJewelryBoxAboveCabinet(jewelryBox, placements = []) {
+  const sameBayPlacements = placements.filter((item) => item !== jewelryBox
+    && item.componentType
+    && item.wallId === jewelryBox.wallId
+    && Number(item.bayIndex) === Number(jewelryBox.bayIndex));
+  const cabinet = sameBayPlacements.find((item) => item.componentType === "cabinet");
+  const jewelryHeight = Number(jewelryBox.heightFromFloor) || 0;
+  if (!cabinet) {
+    return {
+      bayIndex: jewelryBox.bayIndex,
+      componentType: jewelryBox.componentType,
+      heightFromFloor: jewelryHeight,
+      clearanceBelow: null,
+      blockingComponentsBelow: [],
+      isValidPlacement: true,
+      invalidReason: ""
+    };
+  }
+  const cabinetTop = getJapaneseCabinetTopForJewelry(cabinet);
+  const gapAboveCabinet = jewelryHeight - cabinetTop;
+  const isValidPlacement = gapAboveCabinet >= 0 && gapAboveCabinet <= JAPANESE_JEWELRY_BOX_GAP_ABOVE_CABINET;
+  return {
+    bayIndex: jewelryBox.bayIndex,
+    componentType: jewelryBox.componentType,
+    heightFromFloor: jewelryHeight,
+    clearanceBelow: gapAboveCabinet,
+    blockingComponentsBelow: [{
+      componentType: "cabinet",
+      heightFromFloor: Number(cabinet.heightFromFloor) || 0,
+      minY: intervalFor(cabinet)[0],
+      maxY: cabinetTop
+    }],
+    isValidPlacement,
+    invalidReason: isValidPlacement ? "" : "jewelryBoxCabinetGapInvalid"
+  };
+}
+
 function validateShoeGaps(placements) {
   const groups = groupPlacements(placements.filter((placement) => placement.zoneType === "shoeZone"
     && SHELF_TYPES.has(placement.componentType)));
   return Object.values(groups).every((items) => {
     const heights = items.map((item) => item.heightFromFloor).sort((a, b) => a - b);
-    return heights.slice(1).every((height, index) => height - heights[index] - 40 >= SHOE_SHELF_MIN_GAP);
+    return heights.slice(1).every((height, index) => height - heights[index] >= SHOE_SHELF_MIN_GAP);
   });
 }
 
@@ -2300,7 +5374,14 @@ export function getShelfGapDiagnostics(placements = []) {
 function hasPlacementOverlap(placements) {
   const groups = groupPlacements(placements.filter((placement) => placement.componentType));
   return Object.values(groups).some((items) => items.some((item, index) => items.slice(index + 1)
-    .some((other) => intervalsOverlap(intervalFor(item), intervalFor(other)))));
+    .some((other) => !isAllowedJapaneseCabinetJewelryContact(item, other)
+      && intervalsOverlap(intervalFor(item), intervalFor(other)))));
+}
+
+function isAllowedJapaneseCabinetJewelryContact(left, right) {
+  const pair = new Set([left.componentType, right.componentType]);
+  const jewelryBox = left.componentType === "jewelryBox" ? left : right;
+  return pair.has("cabinet") && pair.has("jewelryBox") && jewelryBox.allowCabinetContact === true;
 }
 
 function intervalFor(placement) {
@@ -2326,9 +5407,11 @@ function normalizeAnswers(answers) {
     budgetRange: answers.budget || answers.budgetRange || "9,000 - 12,000",
     spaceType: answers.spaceUse || answers.spaceType || "",
     needs: normalizeNeeds(answers),
+    demandQuantityProfile: answers.demandQuantityProfile || {},
     selectedProductSystem: answers.selectedProductSystem || null,
     matchedJapaneseCases: answers.matchedJapaneseCases || [],
-    primaryJapaneseCase: answers.primaryJapaneseCase || answers.matchedJapaneseCases?.[0] || null
+    primaryJapaneseCase: answers.primaryJapaneseCase || answers.matchedJapaneseCases?.[0] || null,
+    componentUpgradeRules: answers.componentUpgradeRules || []
   };
 }
 

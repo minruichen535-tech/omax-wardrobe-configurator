@@ -1,4 +1,4 @@
-import { getClosetRules } from "./demandRules.js?v=closet-rules-preview-20260621-11";
+import { getClosetRules } from "./demandRules.js?v=component-upgrade-rules-20260627-01";
 
 export function getStorageStandard(storageType) {
   const row = getClosetRules().storageByType.get(storageType);

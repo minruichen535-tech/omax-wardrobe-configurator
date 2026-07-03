@@ -4,19 +4,22 @@ import {
   calculateDemandZoneLengths,
   calculateDemandZoneProfile,
   estimateDemandItems,
+  getCaseMatchingRuleLoadStatus,
+  getCaseMatchingRules,
   getClosetRules,
   getPlanPriceFromRules,
   getPlanTier,
   getZoneUiKeyForDemand
-} from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
-import { getZoneInstallationHeight } from "../rules/storageStandards.js?v=closet-rules-preview-20260621-11";
+} from "../rules/demandRules.js?v=component-upgrade-rules-20260627-01";
+import { getZoneInstallationHeight } from "../rules/storageStandards.js?v=case-matching-optional-20260627-01";
+import { applyLayoutConstraints } from "../rules/layoutConstraints.js?v=longhang-shoe-preserved-20260630-01";
 import {
   generateCandidatePlans,
   getLastCandidateEngineStats,
   getShelfGapDiagnostics,
+  matchJapaneseCasesByRules,
   selectRecommendedCandidates
-} from "./candidatePlanEngine.js?v=japanese-price-anchor-20260622-07";
-import { findSimilarJapaneseCases } from "./japaneseCaseLibrary.js?v=japanese-case-library-20260622-02";
+} from "./candidatePlanEngine.js?v=trouser-shelf-preserve-20260630-01";
 
 const budgetOptions = ["3,000以下", "3,000 - 6,000", "6,000 - 9,000", "9,000 - 12,000", "12,000 - 18,000", "18,000以上"];
 
@@ -27,6 +30,54 @@ const budgetRanges = {
   "9,000 - 12,000": { min: 9000, max: 12000 },
   "12,000 - 18,000": { min: 12000, max: 18000 },
   "18,000以上": { min: 18000, max: 22000 }
+};
+
+const demandCapacityLevels = {
+  "长衣": [
+    { level: "少量", value: 10, unit: "件", perPerson: true },
+    { level: "中等", value: 20, unit: "件", perPerson: true },
+    { level: "较多", value: 30, unit: "件", perPerson: true, plus: true }
+  ],
+  "短衣": [
+    { level: "少量", value: 20, unit: "件", perPerson: true },
+    { level: "中等", value: 40, unit: "件", perPerson: true },
+    { level: "较多", value: 60, unit: "件", perPerson: true, plus: true }
+  ],
+  "裤子": [
+    { level: "少量", value: 10, unit: "条", perPerson: true },
+    { level: "中等", value: 20, unit: "条", perPerson: true },
+    { level: "较多", value: 35, unit: "条", perPerson: true, plus: true }
+  ],
+  "鞋子": [
+    { level: "少量", value: 8, unit: "双", perPerson: true },
+    { level: "中等", value: 15, unit: "双", perPerson: true },
+    { level: "较多", value: 25, unit: "双", perPerson: true, plus: true }
+  ],
+  "包包": [
+    { level: "少量", value: 3, unit: "个", perPerson: true },
+    { level: "中等", value: 6, unit: "个", perPerson: true },
+    { level: "较多", value: 10, unit: "个", perPerson: true, plus: true }
+  ],
+  "首饰": [
+    { level: "少量" },
+    { level: "中等" },
+    { level: "较多" }
+  ],
+  "被褥": [
+    { level: "少量", value: 1, unit: "套", perPerson: true },
+    { level: "中等", value: 2, unit: "套", perPerson: true },
+    { level: "较多", value: 3, unit: "套", perPerson: true, plus: true }
+  ],
+  "行李箱": [
+    { level: "少量", value: 1, unit: "个" },
+    { level: "中等", value: 2, unit: "个" },
+    { level: "较多", value: 3, unit: "个", plus: true }
+  ],
+  "展示收藏": [
+    { level: "少量" },
+    { level: "中等" },
+    { level: "较多" }
+  ]
 };
 
 export const zoneColors = {
@@ -354,6 +405,11 @@ function normalizeRelevant(entries) {
 }
 
 export function estimateItemCounts(answers) {
+  const demandQuantityProfile = getDemandQuantityProfile(answers);
+  if (Object.keys(demandQuantityProfile).length) {
+    return Object.values(demandQuantityProfile)
+      .map((item) => ({ name: item.label, value: item.estimate }));
+  }
   return estimateDemandItems(getDemandWeights(answers), answers.people || "1人")
     .map((item) => ({ name: item.label, value: item.estimate }));
 }
@@ -371,7 +427,53 @@ function roundToFive(value) {
   return Math.round(value / 5) * 5;
 }
 
+function getDemandQuantityProfile(answers = {}) {
+  const peopleCount = parsePeopleCount(answers.people || "1人");
+  if (answers.demandQuantityProfile && typeof answers.demandQuantityProfile === "object") {
+    const profileValues = Object.values(answers.demandQuantityProfile);
+    const matchesCurrentPeople = profileValues.every((item) => Number(item?.peopleCount || peopleCount) === peopleCount);
+    if (matchesCurrentPeople) return answers.demandQuantityProfile;
+  }
+  const weights = getDemandWeights(answers);
+  return Object.fromEntries(
+    Object.entries(weights)
+      .map(([name, weight]) => [name, getDemandQuantityEntry(name, Number(weight) || 0, answers.people || "1人")])
+      .filter(([, entry]) => entry)
+  );
+}
+
+function getDemandQuantityEntry(name, weight, peopleLabel) {
+  const levels = demandCapacityLevels[name];
+  const normalizedWeight = Math.max(0, Math.min(3, Number(weight) || 0));
+  const level = levels?.[normalizedWeight - 1];
+  if (!level || normalizedWeight <= 0) return null;
+  const peopleCount = parsePeopleCount(peopleLabel);
+  const quantity = Number.isFinite(Number(level.value))
+    ? Number(level.value) * (level.perPerson ? peopleCount : 1)
+    : null;
+  const estimate = quantity == null
+    ? level.level
+    : `约${quantity}${level.unit || "件"}${level.plus ? "+" : ""}`;
+  return {
+    label: name,
+    level: level.level,
+    weight: normalizedWeight,
+    quantity,
+    unit: level.unit || "",
+    perPerson: Boolean(level.perPerson),
+    peopleCount,
+    estimate
+  };
+}
+
+function parsePeopleCount(value) {
+  const match = String(value || "").match(/\d+/);
+  return match ? Number(match[0]) : 1;
+}
+
 function getDemandItemEstimate(itemName, answers, weight = 1) {
+  const demandQuantity = getDemandQuantityProfile(answers)[itemName];
+  if (demandQuantity?.estimate) return demandQuantity.estimate;
   const unifiedEstimate = getWeightedItemEstimate(itemName, answers.people || "1人", weight);
   if (unifiedEstimate) return unifiedEstimate;
   const normalizedWeight = Math.max(1, Math.min(3, Number(weight) || 1));
@@ -484,6 +586,7 @@ function getDemandItemEstimate(itemName, answers, weight = 1) {
 export function buildZoneCards(answers, ratios = calculateRelevantZones(answers)) {
   const labels = getRatioLabels(answers.spaceUse);
   const weights = getDemandWeights(answers);
+  const demandQuantityProfile = getDemandQuantityProfile(answers);
   const cardsByZone = new Map();
   Object.entries(ratios).forEach(([zoneKey, percent]) => {
     const presentation = getZonePresentation(zoneKey);
@@ -501,7 +604,9 @@ export function buildZoneCards(answers, ratios = calculateRelevantZones(answers)
     if (!zoneKey) return;
     cardsByZone.get(zoneKey).items.push({
       label: itemName,
-      estimate: estimateDemandItems({ [itemName]: Number(weights[itemName]) || 1 }, answers.people || "1人")[0]?.estimate || ""
+      estimate: demandQuantityProfile[itemName]?.estimate
+        || estimateDemandItems({ [itemName]: Number(weights[itemName]) || 1 }, answers.people || "1人")[0]?.estimate
+        || ""
     });
   });
 
@@ -745,13 +850,28 @@ function getPlannerPriceRule(budgetRange, planType) {
 export function generateRecommendedPlans(answers = {}) {
   const weightedDemands = getWeightedDemands(answers);
   const isJapaneseCloset = (answers.selectedProductSystem?.seriesId || answers.selectedProductSystem?.id) === "japanese-closet";
-  const matchedJapaneseCases = isJapaneseCloset ? findSimilarJapaneseCases(answers) : [];
+  const closetRules = getClosetRules();
+  const caseMatchingRules = getCaseMatchingRules();
+  const caseMatchingRuleLoad = getCaseMatchingRuleLoadStatus();
+  const rulesData = {
+    ...closetRules,
+    caseMatchingRules,
+    caseMatchingRuleLoad
+  };
+  const matchedJapaneseCases = isJapaneseCloset ? matchJapaneseCasesByRules(answers, caseMatchingRules) : [];
   const primaryCase = matchedJapaneseCases[0] || null;
   const planningAnswers = isJapaneseCloset
-    ? { ...answers, matchedJapaneseCases, primaryJapaneseCase: primaryCase }
+    ? {
+      ...answers,
+      matchedJapaneseCases,
+      primaryJapaneseCase: primaryCase,
+      componentUpgradeRules: caseMatchingRules?.componentUpgradeRules || []
+    }
     : answers;
-  const candidates = generateCandidatePlans(planningAnswers, getClosetRules());
+  const candidates = generateCandidatePlans(planningAnswers, rulesData);
   const selectedCandidates = selectRecommendedCandidates(candidates, planningAnswers);
+  selectedCandidates.forEach(applyLayoutConstraintsToCandidate);
+  const candidateEngineStats = getLastCandidateEngineStats();
   const bayPlansByTier = Object.fromEntries(selectedCandidates.map((candidate) => [
     candidate.planType,
     candidate.bayPlan || []
@@ -774,7 +894,7 @@ export function generateRecommendedPlans(answers = {}) {
       planPrice: candidate.estimatedPrice,
       planPreview: null,
       planCapacityCoverage: `可满足约 ${Math.round(tier.coverage * 100)}%${candidate.planType === "premium" ? "+" : ""} 收纳需求`,
-      planCapacity: candidate.estimatedCapacity,
+      planCapacity: buildPlanCapacityFromDemandProfile(answers, candidate.estimatedCapacity),
       planFeatures: candidate.zones,
       planReason: `${weightedDemands.slice(0, 3).map((item) => item.name).join("、") || "综合收纳"}按候选方案评分生成。`,
       configPreset: candidate.configPreset,
@@ -783,6 +903,11 @@ export function generateRecommendedPlans(answers = {}) {
       candidateDebug: {
         primaryCaseId: primaryCase?.caseId || null,
         layoutTemplate: primaryCase?.layoutTemplate || [],
+        caseLayoutTemplate: candidate.caseLayoutTemplate || primaryCase?.layoutTemplate || [],
+        resolvedSkeleton: candidate.resolvedSkeleton || candidate.skeleton || [],
+        forbiddenPatternViolations: candidate.forbiddenPatternViolations || [],
+        tierUpgradeRulesApplied: candidate.tierUpgradeRulesApplied || {},
+        bayRoleComponents: candidate.bayRoleComponents || [],
         bayPlanBasic: bayPlansByTier.basic || [],
         bayPlanValue: bayPlansByTier.value || [],
         bayPlanPremium: bayPlansByTier.premium || [],
@@ -795,11 +920,37 @@ export function generateRecommendedPlans(answers = {}) {
         distributionDelta: candidate.scores?.distributionDelta || {},
         premiumHardRequirements: candidate.premiumHardRequirements || null,
         premiumRequirementStatus: candidate.premiumRequirementStatus || null,
+        componentUpgrade: candidate.componentUpgrade || null,
+        layoutConstraints: candidate.layoutConstraints || {
+          appliedConstraints: [],
+          skippedConstraints: []
+        },
         caseLibraryAppliedAs: candidate.caseLibraryAppliedAs || "layoutReferenceOnly",
         hardRuleOverrideCase: candidate.hardRuleOverrideCase || false,
+        skeleton: candidate.skeleton || [],
+        baseBayPrice: candidate.baseBayPrice,
+        basePlanPrice: candidate.basePlanPrice,
+        basicUpgradeList: candidate.basicUpgradeList || [],
+        valueUpgradeList: candidate.valueUpgradeList || [],
+        premiumUpgradeList: candidate.premiumUpgradeList || [],
+        basicPriceBreakdown: candidate.basicPriceBreakdown || {},
+        valuePriceBreakdown: candidate.valuePriceBreakdown || {},
+        premiumPriceBreakdown: candidate.premiumPriceBreakdown || {},
+        caseUsedForLayoutOnly: candidate.caseUsedForLayoutOnly,
+        basicComponents: candidate.basicComponents || {},
+        valueComponents: candidate.valueComponents || {},
+        premiumComponents: candidate.premiumComponents || {},
+        basicVsValueDifferent: candidate.basicVsValueDifferent,
+        valueVsPremiumDifferent: candidate.valueVsPremiumDifferent,
+        visibleUpgradeCountBasicToValue: candidate.visibleUpgradeCountBasicToValue,
+        visibleUpgradeCountValueToPremium: candidate.visibleUpgradeCountValueToPremium,
+        fallbackUsed: candidate.fallbackUsed,
+        fallbackReason: candidate.fallbackReason,
         matchedJapaneseCases: matchedJapaneseCases.map(({ caseId, score, modelPath, matchedReason }) => ({
           caseId, score, modelPath, matchedReason
         })),
+        caseMatchingRuleLoad: candidateEngineStats.caseMatchingRuleLoad || caseMatchingRuleLoad,
+        caseMatching: candidateEngineStats.caseMatching || primaryCase?.caseMatching || null,
         caseMatchBonus: candidate.scores?.caseMatchBonus || 0,
         bayCount: candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 0,
         zoneDistribution: countDebugValues(candidate.placements, "zoneType"),
@@ -814,10 +965,16 @@ export function generateRecommendedPlans(answers = {}) {
         shelfGaps: getShelfGapDiagnostics(candidate.placements),
         estimatedPrice: candidate.manualComponentPrice == null
           ? candidate.estimatedPrice
-          : `manualComponentPrice=${candidate.manualComponentPrice}, servicePriceFactor=${candidate.servicePriceFactor}, finalPlanPrice=${candidate.finalPlanPrice}, primaryCaseId=${primaryCase?.caseId || "none"}, layoutTemplate=${JSON.stringify(primaryCase?.layoutTemplate || [])}, bayPlanBasic=${JSON.stringify(bayPlansByTier.basic || [])}, bayPlanValue=${JSON.stringify(bayPlansByTier.value || [])}, bayPlanPremium=${JSON.stringify(bayPlansByTier.premium || [])}, templateViolationCount=${candidate.templateViolationCount || 0}, primaryCaseScore=${primaryCase?.score ?? "none"}, secondaryCaseIds=${matchedJapaneseCases.slice(1).map((caseData) => caseData.caseId).join("|")}, caseMatchWeight=${candidate.scores?.caseMatchWeight || 0}, caseDistributionTarget=${JSON.stringify(candidate.scores?.caseDistributionTarget || {})}, candidateDistribution=${JSON.stringify(candidate.scores?.candidateDistribution || {})}, distributionDelta=${JSON.stringify(candidate.scores?.distributionDelta || {})}, premiumHardRequirements=${JSON.stringify(candidate.premiumHardRequirements || {})}, premiumRequirementStatus=${JSON.stringify(candidate.premiumRequirementStatus || {})}, caseLibraryAppliedAs=${candidate.caseLibraryAppliedAs || "layoutReferenceOnly"}, hardRuleOverrideCase=${candidate.hardRuleOverrideCase || false}, caseMatchBonus=${candidate.scores?.caseMatchBonus || 0}, budgetMin=${candidate.budgetMin}, budgetMax=${candidate.budgetMax}, basicTarget=${candidate.basicTarget}, valueTarget=${candidate.valueTarget}, premiumTarget=${candidate.premiumTarget}, targetPrice=${candidate.targetPrice}, actualPrice=${candidate.actualPrice}, priceDelta=${candidate.priceDelta}, premiumAboveBudget=${candidate.premiumAboveBudget}, premiumCouldNotExceedBudget=${candidate.premiumCouldNotExceedBudget}, priceWasTargetAdjusted=${candidate.priceWasTargetAdjusted}, pricedComponentCountByType=${JSON.stringify(pricedComponentCountByType)}, previewComponentCountByType=${JSON.stringify(previewComponentCountByType)}, pricePreviewMismatch=${pricePreviewMismatch}, selectedBecause=${candidate.selectedBecause}`,
+          : `manualComponentPrice=${candidate.manualComponentPrice}, servicePriceFactor=${candidate.servicePriceFactor}, finalPlanPrice=${candidate.finalPlanPrice}, basicPrice=${candidate.basicPrice}, valuePrice=${candidate.valuePrice}, premiumPrice=${candidate.premiumPrice}, priceOrderValid=${candidate.priceOrderValid}, premiumCouldNotExceedValue=${candidate.premiumCouldNotExceedValue}, priceOrderFixReason=${candidate.priceOrderFixReason}, primaryCaseId=${primaryCase?.caseId || "none"}, caseLayoutTemplate=${JSON.stringify(candidate.caseLayoutTemplate || primaryCase?.layoutTemplate || [])}, resolvedSkeleton=${JSON.stringify(candidate.resolvedSkeleton || candidate.skeleton || [])}, forbiddenPatternViolations=${JSON.stringify(candidate.forbiddenPatternViolations || [])}, tierUpgradeRulesApplied=${JSON.stringify(candidate.tierUpgradeRulesApplied || {})}, bayRoleComponents=${JSON.stringify(candidate.bayRoleComponents || [])}, componentUpgrade=${JSON.stringify(candidate.componentUpgrade || {})}, bayCount=${candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 0}, baseBayPrice=${candidate.baseBayPrice}, basePlanPrice=${candidate.basePlanPrice}, basicUpgradeList=${JSON.stringify(candidate.basicUpgradeList || [])}, valueUpgradeList=${JSON.stringify(candidate.valueUpgradeList || [])}, premiumUpgradeList=${JSON.stringify(candidate.premiumUpgradeList || [])}, basicPriceBreakdown=${JSON.stringify(candidate.basicPriceBreakdown || {})}, valuePriceBreakdown=${JSON.stringify(candidate.valuePriceBreakdown || {})}, premiumPriceBreakdown=${JSON.stringify(candidate.premiumPriceBreakdown || {})}, caseUsedForLayoutOnly=${candidate.caseUsedForLayoutOnly}, skeleton=${JSON.stringify(candidate.skeleton || [])}, basicComponents=${JSON.stringify(candidate.basicComponents || {})}, valueComponents=${JSON.stringify(candidate.valueComponents || {})}, premiumComponents=${JSON.stringify(candidate.premiumComponents || {})}, basicVsValueDifferent=${candidate.basicVsValueDifferent}, valueVsPremiumDifferent=${candidate.valueVsPremiumDifferent}, visibleUpgradeCountBasicToValue=${candidate.visibleUpgradeCountBasicToValue}, visibleUpgradeCountValueToPremium=${candidate.visibleUpgradeCountValueToPremium}, fallbackUsed=${candidate.fallbackUsed}, fallbackReason=${candidate.fallbackReason}, layoutTemplate=${JSON.stringify(primaryCase?.layoutTemplate || [])}, bayPlanBasic=${JSON.stringify(bayPlansByTier.basic || [])}, bayPlanValue=${JSON.stringify(bayPlansByTier.value || [])}, bayPlanPremium=${JSON.stringify(bayPlansByTier.premium || [])}, templateViolationCount=${candidate.templateViolationCount || 0}, primaryCaseScore=${primaryCase?.score ?? "none"}, secondaryCaseIds=${matchedJapaneseCases.slice(1).map((caseData) => caseData.caseId).join("|")}, caseMatchWeight=${candidate.scores?.caseMatchWeight || 0}, caseDistributionTarget=${JSON.stringify(candidate.scores?.caseDistributionTarget || {})}, candidateDistribution=${JSON.stringify(candidate.scores?.candidateDistribution || {})}, distributionDelta=${JSON.stringify(candidate.scores?.distributionDelta || {})}, premiumHardRequirements=${JSON.stringify(candidate.premiumHardRequirements || {})}, premiumRequirementStatus=${JSON.stringify(candidate.premiumRequirementStatus || {})}, caseLibraryAppliedAs=${candidate.caseLibraryAppliedAs || "strictCaseLayoutRules"}, hardRuleOverrideCase=${candidate.hardRuleOverrideCase || false}, caseMatchBonus=${candidate.scores?.caseMatchBonus || 0}, budgetMin=${candidate.budgetMin}, budgetMax=${candidate.budgetMax}, basicTarget=${candidate.basicTarget}, valueTarget=${candidate.valueTarget}, premiumTarget=${candidate.premiumTarget}, targetPrice=${candidate.targetPrice}, actualPrice=${candidate.actualPrice}, priceDelta=${candidate.priceDelta}, premiumAboveBudget=${candidate.premiumAboveBudget}, premiumCouldNotExceedBudget=${candidate.premiumCouldNotExceedBudget}, priceWasTargetAdjusted=${candidate.priceWasTargetAdjusted}, pricedComponentCountByType=${JSON.stringify(pricedComponentCountByType)}, previewComponentCountByType=${JSON.stringify(previewComponentCountByType)}, pricePreviewMismatch=${pricePreviewMismatch}, selectedBecause=${candidate.selectedBecause}`,
         manualComponentPrice: candidate.manualComponentPrice,
         servicePriceFactor: candidate.servicePriceFactor,
         finalPlanPrice: candidate.finalPlanPrice,
+        basicPrice: candidate.basicPrice,
+        valuePrice: candidate.valuePrice,
+        premiumPrice: candidate.premiumPrice,
+        priceOrderValid: candidate.priceOrderValid,
+        premiumCouldNotExceedValue: candidate.premiumCouldNotExceedValue,
+        priceOrderFixReason: candidate.priceOrderFixReason,
         targetPrice: candidate.targetPrice,
         actualPrice: candidate.actualPrice,
         priceDelta: candidate.priceDelta,
@@ -831,6 +988,7 @@ export function generateRecommendedPlans(answers = {}) {
         priceWasTargetAdjusted: candidate.priceWasTargetAdjusted,
         selectedBecause: candidate.selectedBecause,
         estimatedCapacity: candidate.estimatedCapacity,
+        candidateQa: candidate.candidateQa || null,
         rejectedReason: candidate.rejectReason || null
       }
     };
@@ -839,6 +997,29 @@ export function generateRecommendedPlans(answers = {}) {
 
 export function getCandidatePlanDebugStats() {
   return getLastCandidateEngineStats();
+}
+
+function applyLayoutConstraintsToCandidate(candidate) {
+  if (!candidate || !Array.isArray(candidate.placements)) return;
+  const result = applyLayoutConstraints(candidate.placements, {
+    roomHeight: candidate.configPreset?.roomHeight || candidate.parameters?.roomHeight
+  });
+  const constrainedPlacements = result.placements;
+  candidate.layoutConstraints = {
+    appliedConstraints: result.appliedConstraints || [],
+    skippedConstraints: result.skippedConstraints || []
+  };
+  if (!Array.isArray(constrainedPlacements)) return;
+
+  candidate.placements = constrainedPlacements;
+  candidate.configPreset = {
+    ...(candidate.configPreset || {}),
+    explicitPlacements: constrainedPlacements.map((placement) => ({ ...placement })),
+    componentQuantities: countDebugValues(
+      constrainedPlacements.filter((placement) => placement.componentType),
+      "componentType"
+    )
+  };
 }
 
 function countDebugValues(items, key) {
@@ -924,6 +1105,8 @@ function getPlanCapacityCoverage(planType) {
 }
 
 function buildPlanCapacity(planType, answers, weightedDemands) {
+  const demandCapacity = buildPlanCapacityFromDemandProfile(answers);
+  if (demandCapacity.length) return demandCapacity;
   const capacityFactor = planType === "basic" ? 0.72 : planType === "value" ? 0.9 : 1.12;
   const selected = weightedDemands.length
     ? weightedDemands.slice(0, planType === "basic" ? 2 : planType === "value" ? 3 : 5)
@@ -932,6 +1115,20 @@ function buildPlanCapacity(planType, answers, weightedDemands) {
     label: name,
     estimate: getPlanCapacityEstimate(name, answers, weight, capacityFactor)
   })).filter((item) => item.estimate);
+}
+
+function buildPlanCapacityFromDemandProfile(answers, fallbackCapacity = []) {
+  const demandQuantityProfile = getDemandQuantityProfile(answers);
+  const weightedNames = getWeightedDemands(answers).map((item) => item.name);
+  const names = weightedNames.length ? weightedNames : Object.keys(demandQuantityProfile);
+  const items = names
+    .map((name) => demandQuantityProfile[name])
+    .filter(Boolean)
+    .map((item) => ({
+      label: item.label,
+      estimate: item.estimate
+    }));
+  return items.length ? items : fallbackCapacity;
 }
 
 function fallbackCapacityItem(answers) {
@@ -996,6 +1193,7 @@ function buildConfigPreset(planType, answers, demandRatios, selectedProductSyste
     roomDepth: answers.dimensions?.depth || 2800,
     roomHeight,
     demandRatios,
+    demandQuantityProfile: getDemandQuantityProfile(answers),
     componentQuantities: quantities,
     reservedZones: planOutput.reservedZones,
     zoneRequirements: planOutput.zones.map((zone) => ({

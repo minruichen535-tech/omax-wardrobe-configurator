@@ -1,15 +1,22 @@
+const woodShelfTransform = { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015, offsetZ: 0, depthAnchor: "back", depthAnchorBaseDepth: 0.45 };
+
+const drawerAccessoryTransform = { ...woodShelfTransform, resizeMode: "stretchWidthOnly" };
+const drawerAccessoryTypes = new Set(["drawerSingle", "drawerDouble"]);
+
 export const japaneseClosetModelTransforms = {
   components: {
     post: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "centerInBay", alignMode: "bboxCenter" },
     woodTop: { rotation: [0, Math.PI, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: -0.04, resizeMode: "stretchToBay", offsetX: 0, depthAnchor: "back", depthAnchorBaseDepth: 0.45 },
-    woodShelf: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015, offsetZ: 0, depthAnchor: "back", depthAnchorBaseDepth: 0.45 },
+    woodShelf: woodShelfTransform,
     railSingle: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0.08, heightOffset: 0, resizeMode: "stretchToBay" },
     railDouble: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0.08, heightOffset: 0, resizeMode: "stretchToBay" },
     singleRail: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0 },
     doubleRail: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0 },
     cabinet: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015 },
     jewelryBox: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "centerInBay", offsetX: 0.015 },
-    trouserRack: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchWidthAndDepth", offsetX: 0 }
+    trouserRack: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchWidthAndDepth", offsetX: 0 },
+    drawerSingle: drawerAccessoryTransform,
+    drawerDouble: drawerAccessoryTransform
   },
   post: {
     targetDepth: 0.1,
@@ -39,6 +46,9 @@ export const japaneseClosetModelTransforms = {
     const defaultDepth = 0.5;
     if (componentType === "woodTop" || componentType === "woodShelf") {
       return { x: bayWidth, y: 0.08, z: shelfDepth };
+    }
+    if (drawerAccessoryTypes.has(componentType)) {
+      return { x: bayWidth, y: 0.3, z: defaultDepth };
     }
     if (componentType === "singleRail" || componentType === "doubleRail") {
       return { x: bayWidth, y: 0.16, z: 0.18 };

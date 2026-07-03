@@ -28,10 +28,91 @@ const CASE_PROFILES = [
   ["4人以上", "high", [4, 5, 4, 5, 3, 5, 4, 5]]
 ];
 
+const CASE_BAY_LAYOUTS = [
+  ["shortHangZone", "longHangZone", "shortHangZone"],
+  ["shoeShelfZone", "trouserZone", "storageAccessoryZone"],
+  ["shortHangZone", "longHangOrShoeZone", "shortHangZone"],
+  ["shortHangZone", "shoeShelfZone", "storageAccessoryZone"],
+  ["shortHangZone", "shoeShelfZone", "storageAccessoryZone", "longHangZone"],
+  ["trouserZone", "shoeShelfZone", "storageAccessoryZone", "longHangZone"],
+  ["trouserZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone"],
+  ["shortHangZone", "shelfZone", "storageAccessoryZone", "shortHangZone"],
+  ["longHangZone", "shoeShelfZone", "storageAccessoryZone"],
+  ["trouserZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone", "longHangZone"],
+  ["shoeShelfZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone", "longHangZone"],
+  ["shoeShelfZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone", "longHangZone"],
+  ["jewelryZone", "storageAccessoryZone", "storageAccessoryZone", "shortHangZone", "longHangZone"],
+  ["shortHangZone", "shortHangZone", "shortHangZone", "longHangZone", "longHangZone"],
+  ["shortHangZone", "shortHangZone", "shortHangZone", "longHangZone", "longHangZone"],
+  ["shortHangZone", "shortHangZone", "shortHangZone", "shortHangZone", "longHangZone"]
+];
+
+export const JAPANESE_CASE_LAYOUT_RULES = Object.freeze({
+  forbiddenPatterns: Object.freeze([
+    { id: "ordinaryDenseShelfUnderRail", railCountMin: 1, woodShelfCountMin: 3, exceptZone: "shoeShelfZone" },
+    { id: "longHangClearanceBlocked", role: "longHangZone", minClearHeight: 1350 },
+    { id: "floatingCabinet", componentType: "cabinet", maxHeightFromFloor: 300 },
+    { id: "multipleCabinetsInBay", componentType: "cabinet", maxCount: 1 },
+    { id: "multipleAccessoryModulesInBay", componentTypes: ["trouserRack", "jewelryBox"], maxCombinedCount: 1 },
+    { id: "accessoryMixedWithDenseShoes", componentTypes: ["trouserRack", "jewelryBox"], shoeShelfCountMin: 3 },
+    { id: "tooManyRailsInNormalBay", maxRailCount: 2 },
+    { id: "emptyFunctionalBay", requireFunctionalComponent: true },
+    { id: "luggageZoneMissingUpperRail", role: "luggageZone", requireBottomClearance: true },
+    { id: "linkedShelfDoubleCountedAsCapacity", linkedShelfCountsAsStorage: false }
+  ]),
+  componentLimits: Object.freeze({
+    normalBay: { maxRails: 2, maxWoodShelves: 2, maxCabinets: 1, maxAccessoryModules: 1, maxFunctionalComponents: 4 },
+    shoeZone: { minShelfGap: 180, maxWoodShelves: 7, maxRails: 1 },
+    shelfZone: { minShelfGap: 280, maxWoodShelves: 5 },
+    longHangZone: { minClearHeight: 1350, maxRails: 1, allowComponentsBelowRail: [] },
+    shortHangZone: { maxRails: 2, allowLinkedShelfAboveRail: true, linkedShelfGapRange: [100, 220] }
+  }),
+  bayTemplates: Object.freeze({
+    3: ["shortHangZone", "longHangOrShoeZone", "storageAccessoryZone"],
+    4: ["trouserOrShortHangZone", "shoeShelfZone", "storageAccessoryZone", "longHangZone"],
+    5: ["trouserOrShortHangZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone", "longHangZone"],
+    6: ["shortHangZone", "trouserZone", "shoeShelfZone", "storageAccessoryZone", "shortHangZone", "longHangZone"]
+  }),
+  placementPreferences: Object.freeze({
+    cabinet: { preferredRole: "storageAccessoryZone", heightFromFloor: 0 },
+    trouserRack: { preferredPositions: ["left", "center"], avoidRoles: ["shoeShelfZone", "longHangZone"] },
+    jewelryBox: { preferredRole: "storageAccessoryZone", preferAboveCabinet: true },
+    longHangZone: { preferredPosition: "rightEdge" },
+    shoeShelfZone: { preferredPosition: "leftOrCenter" }
+  }),
+  tierUpgradeRules: Object.freeze({
+    basic: {
+      keepSkeletonRoles: true,
+      hangingFirst: true,
+      cabinet: 0,
+      trouserRack: 0,
+      jewelryBox: 0,
+      shoeShelfRange: [0, 3],
+      ordinaryShelfMax: 0
+    },
+    value: {
+      addCabinet: 1,
+      accessorySelection: "trouserRackOrJewelryBoxByDemand",
+      shoeShelfRange: [3, 5],
+      preserveLongHangClearance: true
+    },
+    premium: {
+      addCabinet: 1,
+      addTrouserRackWhenDemanded: true,
+      addJewelryBoxWhenDemanded: true,
+      shoeShelfRange: [5, 7],
+      increaseDoubleHangBays: true,
+      preserveDedicatedLongHangBay: true,
+      priceFromRealComponentsOnly: true
+    }
+  })
+});
+
 export const japaneseCaseLibrary = CASE_PROFILES.map(([people, budgetTier, values], index) => {
   const caseId = `JP-MC-${String(index + 1).padStart(3, "0")}`;
   const demandProfile = Object.fromEntries(DEMAND_KEYS.map((key, valueIndex) => [key, values[valueIndex]]));
   demandProfile.pants = demandProfile.trousers;
+  const bayRoles = CASE_BAY_LAYOUTS[index];
   return {
     caseId,
     modelPath: `/customer-home/case/${caseId}.glb`,
@@ -39,34 +120,28 @@ export const japaneseCaseLibrary = CASE_PROFILES.map(([people, budgetTier, value
     tags: [people, budgetTier, ...topDemandKeys(demandProfile, 2)],
     demandProfile,
     layoutPreference: index % 5 === 4 ? "L型" : "I型",
-    layoutTemplate: buildCaseLayoutTemplate(demandProfile),
+    layoutTemplate: bayRoles.map((role, bayIndex) => ({
+      bayIndex,
+      role,
+      zone: role,
+      components: getDefaultRoleComponents(role)
+    })),
+    ...(index === 7 ? { specialTemplate: true, specialTemplateReason: "threeRailStructure" } : {}),
+    ...(index === 12 ? { premiumSpecialTemplate: true, specialTemplateReason: "multiJewelryNodes" } : {}),
     budgetTier
   };
 });
 
-function buildCaseLayoutTemplate(profile) {
-  const template = [];
-  if (Number(profile.shortClothes) > 0) {
-    template.push({ zone: "shortHangZone", components: ["singleRail", "singleRail"] });
-  }
-  if (Number(profile.longClothes) > 0) {
-    template.push({ zone: "longHangZone", components: ["singleRail"] });
-  }
-  if (Number(profile.shoes) > 0) {
-    template.push({ zone: "shoeZone", components: ["woodShelf", "woodShelf", "woodShelf"] });
-  }
-  if (Number(profile.bags) > 0 || Number(profile.bedding) > 0) {
-    template.push({ zone: "storageZone", components: ["cabinet", "woodShelf", "woodShelf"] });
-  }
-  const accessories = [
-    ...(Number(profile.trousers ?? profile.pants) > 0 ? ["trouserRack"] : []),
-    ...(Number(profile.jewelry) > 0 ? ["jewelryBox"] : [])
-  ];
-  if (accessories.length) template.push({ zone: "accessoryZone", components: accessories });
-  if (Number(profile.luggage) > 0) {
-    template.push({ zone: "luggageZone", components: ["singleRail"] });
-  }
-  return template;
+function getDefaultRoleComponents(role) {
+  if (role === "shortHangZone") return ["singleRail", "singleRail"];
+  if (role === "longHangZone" || role === "longHangOrShoeZone") return ["singleRail"];
+  if (role === "shoeShelfZone") return ["woodShelf", "woodShelf", "woodShelf"];
+  if (role === "shelfZone") return ["woodShelf"];
+  if (role === "trouserZone" || role === "trouserOrShortHangZone") return ["trouserRack", "singleRail"];
+  if (role === "jewelryZone") return ["jewelryBox", "singleRail"];
+  if (role === "storageAccessoryZone") return ["cabinet", "jewelryBox", "singleRail"];
+  if (role === "luggageZone") return ["singleRail"];
+  return ["singleRail"];
 }
 
 const MATCH_WEIGHTS = {

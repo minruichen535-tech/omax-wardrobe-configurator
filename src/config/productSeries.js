@@ -86,7 +86,10 @@ export function getSeries(seriesId = defaultSeriesId) {
 export function resolveRoute(pathname = window.location.pathname) {
   const segments = pathname.split("/").filter(Boolean);
   const route = segments[0] === "admin" ? "admin" : "configurator";
-  const seriesId = segments[1] || defaultSeriesId;
+  const requestedSeriesId = segments[1] || defaultSeriesId;
+  const seriesId = segments[0] === "client" && requestedSeriesId === "wall-mounted"
+    ? "wall-mounted-v2"
+    : requestedSeriesId;
   return { route, seriesId, series: getSeries(seriesId) };
 }
 

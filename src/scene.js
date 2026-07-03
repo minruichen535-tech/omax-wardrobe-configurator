@@ -5,7 +5,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=cache-20260621-02";
 import { resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260621-02";
 import { theme } from "./config/theme.js?v=cache-20260621-02";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=cache-20260621-02";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=drawer-material-sync-20260702-01";
 import {
   getWallMountedRailOffsetPosition
 } from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
@@ -13,6 +13,26 @@ import {
 const h = React.createElement;
 const loader = new GLTFLoader();
 const modelCache = new Map();
+const visualAssetModelCache = new Map();
+const plannerVisualAssetVersions = {
+  default: "position-assets-20260625-01"
+};
+const HANGING_VISUAL_RAIL_CENTER_TOLERANCE = 0.02;
+const clientDrawerDoublePreviewProduct = {
+  sku: "CLIENT-DRAWER-DOUBLE-PREVIEW",
+  nameCn: "Drawer (Double)",
+  modelPath: "products/japanese-closet/models/glb/JP-drawerDouble.glb",
+  glbAssetPath: "products/japanese-closet/models/glb/JP-drawerDouble.glb"
+};
+const drawerDoubleInsertModelPathsBySku = new Map([
+  ["JP-drawer-leather-storage", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-leather-storage.glb"],
+  ["JP-drawer-wire-basket", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-wire-basket.glb"],
+  ["JP-drawer-wire-basket-short", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-wire-basket-short.glb"]
+]);
+const wireBasketDrawerSkus = new Set([
+  "JP-drawer-wire-basket",
+  "JP-drawer-wire-basket-short"
+]);
 const aluminumBaseSupportedUpdatedModelVersions = new Map([
   ["models/TD-007-3-600.glb", "aluminum-base-supported-td-007-3-20260612-01"],
   ["models/TD-007-3-700.glb", "aluminum-base-supported-td-007-3-20260612-01"],
@@ -23,6 +43,24 @@ const aluminumBaseSupportedUpdatedModelVersions = new Map([
   ["models/TD-007-4-800.glb", "aluminum-base-supported-td-007-4-20260612-01"],
   ["models/TD-007-4-900.glb", "aluminum-base-supported-td-007-4-20260612-01"]
 ]);
+
+function readComponentDragPayload(dataTransfer) {
+  try {
+    const payload = JSON.parse(dataTransfer.getData("application/json") || "{}");
+    if (payload?.componentType) {
+      return {
+        componentType: payload.componentType,
+        productSku: payload.productSku || dataTransfer.getData("application/x-product-sku") || ""
+      };
+    }
+  } catch (error) {
+    // Fall through to the legacy text/plain payload.
+  }
+  return {
+    componentType: dataTransfer.getData("text/plain"),
+    productSku: dataTransfer.getData("application/x-product-sku")
+  };
+}
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const sceneTransformVersion = "scene-transform-map-20260531-01";
@@ -36,7 +74,7 @@ const aluminumPostModelPaths = {
 
 console.log("[scene.js]", sceneTransformVersion);
 
-export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement, readOnly = false, previewMode = "" }) {
+export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement, readOnly = false, previewMode = "", renderInfo = null }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const renderIdRef = useRef(0);
@@ -114,11 +152,16 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
 
     const handleDrop = (event) => {
       event.preventDefault();
-      const componentType = event.dataTransfer.getData("text/plain");
+      const { componentType, productSku } = readComponentDragPayload(event.dataTransfer);
       if (!componentType) return;
       const bay = pickSceneObject(event, (userData) => userData.isBayDropTarget) || pickNearestBayTarget(event, scene, camera, renderer.domElement);
       if (bay?.userData) {
-        callbacksRef.current.onDropComponent?.(bay.userData.wallId, bay.userData.bayIndex, componentType);
+        callbacksRef.current.onDropComponent?.(
+          bay.userData.wallId,
+          bay.userData.bayIndex,
+          componentType,
+          productSku ? { productSku } : {}
+        );
       }
     };
 
@@ -173,8 +216,8 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
         fitAiPlannerCamera(current.camera, current.controls, current.scene.getObjectByName("design-root"));
       }
       current?.renderer.render(current.scene, current.camera);
-    });
-  }, [config, design, series, debug, selectedId, previewMode]);
+    }, renderInfo);
+  }, [config, design, series, debug, selectedId, previewMode, renderInfo]);
 
   return h("div", { className: "three-mount", ref: mountRef, "aria-label": "3D preview" });
 }
@@ -211,7 +254,7 @@ function pickNearestBayTarget(event, scene, camera, domElement) {
   return nearest;
 }
 
-async function rebuildScene(scene, config, design, series, debug, selectedId, renderIdRef, previewMode, requestRender) {
+async function rebuildScene(scene, config, design, series, debug, selectedId, renderIdRef, previewMode, requestRender, renderInfo = null) {
   const old = scene.getObjectByName("design-root");
   if (old) scene.remove(old);
 
@@ -246,6 +289,40 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
     aluminumBaseLedDiagnostics: [],
     wallMountedLedStripCount: 0,
     wallMountedLedDiagnostics: [],
+    visualAssets: [],
+      visualAssetDiagnostics: {
+      longHangZoneCount: 0,
+      cloth1InstanceCount: 0,
+      countsByType: {},
+      countsByCategory: {},
+      beddingFinalBbox: [],
+      luggageFinalBbox: [],
+      trouserVisualFinalBbox: [],
+      loadedAssets: [],
+      failedAssets: [],
+      skippedVisualAssets: [],
+      unresolvedOverlaps: [],
+      frontViewOverlapCount: 0,
+      visualOverlap3DCount: 0,
+      visualOverlap2DCount: 0,
+      trouserRackAutoRaised: false,
+      trouserRackOriginalHeight: null,
+      trouserRackFinalHeight: null,
+      trouserRackRaiseDelta: null,
+      trouserRackRaiseReason: "",
+      luggageLargeConflictWithTrouser: false,
+      luggageChangedLargeToSmall: false,
+      luggageMovedToTopBecauseTrouserConflict: false,
+      luggageMovedToOtherFloorBay: false,
+      luggageBlockedByTrouser: false,
+      removedEmptyTrouserRack: false,
+      keptRealTrouserRack: false,
+      removedEmptySupplementalRails: [],
+      keptRealEmptyRails: [],
+      emptyRailReason: ""
+    },
+    visualAssetEligibility: config.visualAssetDebug || null,
+    activeRenderInfo: renderInfo || null,
     roomWallDiagnostics: null,
     geometryPlaceholders: ["room-floor", "room-walls"]
   };
@@ -291,7 +368,8 @@ async function rebuildScene(scene, config, design, series, debug, selectedId, re
       debug,
       selectedId,
       cuttingRules,
-      modelTransforms
+      modelTransforms,
+      previewMode
     );
   }
   if (!scene.getObjectByName("design-root") || root.parent !== scene) return;
@@ -350,12 +428,27 @@ function publishModelReport(report, status) {
     aluminumBaseLedDiagnostics: report.aluminumBaseLedDiagnostics,
     wallMountedLedStripCount: report.wallMountedLedStripCount,
     wallMountedLedDiagnostics: report.wallMountedLedDiagnostics,
+    visualAssets: report.visualAssets,
+    visualAssetDiagnostics: report.visualAssetDiagnostics,
+    visualAssetEligibility: report.visualAssetEligibility,
+    activeRender: report.activeRenderInfo || null,
     wallMountedRailShelfContacts,
     roomWallDiagnostics: report.roomWallDiagnostics,
     geometryPlaceholders: report.geometryPlaceholders
   };
+  if (isStaleAiPlannerRender(payload)) return;
   window.__modelLoadReport = payload;
+  publishAiPlannerActiveRender(payload);
+  publishAiPlannerVisualDebug(payload);
   document.documentElement.setAttribute("data-model-report", JSON.stringify(payload));
+}
+
+function isStaleAiPlannerRender(payload = {}) {
+  if (typeof window === "undefined") return false;
+  const renderId = payload.activeRender?.renderId || "";
+  if (!renderId) return false;
+  const activeRenderId = window.__AI_PLANNER_ACTIVE_RENDER__?.renderId || "";
+  return Boolean(activeRenderId && activeRenderId !== renderId);
 }
 
 function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, rightWallDepth = depth, previewMode = "") {
@@ -508,7 +601,8 @@ async function addWallRun(
   debug,
   selectedId,
   cuttingRules,
-  modelTransforms
+  modelTransforms,
+  previewMode
 ) {
   const group = new THREE.Group();
   group.name = `wall-run-${wall.id}`;
@@ -1266,7 +1360,1838 @@ async function addWallRun(
     await Promise.all(wallPlacements.map(addWallPlacement));
   }
 
+  if (previewMode === "ai-planner" && Array.isArray(config.visualAssets) && config.visualAssets.length) {
+    await addPlannerVisualAssetsForWall(
+      group,
+      wall,
+      postPositions,
+      factoryInnerBayWidth,
+      cuttingRules,
+      config,
+      report
+    );
+  }
+
   group.updateMatrixWorld(true);
+}
+
+async function addPlannerVisualAssetsForWall(
+  group,
+  wall,
+  postPositions,
+  factoryInnerBayWidth,
+  cuttingRules,
+  config,
+  report
+) {
+  const allowedVisualAssets = (config.visualAssets || []).filter((asset) => {
+    return asset?.assetPath
+      && asset.wallId === wall.id
+      && asset.visualAssetType;
+  }).sort(comparePlannerVisualAssetPriority);
+  if (!allowedVisualAssets.length) return;
+
+  const allLongHangAssets = (config.visualAssets || []).filter((asset) => asset.zoneType === "longHangZone");
+  report.visualAssetDiagnostics.longHangZoneCount = allLongHangAssets.length;
+  const realCollisionBoxes = collectPlannerVisualRealCollisionBoxes(group);
+  const placedVisualCollisionBoxes = [];
+
+  for (const asset of allowedVisualAssets) {
+    const bay = getBayGeometry(
+      postPositions,
+      asset.bayIndex,
+      factoryInnerBayWidth,
+      cuttingRules.postProfileWidthMm
+    );
+    if (!bay) continue;
+
+    const sourceResolution = findPlannerVisualAssetSource(group, asset);
+    const sourcePlacement = sourceResolution.object;
+    if (asset.targetKind !== "floor" && !sourcePlacement) {
+      const skipped = {
+        visualAssetType: asset.visualAssetType,
+        visualCategory: asset.visualCategory || "",
+        wallId: asset.wallId,
+        bayIndex: Number(asset.bayIndex),
+        targetKind: asset.targetKind || "",
+        sourcePlacementId: asset.sourcePlacementId || "",
+        sourceComponentType: asset.sourceComponentType || "",
+        ruleSource: asset.ruleSource || "",
+        originalVisualAssetType: asset.originalVisualAssetType || "",
+        replacementVisualAssetType: asset.replacementVisualAssetType || "",
+        replacementReason: asset.replacementReason || "",
+        skipReason: "attachmentSourceNotFound"
+      };
+      report.visualAssetDiagnostics.skippedVisualAssets.push(skipped);
+      console.warn(`[ai-planner visual skipped] ${skipped.visualAssetType} bay=${skipped.bayIndex} reason=${skipped.skipReason}`, skipped);
+      continue;
+    }
+    const visualObject = await createPlannerVisualAssetModel(asset.assetPath, asset.visualAssetType);
+    if (!visualObject) {
+      const failed = {
+        visualAssetType: asset.visualAssetType,
+        visualCategory: asset.visualCategory || "",
+        wallId: asset.wallId,
+        bayIndex: Number(asset.bayIndex),
+        targetKind: asset.targetKind || "",
+        sourcePlacementId: asset.sourcePlacementId || "",
+        sourceComponentType: asset.sourceComponentType || "",
+        ruleSource: asset.ruleSource || "",
+        originalVisualAssetType: asset.originalVisualAssetType || "",
+        replacementVisualAssetType: asset.replacementVisualAssetType || "",
+        replacementReason: asset.replacementReason || "",
+        skipReason: "modelLoadFailed"
+      };
+      report.visualAssetDiagnostics.failedAssets.push(failed);
+      report.visualAssetDiagnostics.skippedVisualAssets.push(failed);
+      console.warn(`[ai-planner visual skipped] ${failed.visualAssetType} bay=${failed.bayIndex} reason=${failed.skipReason}`, failed);
+      continue;
+    }
+    report.visualAssetDiagnostics.loadedAssets.push({
+      visualAssetType: asset.visualAssetType,
+      visualCategory: asset.visualCategory || "",
+      wallId: asset.wallId,
+      bayIndex: Number(asset.bayIndex),
+      targetKind: asset.targetKind || "",
+      sourcePlacementId: asset.sourcePlacementId || "",
+      sourceComponentType: asset.sourceComponentType || "",
+      originalVisualAssetType: asset.originalVisualAssetType || "",
+      replacementVisualAssetType: asset.replacementVisualAssetType || "",
+      replacementReason: asset.replacementReason || "",
+      ruleSource: asset.ruleSource || ""
+    });
+
+    const positionResult = positionPlannerVisualAsset({
+      visualObject,
+      asset,
+      bay,
+      group,
+      sourcePlacement,
+      roomHeightMm: config.room?.height,
+      report
+    });
+    if (!positionResult.placed) {
+      const skipped = {
+        visualAssetType: asset.visualAssetType,
+        visualCategory: asset.visualCategory || "",
+        wallId: asset.wallId,
+        bayIndex: Number(asset.bayIndex),
+        targetKind: asset.targetKind || "",
+        ruleSource: asset.ruleSource || "",
+        sourcePlacementId: asset.sourcePlacementId || "",
+        sourceComponentType: asset.sourceComponentType || "",
+        originalVisualAssetType: asset.originalVisualAssetType || "",
+        replacementVisualAssetType: asset.replacementVisualAssetType || "",
+        replacementReason: asset.replacementReason || "",
+        skipReason: positionResult.skipReason,
+        ...(positionResult.diagnostics || {})
+      };
+      report.visualAssetDiagnostics.skippedVisualAssets.push(skipped);
+      console.warn(`[ai-planner visual skipped] ${skipped.visualAssetType} bay=${skipped.bayIndex} reason=${skipped.skipReason}`, skipped);
+      continue;
+    }
+    let activeAsset = asset;
+    let activeVisualObject = visualObject;
+    activeVisualObject.updateMatrixWorld(true);
+    let preAddFinalBox = new THREE.Box3().setFromObject(activeVisualObject);
+    let overlapIssue = getPlannerVisualOverlapIssue({
+      asset: activeAsset,
+      finalBox: preAddFinalBox,
+      sourcePlacementId: activeAsset.sourcePlacementId || "",
+      realCollisionBoxes,
+      placedVisualCollisionBoxes
+    });
+    if (isTrouserLuggageOverlap(activeAsset, overlapIssue)) {
+      report.visualAssetDiagnostics.luggageLargeConflictWithTrouser = true;
+      report.visualAssetDiagnostics.luggageBlockedByTrouser = true;
+    }
+    if (overlapIssue) {
+      const replacementResult = await tryReplaceLongHangCollisionVisual({
+        asset: activeAsset,
+        bay,
+        group,
+        sourcePlacement,
+        roomHeightMm: config.room?.height,
+        report,
+        overlapIssue,
+        realCollisionBoxes,
+        placedVisualCollisionBoxes
+      });
+      if (replacementResult.replaced) {
+        activeAsset = replacementResult.asset;
+        activeVisualObject = replacementResult.visualObject;
+        preAddFinalBox = replacementResult.finalBox;
+        overlapIssue = null;
+      } else if (replacementResult.asset) {
+        activeAsset = replacementResult.asset;
+      }
+    }
+    if (overlapIssue) {
+      const replacementResult = await tryReplaceShortHangWoodShelfCollisionVisual({
+        asset: activeAsset,
+        bay,
+        group,
+        sourcePlacement,
+        roomHeightMm: config.room?.height,
+        report,
+        overlapIssue,
+        realCollisionBoxes,
+        placedVisualCollisionBoxes
+      });
+      if (replacementResult.replaced) {
+        activeAsset = replacementResult.asset;
+        activeVisualObject = replacementResult.visualObject;
+        preAddFinalBox = replacementResult.finalBox;
+        overlapIssue = null;
+      } else if (replacementResult.asset) {
+        activeAsset = replacementResult.asset;
+      }
+    }
+    if (overlapIssue) {
+      const skipped = {
+        visualAssetType: activeAsset.visualAssetType,
+        visualCategory: activeAsset.visualCategory || "",
+        wallId: activeAsset.wallId,
+        bayIndex: Number(activeAsset.bayIndex),
+        targetKind: activeAsset.targetKind || "",
+        ruleSource: activeAsset.ruleSource || "",
+        sourcePlacementId: activeAsset.sourcePlacementId || "",
+        sourceComponentType: activeAsset.sourceComponentType || "",
+        originalVisualAssetType: activeAsset.originalVisualAssetType || "",
+        replacementVisualAssetType: activeAsset.replacementVisualAssetType || "",
+        replacementReason: activeAsset.replacementReason || "",
+        originalVisualAsset: activeAsset.originalVisualAsset || "",
+        replacementAttempted: activeAsset.replacementAttempted === true,
+        replacementAsset: activeAsset.replacementAsset || "",
+        replacementCollisionPassed: activeAsset.replacementCollisionPassed === true,
+        replacementCollisionReason: activeAsset.replacementCollisionReason || "",
+        skipReason: overlapIssue.skipReason,
+        overlapWith: overlapIssue.overlapWith,
+        overlapType: overlapIssue.overlapType,
+        overlapVolume: overlapIssue.overlapVolume,
+        overlapMode: overlapIssue.overlapMode,
+        overlapX: overlapIssue.overlapX,
+        overlapY: overlapIssue.overlapY,
+        sameBay: overlapIssue.sameBay,
+        isGeneratedByDemand: isPlannerGeneratedVisualSource(activeAsset),
+        isSupplemental: isSupplementalPlannerVisualSource(activeAsset),
+        isAutoAdjustable: isAutoAdjustableTrouserVisual(activeAsset),
+        trouserRackAutoRaised: false,
+        luggageMovedToTop: false,
+        luggageBlockedByClothes: overlapIssue.skipReason === "luggageBlockedByClothes",
+        luggageBlockedByShoe: overlapIssue.skipReason === "luggageBlockedByShoe",
+        luggageBlockedByTrouser: overlapIssue.skipReason === "luggageBlockedByTrouser"
+      };
+      if (overlapIssue.skipReason === "luggageBlockedByTrouser") {
+        report.visualAssetDiagnostics.luggageLargeConflictWithTrouser = true;
+        report.visualAssetDiagnostics.luggageBlockedByTrouser = true;
+      }
+      report.visualAssetDiagnostics.skippedVisualAssets.push(skipped);
+      if (overlapIssue.overlapMode === "frontView2d" || overlapIssue.overlapMode === "floorOccupancy") {
+        report.visualAssetDiagnostics.frontViewOverlapCount += 1;
+        report.visualAssetDiagnostics.visualOverlap2DCount += 1;
+      }
+      if (overlapIssue.overlapMode === "3d") {
+        report.visualAssetDiagnostics.visualOverlap3DCount += 1;
+      }
+      console.warn(`[ai-planner visual skipped] ${skipped.visualAssetType} bay=${skipped.bayIndex} reason=${skipped.skipReason}`, skipped);
+      continue;
+    }
+    group.add(activeVisualObject);
+    group.updateMatrixWorld(true);
+    activeVisualObject.updateMatrixWorld(true);
+
+    const finalBox = new THREE.Box3().setFromObject(activeVisualObject);
+    const finalPosition = activeVisualObject.getWorldPosition(new THREE.Vector3());
+    const finalScale = activeVisualObject.scale.clone();
+    const diagnostic = {
+      visualAssetType: activeAsset.visualAssetType,
+      zoneType: activeAsset.zoneType,
+      attachedZoneId: activeAsset.attachedZoneId,
+      wallId: activeAsset.wallId,
+      bayIndex: Number(activeAsset.bayIndex),
+      targetKind: activeAsset.targetKind || "",
+      visualCategory: activeAsset.visualCategory || "",
+      instanceIndex: Number(activeAsset.instanceIndex) || 0,
+      sourcePlacementId: activeAsset.sourcePlacementId,
+      sourceComponentType: activeAsset.sourceComponentType || "",
+      originalVisualAssetType: activeAsset.originalVisualAssetType || "",
+      replacementVisualAssetType: activeAsset.replacementVisualAssetType || "",
+      replacementReason: activeAsset.replacementReason || "",
+      originalVisualAsset: activeAsset.originalVisualAsset || "",
+      replacementAttempted: activeAsset.replacementAttempted === true,
+      replacementAsset: activeAsset.replacementAsset || "",
+      replacementCollisionPassed: activeAsset.replacementCollisionPassed === true,
+      replacementCollisionReason: activeAsset.replacementCollisionReason || "",
+      sourceResolvedBy: sourceResolution.resolvedBy,
+      fallbackTopUsed: activeAsset.fallbackTopUsed === true,
+      luggageLargeConflictWithTrouser: activeAsset.luggageLargeConflictWithTrouser === true,
+      luggageChangedLargeToSmall: activeAsset.luggageChangedLargeToSmall === true,
+      luggageMovedToTopBecauseTrouserConflict: activeAsset.luggageMovedToTopBecauseTrouserConflict === true,
+      luggageMovedToOtherFloorBay: activeAsset.luggageMovedToOtherFloorBay === true,
+      rawBBoxSize: activeVisualObject.userData.rawBBoxSize,
+      shoeAssetId: activeAsset.visualCategory === "shoe" ? activeAsset.id : "",
+      targetSurfaceType: activeAsset.visualCategory === "shoe"
+        ? activeAsset.targetKind === "shelf" ? sourcePlacement?.userData?.componentType || "woodShelf"
+          : "floor"
+        : "",
+      targetBayIndex: activeAsset.visualCategory === "shoe" ? Number(activeAsset.bayIndex) : null,
+      surfaceY: activeVisualObject.userData.shoeSurfaceY ?? null,
+      rawBboxMinY: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.rawBboxMinY : null,
+      finalBboxMinY: activeAsset.visualCategory === "shoe" ? toMm(finalBox.min.y) : null,
+      targetY: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.targetY ?? null : null,
+      surfaceTop: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.surfaceTop ?? null : null,
+      fullSurfaceTop: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.fullSurfaceTop ?? null : null,
+      visualSurfaceTop: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.visualSurfaceTop ?? null : null,
+      shoeShelfVisualDrop: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.shoeShelfVisualDrop ?? null : null,
+      shoeSurfaceDelta: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.shoeFloatingError ?? null : null,
+      shoeSurfaceDeltaToVisualTop: activeAsset.visualCategory === "shoe" ? activeVisualObject.userData.shoeSurfaceDeltaToVisualTop ?? null : null,
+      finalBboxMinYMinusSurfaceY: activeVisualObject.userData.shoeFloatingError ?? null,
+      shoeFloatingError: activeAsset.visualCategory === "shoe"
+        ? Math.abs(Number(activeVisualObject.userData.shoeFloatingError) || 0) > 12
+        : false,
+      item: activeAsset.visualCategory || "",
+      targetComponent: activeAsset.sourceComponentType || activeAsset.targetKind || "",
+      targetPosition: activeVisualObject.userData.targetPosition || null,
+      railCenterX: activeVisualObject.userData.railCentering?.railCenterX ?? null,
+      railCenterZ: activeVisualObject.userData.railCentering?.railCenterZ ?? null,
+      visualBBoxCenterXBefore: activeVisualObject.userData.railCentering?.visualBBoxCenterXBefore ?? null,
+      visualBBoxCenterXAfter: activeVisualObject.userData.railCentering?.visualBBoxCenterXAfter ?? null,
+      visualRailCenterDeltaX: activeVisualObject.userData.railCentering?.visualRailCenterDeltaX ?? null,
+      visualBBoxCenterZBefore: activeVisualObject.userData.railCentering?.visualBBoxCenterZBefore ?? null,
+      visualBBoxCenterZAfter: activeVisualObject.userData.railCentering?.visualBBoxCenterZAfter ?? null,
+      visualRailCenterDeltaZ: activeVisualObject.userData.railCentering?.visualRailCenterDeltaZ ?? null,
+      railSpanX: activeVisualObject.userData.hangingRailValidation?.railSpanX ?? null,
+      visualBBoxSizeX: activeVisualObject.userData.hangingRailValidation?.finalBboxSizeX ?? null,
+      trouserVisualScaling: activeVisualObject.userData.trouserVisualScaling || null,
+      ruleSource: activeAsset.ruleSource || "",
+      skipReason: "",
+      finalPosition: serializeVectorMm(finalPosition),
+      finalScale: serializeVector(finalScale),
+      finalBoundingBox: serializeBox(finalBox)
+    };
+    report.visualAssets.push(diagnostic);
+    report.visualAssetDiagnostics.countsByType[activeAsset.visualAssetType] =
+      (report.visualAssetDiagnostics.countsByType[activeAsset.visualAssetType] || 0) + 1;
+    const category = activeAsset.visualCategory || activeAsset.zoneType || "unknown";
+    report.visualAssetDiagnostics.countsByCategory[category] =
+      (report.visualAssetDiagnostics.countsByCategory[category] || 0) + 1;
+    if (activeAsset.visualCategory === "longHang") {
+      report.visualAssetDiagnostics.cloth1InstanceCount += 1;
+    }
+    if (activeAsset.visualCategory === "bedding") {
+      report.visualAssetDiagnostics.beddingFinalBbox.push(diagnostic.finalBoundingBox);
+    }
+    if (activeAsset.visualCategory === "luggage") {
+      report.visualAssetDiagnostics.luggageFinalBbox.push(diagnostic.finalBoundingBox);
+      if (activeAsset.luggageLargeConflictWithTrouser) {
+        report.visualAssetDiagnostics.luggageLargeConflictWithTrouser = true;
+      }
+      if (activeAsset.luggageChangedLargeToSmall) {
+        report.visualAssetDiagnostics.luggageChangedLargeToSmall = true;
+      }
+      if (activeAsset.luggageMovedToTopBecauseTrouserConflict) {
+        report.visualAssetDiagnostics.luggageMovedToTopBecauseTrouserConflict = true;
+      }
+      if (activeAsset.luggageMovedToOtherFloorBay) {
+        report.visualAssetDiagnostics.luggageMovedToOtherFloorBay = true;
+      }
+    }
+    if (activeAsset.visualCategory === "trouser") {
+      report.visualAssetDiagnostics.trouserVisualFinalBbox.push(diagnostic.finalBoundingBox);
+    }
+    placedVisualCollisionBoxes.push({
+      box: finalBox.clone(),
+      visualCategory: activeAsset.visualCategory || "",
+      visualAssetType: activeAsset.visualAssetType,
+      targetKind: activeAsset.targetKind || "",
+      wallId: activeAsset.wallId,
+      bayIndex: Number(activeAsset.bayIndex),
+      id: activeAsset.id || activeAsset.sourcePlacementId || `${activeAsset.visualAssetType}:${activeAsset.wallId}:${activeAsset.bayIndex}:${activeAsset.instanceIndex || 0}`
+    });
+    console.log(`[ai-planner visual generated] ${diagnostic.visualAssetType} bay=${diagnostic.bayIndex} target=${diagnostic.targetComponent || diagnostic.targetKind}`, diagnostic);
+  }
+
+  reconcilePlannerVisualAssetDebug(report);
+
+  console.log("[ai-planner] visual-assets-summary", {
+    longHangZoneCount: report.visualAssetDiagnostics.longHangZoneCount,
+    cloth1InstanceCount: report.visualAssetDiagnostics.cloth1InstanceCount,
+    countsByType: report.visualAssetDiagnostics.countsByType,
+    countsByCategory: report.visualAssetDiagnostics.countsByCategory,
+    beddingFinalBbox: report.visualAssetDiagnostics.beddingFinalBbox,
+    luggageFinalBbox: report.visualAssetDiagnostics.luggageFinalBbox,
+    trouserVisualFinalBbox: report.visualAssetDiagnostics.trouserVisualFinalBbox
+  });
+  if (isPlannerSceneDebugEnabled()) {
+    console.group("[ai-planner] Golden Visual Assets Runtime");
+    console.table(report.visualAssets);
+    console.table(report.visualAssetDiagnostics.skippedVisualAssets);
+    console.groupEnd();
+  }
+}
+
+function comparePlannerVisualAssetPriority(a, b) {
+  return getPlannerVisualAssetPriority(a) - getPlannerVisualAssetPriority(b);
+}
+
+function getPlannerVisualAssetPriority(asset) {
+  const category = asset.visualCategory || "";
+  if (category === "shortHang" || category === "longHang") return 10;
+  if (category === "luggage") return 20;
+  if (category === "shoe") return 30;
+  if (category === "bagShelf") return 40;
+  if (category === "bedding") return 50;
+  if (category === "trouser") return 60;
+  return 90;
+}
+
+const LONG_HANG_REPLACEMENT_BLOCKING_TYPES = new Set([
+  "woodShelf",
+  "shoeShelf",
+  "cabinet",
+  "drawer",
+  "jewelryBox",
+  "storageBox"
+]);
+
+async function tryReplaceLongHangCollisionVisual({
+  asset,
+  bay,
+  group,
+  sourcePlacement,
+  roomHeightMm,
+  report,
+  overlapIssue,
+  realCollisionBoxes,
+  placedVisualCollisionBoxes
+}) {
+  if (!shouldRetryLongHangCollisionReplacement(asset, overlapIssue)) {
+    return { replaced: false, asset: null };
+  }
+  const replacementAsset = {
+    ...asset,
+    id: String(asset.id || "").replace("longHang-4", "longHang-5"),
+    assetPath: getLongHang5ReplacementAssetPath(asset.assetPath),
+    visualAssetType: "longHang-5",
+    originalVisualAssetType: asset.originalVisualAssetType || asset.visualAssetType,
+    replacementVisualAssetType: "longHang-5",
+    replacementReason: `longHang4CollisionWith${capitalizeDebugToken(overlapIssue.overlapType)}`,
+    originalVisualAsset: asset.visualAssetType,
+    replacementAttempted: true,
+    replacementAsset: "longHang-5",
+    replacementCollisionPassed: false,
+    replacementCollisionReason: ""
+  };
+  const replacementObject = await createPlannerVisualAssetModel(
+    replacementAsset.assetPath,
+    replacementAsset.visualAssetType
+  );
+  if (!replacementObject) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: "modelLoadFailed"
+      }
+    };
+  }
+  report.visualAssetDiagnostics.loadedAssets.push({
+    visualAssetType: replacementAsset.visualAssetType,
+    visualCategory: replacementAsset.visualCategory || "",
+    wallId: replacementAsset.wallId,
+    bayIndex: Number(replacementAsset.bayIndex),
+    targetKind: replacementAsset.targetKind || "",
+    sourcePlacementId: replacementAsset.sourcePlacementId || "",
+    sourceComponentType: replacementAsset.sourceComponentType || "",
+    originalVisualAssetType: replacementAsset.originalVisualAssetType || "",
+    replacementVisualAssetType: replacementAsset.replacementVisualAssetType || "",
+    replacementReason: replacementAsset.replacementReason || "",
+    originalVisualAsset: replacementAsset.originalVisualAsset || "",
+    replacementAttempted: true,
+    replacementAsset: replacementAsset.replacementAsset || "",
+    replacementCollisionPassed: false,
+    replacementCollisionReason: "",
+    ruleSource: replacementAsset.ruleSource || ""
+  });
+
+  const positionResult = positionPlannerVisualAsset({
+    visualObject: replacementObject,
+    asset: replacementAsset,
+    bay,
+    group,
+    sourcePlacement,
+    roomHeightMm,
+    report
+  });
+  if (!positionResult.placed) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: positionResult.skipReason || "positionFailed"
+      }
+    };
+  }
+  replacementObject.updateMatrixWorld(true);
+  const replacementFinalBox = new THREE.Box3().setFromObject(replacementObject);
+  const replacementOverlapIssue = getPlannerVisualOverlapIssue({
+    asset: replacementAsset,
+    finalBox: replacementFinalBox,
+    sourcePlacementId: replacementAsset.sourcePlacementId || "",
+    realCollisionBoxes,
+    placedVisualCollisionBoxes
+  });
+  if (replacementOverlapIssue) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: replacementOverlapIssue.skipReason || "visualOverlap",
+        replacementOverlapWith: replacementOverlapIssue.overlapWith,
+        replacementOverlapType: replacementOverlapIssue.overlapType,
+        replacementOverlapVolume: replacementOverlapIssue.overlapVolume
+      }
+    };
+  }
+  return {
+    replaced: true,
+    asset: {
+      ...replacementAsset,
+      replacementCollisionPassed: true,
+      replacementCollisionReason: "none"
+    },
+    visualObject: replacementObject,
+    finalBox: replacementFinalBox
+  };
+}
+
+function shouldRetryLongHangCollisionReplacement(asset, overlapIssue) {
+  return asset?.visualCategory === "longHang"
+    && asset.visualAssetType === "longHang-4"
+    && overlapIssue?.skipReason === "clothesBlockedByRealComponent"
+    && LONG_HANG_REPLACEMENT_BLOCKING_TYPES.has(overlapIssue.overlapType);
+}
+
+function getLongHang5ReplacementAssetPath(assetPath = "") {
+  const basePath = assetPath
+    ? String(assetPath).replace(/longHang-4\.glb(?:\?[^#]*)?/, "longHang-5.glb")
+    : "/customer-home/position/longHang-5.glb";
+  return `${basePath}${basePath.includes("?") ? "&" : "?"}v=20260627-origin-fix`;
+}
+
+async function tryReplaceShortHangWoodShelfCollisionVisual({
+  asset,
+  bay,
+  group,
+  sourcePlacement,
+  roomHeightMm,
+  report,
+  overlapIssue,
+  realCollisionBoxes,
+  placedVisualCollisionBoxes
+}) {
+  if (!shouldRetryShortHangWoodShelfReplacement(asset, overlapIssue)) {
+    return { replaced: false, asset: null };
+  }
+  const replacementAsset = {
+    ...asset,
+    id: String(asset.id || "").replace("shortHang-5", "shortHang-7"),
+    assetPath: getShortHang7ReplacementAssetPath(asset.assetPath),
+    visualAssetType: "shortHang-7",
+    originalVisualAssetType: asset.originalVisualAssetType || asset.visualAssetType,
+    replacementVisualAssetType: "shortHang-7",
+    replacementReason: "shortHang5CollisionWithWoodShelf",
+    originalVisualAsset: asset.visualAssetType,
+    replacementAttempted: true,
+    replacementAsset: "shortHang-7",
+    replacementCollisionPassed: false,
+    replacementCollisionReason: ""
+  };
+  const replacementObject = await createPlannerVisualAssetModel(
+    replacementAsset.assetPath,
+    replacementAsset.visualAssetType
+  );
+  if (!replacementObject) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: "modelLoadFailed"
+      }
+    };
+  }
+  report.visualAssetDiagnostics.loadedAssets.push({
+    visualAssetType: replacementAsset.visualAssetType,
+    visualCategory: replacementAsset.visualCategory || "",
+    wallId: replacementAsset.wallId,
+    bayIndex: Number(replacementAsset.bayIndex),
+    targetKind: replacementAsset.targetKind || "",
+    sourcePlacementId: replacementAsset.sourcePlacementId || "",
+    sourceComponentType: replacementAsset.sourceComponentType || "",
+    originalVisualAssetType: replacementAsset.originalVisualAssetType || "",
+    replacementVisualAssetType: replacementAsset.replacementVisualAssetType || "",
+    replacementReason: replacementAsset.replacementReason || "",
+    originalVisualAsset: replacementAsset.originalVisualAsset || "",
+    replacementAttempted: true,
+    replacementAsset: replacementAsset.replacementAsset || "",
+    replacementCollisionPassed: false,
+    replacementCollisionReason: "",
+    ruleSource: replacementAsset.ruleSource || ""
+  });
+
+  const positionResult = positionPlannerVisualAsset({
+    visualObject: replacementObject,
+    asset: replacementAsset,
+    bay,
+    group,
+    sourcePlacement,
+    roomHeightMm,
+    report
+  });
+  if (!positionResult.placed) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: positionResult.skipReason || "positionFailed"
+      }
+    };
+  }
+  replacementObject.updateMatrixWorld(true);
+  const replacementFinalBox = new THREE.Box3().setFromObject(replacementObject);
+  const replacementOverlapIssue = getPlannerVisualOverlapIssue({
+    asset: replacementAsset,
+    finalBox: replacementFinalBox,
+    sourcePlacementId: replacementAsset.sourcePlacementId || "",
+    realCollisionBoxes,
+    placedVisualCollisionBoxes
+  });
+  if (replacementOverlapIssue) {
+    return {
+      replaced: false,
+      asset: {
+        ...replacementAsset,
+        replacementCollisionReason: replacementOverlapIssue.skipReason || "visualOverlap",
+        replacementOverlapWith: replacementOverlapIssue.overlapWith,
+        replacementOverlapType: replacementOverlapIssue.overlapType,
+        replacementOverlapVolume: replacementOverlapIssue.overlapVolume
+      }
+    };
+  }
+  return {
+    replaced: true,
+    asset: {
+      ...replacementAsset,
+      replacementCollisionPassed: true,
+      replacementCollisionReason: "none"
+    },
+    visualObject: replacementObject,
+    finalBox: replacementFinalBox
+  };
+}
+
+function shouldRetryShortHangWoodShelfReplacement(asset, overlapIssue) {
+  return asset?.visualCategory === "shortHang"
+    && asset.visualAssetType === "shortHang-5"
+    && overlapIssue?.skipReason === "clothesBlockedByRealComponent"
+    && overlapIssue.overlapType === "woodShelf";
+}
+
+function getShortHang7ReplacementAssetPath(assetPath = "") {
+  return assetPath
+    ? String(assetPath).replace(/shortHang-5\.glb(?:\?[^#]*)?/, "shortHang-7.glb")
+    : "/customer-home/position/shortHang-7.glb";
+}
+
+function capitalizeDebugToken(value = "") {
+  const text = String(value || "");
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : "RealComponent";
+}
+
+function collectPlannerVisualRealCollisionBoxes(group) {
+  const blockingTypes = new Set(["woodShelf", "glassShelf", "cabinet", "trouserRack", "jewelryBox", "basket", "drawer"]);
+  const boxes = [];
+  group.traverse((object) => {
+    const componentType = object.userData?.componentType || "";
+    if (!blockingTypes.has(componentType)) return;
+    const box = getObjectBoxRelativeTo(object, group);
+    if (!box || box.isEmpty()) return;
+    boxes.push({
+      box,
+      componentType,
+      id: object.userData?.placementId || object.name || componentType,
+      wallId: object.userData?.wallId || "",
+      bayIndex: Number(object.userData?.bayIndex)
+    });
+  });
+  return boxes;
+}
+
+function getPlannerVisualOverlapIssue({
+  asset,
+  finalBox,
+  sourcePlacementId,
+  realCollisionBoxes,
+  placedVisualCollisionBoxes
+}) {
+  const realOverlap = realCollisionBoxes
+    .filter((item) => !isPlannerVisualSupportSurface(asset, item, sourcePlacementId))
+    .map((item) => ({
+      overlapWith: item.id,
+      overlapType: item.componentType,
+      overlapVolume: getBoxOverlapVolume(finalBox, item.box),
+      ...getFrontViewOverlap2D(finalBox, item.box),
+      sameBay: isSamePlannerBay(asset, item)
+    }))
+    .find((item) => shouldTreatPlannerVisualOverlapAsConflict(asset, item, true));
+  if (realOverlap) {
+    return {
+      ...realOverlap,
+      overlapMode: realOverlap.overlapVolume > 0 ? "3d" : "frontView2d",
+      skipReason: getRealOverlapSkipReason(asset, realOverlap.overlapType)
+    };
+  }
+  const visualOverlap = placedVisualCollisionBoxes
+    .map((item) => ({
+      overlapWith: item.id,
+      overlapType: item.visualCategory || item.visualAssetType,
+      overlapVolume: getBoxOverlapVolume(finalBox, item.box),
+      ...getFrontViewOverlap2D(finalBox, item.box),
+      sameBay: isSamePlannerBay(asset, item),
+      targetKind: item.targetKind || ""
+    }))
+    .find((item) => shouldTreatPlannerVisualOverlapAsConflict(asset, item, false));
+  if (!visualOverlap) return null;
+  return {
+    ...visualOverlap,
+    overlapMode: getVisualOverlapMode(asset, visualOverlap),
+    skipReason: getVisualOverlapSkipReason(asset, visualOverlap.overlapType)
+  };
+}
+
+function getFrontViewOverlap2D(boxA, boxB) {
+  const overlapXMeters = Math.min(boxA.max.x, boxB.max.x) - Math.max(boxA.min.x, boxB.min.x);
+  const overlapYMeters = Math.min(boxA.max.y, boxB.max.y) - Math.max(boxA.min.y, boxB.min.y);
+  return {
+    overlapX: Math.max(0, toMm(overlapXMeters)),
+    overlapY: Math.max(0, toMm(overlapYMeters)),
+    frontViewOverlap: toMm(overlapXMeters) > 20 && toMm(overlapYMeters) > 20
+  };
+}
+
+function shouldTreatPlannerVisualOverlapAsConflict(asset, overlap, isRealComponent) {
+  if (overlap.overlapVolume > 0) return true;
+  if (!overlap.frontViewOverlap) return false;
+  if (isRealComponent) return true;
+  if (asset.visualCategory === "shoe" && asset.targetKind === "floor"
+    && ["luggage", "shortHang", "longHang", "trouser"].includes(overlap.overlapType)) {
+    return true;
+  }
+  if (["shortHang", "longHang", "trouser"].includes(asset.visualCategory)
+    && ["shoe", "luggage", "bagShelf", "bedding"].includes(overlap.overlapType)) {
+    return true;
+  }
+  if (asset.visualCategory === "luggage"
+    && ["shoe", "shortHang", "longHang", "trouser"].includes(overlap.overlapType)) {
+    return true;
+  }
+  return true;
+}
+
+function isSamePlannerBay(asset, item) {
+  if (!item.wallId && !Number.isFinite(item.bayIndex)) return false;
+  return String(asset.wallId || "") === String(item.wallId || "")
+    && Number(asset.bayIndex) === Number(item.bayIndex);
+}
+
+function getVisualOverlapMode(asset, overlap) {
+  if (asset.visualCategory === "shoe" && asset.targetKind === "floor"
+    && ["luggage", "shortHang", "longHang", "trouser"].includes(overlap.overlapType)
+    && overlap.sameBay) {
+    return "floorOccupancy";
+  }
+  return overlap.overlapVolume > 0 ? "3d" : "frontView2d";
+}
+
+function isTrouserLuggageOverlap(asset, overlapIssue) {
+  return asset.visualCategory === "trouser"
+    && overlapIssue
+    && overlapIssue.overlapType === "luggage";
+}
+
+function tryAutoRaiseTrouserVisualForLuggage({
+  visualObject,
+  sourcePlacement,
+  asset,
+  overlapIssue,
+  placedVisualCollisionBoxes,
+  realCollisionBoxes,
+  sourcePlacementId,
+  report
+}) {
+  return { raised: false, finalBox: null };
+}
+
+function hasBlockingFrontViewOverlapAfterTrouserRaise({
+  asset,
+  finalBox,
+  sourcePlacementId,
+  realCollisionBoxes,
+  placedVisualCollisionBoxes,
+  ignoredVisualId
+}) {
+  const realConflict = realCollisionBoxes
+    .filter((item) => !isPlannerVisualSupportSurface(asset, item, sourcePlacementId))
+    .some((item) => getFrontViewOverlap2D(finalBox, item.box).frontViewOverlap);
+  if (realConflict) return true;
+  return placedVisualCollisionBoxes
+    .filter((item) => item.id !== ignoredVisualId)
+    .some((item) => getFrontViewOverlap2D(finalBox, item.box).frontViewOverlap);
+}
+
+function isPlannerGeneratedVisualSource(asset) {
+  return /^planner:|^auto:|demand/i.test(String(asset.sourcePlacementId || asset.id || ""));
+}
+
+function isSupplementalPlannerVisualSource(asset) {
+  return /supplement|auto/i.test(String(asset.sourcePlacementId || asset.id || ""));
+}
+
+function isAutoAdjustableTrouserVisual(asset) {
+  return false;
+}
+
+function isPlannerVisualSupportSurface(asset, item, sourcePlacementId) {
+  if (item.id === sourcePlacementId) return true;
+  if (!["shelf", "top"].includes(asset.targetKind)) return false;
+  return Boolean(asset.sourceComponentType)
+    && asset.sourceComponentType === item.componentType;
+}
+
+function getRealOverlapSkipReason(asset, overlapType) {
+  if (asset.visualCategory === "luggage" && overlapType === "trouserRack") {
+    return "luggageBlockedByTrouser";
+  }
+  if (["shortHang", "longHang", "trouser"].includes(asset.visualCategory)) {
+    return "clothesBlockedByRealComponent";
+  }
+  if (asset.visualCategory === "shoe" && asset.targetKind === "floor") {
+    return ["cabinet", "drawer", "basket"].includes(overlapType)
+      ? "floorShoeBlockedByRealComponent"
+      : "visualOverlap";
+  }
+  return "visualOverlap";
+}
+
+function getVisualOverlapSkipReason(asset, overlapType) {
+  if (asset.visualCategory === "shoe" && asset.targetKind === "floor" && overlapType === "luggage") {
+    return "floorShoeBlockedByLuggage";
+  }
+  if (asset.visualCategory === "shoe" && asset.targetKind === "floor"
+    && ["shortHang", "longHang", "trouser"].includes(overlapType)) {
+    return "floorShoeBlockedByClothes";
+  }
+  if (asset.visualCategory === "luggage" && ["shortHang", "longHang"].includes(overlapType)) {
+    return "luggageBlockedByClothes";
+  }
+  if (asset.visualCategory === "luggage" && overlapType === "shoe") {
+    return "luggageBlockedByShoe";
+  }
+  return "visualOverlap";
+}
+
+function getBoxOverlapVolume(boxA, boxB) {
+  const minX = Math.max(boxA.min.x, boxB.min.x);
+  const minY = Math.max(boxA.min.y, boxB.min.y);
+  const minZ = Math.max(boxA.min.z, boxB.min.z);
+  const maxX = Math.min(boxA.max.x, boxB.max.x);
+  const maxY = Math.min(boxA.max.y, boxB.max.y);
+  const maxZ = Math.min(boxA.max.z, boxB.max.z);
+  const width = Math.max(0, maxX - minX);
+  const height = Math.max(0, maxY - minY);
+  const depth = Math.max(0, maxZ - minZ);
+  return toMm(width) * toMm(height) * toMm(depth);
+}
+
+function reconcilePlannerVisualAssetDebug(report) {
+  const debug = report.visualAssetEligibility;
+  if (!debug) return;
+  const actualAssets = report.visualAssets || [];
+  const skippedAssets = report.visualAssetDiagnostics.skippedVisualAssets || [];
+  const byCategory = (category) => actualAssets.filter((asset) => asset.visualCategory === category);
+  const skippedByCategory = (category) => skippedAssets.filter((asset) => asset.visualCategory === category);
+  const skippedReasons = (category, previousReason, required, placed) => {
+    const runtimeReasons = skippedByCategory(category).map((asset) => asset.skipReason).filter(Boolean);
+    if (runtimeReasons.length || placed >= required) return runtimeReasons;
+    if (Array.isArray(previousReason)) return previousReason.filter(Boolean);
+    return previousReason ? [previousReason] : ["insufficientValidTargets"];
+  };
+  const shortHang = byCategory("shortHang");
+  const shoes = byCategory("shoe");
+  const bags = byCategory("bagShelf");
+  const bedding = byCategory("bedding");
+  const luggage = byCategory("luggage");
+  const trousers = byCategory("trouser");
+  debug.shortHangVisualPlaced = shortHang.length;
+  debug.placedShortHangSets = shortHang.length;
+  debug.shoePlacedOnShelfCount = shoes.filter((asset) => asset.targetKind === "shelf").length;
+  debug.shoePlacedOnFloorCount = shoes.filter((asset) => asset.targetKind === "floor").length;
+  debug.shoeFinalBbox = shoes.map((asset) => asset.finalBoundingBox);
+  debug.shoeSkippedReason = skippedReasons("shoe", debug.shoeSkippedReason,
+    Number(debug.shoesDemand || 0) > 0 ? Number(debug.goldenAssetTable?.find((row) => row.assetType === "shoe")?.required || 0) : 0,
+    shoes.length);
+  debug.bagVisualPlaced = bags.length;
+  debug.bagTargetBayIndexes = bags.map((asset) => asset.bayIndex);
+  debug.bagSurfaceType = bags.map((asset) => asset.sourceComponentType === "cabinet"
+    ? "cabinetTop"
+    : "woodShelf");
+  debug.bagSkippedReason = skippedReasons("bagShelf", debug.bagSkippedReason,
+    Number(debug.bagRequired || 0), bags.length);
+  debug.beddingPlacedCount = bedding.length;
+  debug.beddingTargetTopBayIndexes = bedding.map((asset) => asset.bayIndex);
+  debug.beddingFinalBbox = bedding.map((asset) => asset.finalBoundingBox);
+  debug.beddingSkippedReason = skippedReasons("bedding", debug.beddingSkippedReason,
+    Number(debug.beddingRequired || 0), bedding.length);
+  debug.luggagePlacedOnFloor = luggage.filter((asset) => asset.targetKind === "floor").length;
+  debug.luggagePlacedOnTop = luggage.filter((asset) => asset.targetKind === "top").length;
+  debug.luggageScale = luggage.map((asset) => asset.finalScale);
+  debug.luggageSkippedReason = skippedReasons("luggage", debug.luggageSkippedReason,
+    Number(debug.luggageRequired || 0), luggage.length);
+  debug.trouserVisualAssetCount = trousers.length;
+  debug.trouserVisualPlaced = trousers.length;
+  debug.trouserSkippedReason = skippedReasons("trouser", debug.trouserSkippedReason,
+    Number(debug.trouserRackCount || 0), trousers.length);
+
+  (debug.goldenAssetTable || []).forEach((row) => {
+    const category = row.assetType === "trouserPants" ? "trouser"
+      : row.assetType === "bagShelf" ? "bagShelf"
+        : row.assetType;
+    const placed = byCategory(category).length;
+    row.placed = placed;
+    row.skipped = Math.max(0, Number(row.required || 0) - placed);
+    row.skipReason = row.skipped
+      ? skippedByCategory(category).map((asset) => asset.skipReason).filter(Boolean).join(", ")
+        || row.skipReason || "insufficientValidTargets"
+      : "";
+  });
+  (debug.goldenBayTable || []).forEach((row) => {
+    const bayAssets = actualAssets.filter((asset) => asset.wallId === row.wallId
+      && Number(asset.bayIndex) === Number(row.bayIndex));
+    row.visualAssets = bayAssets.map((asset) => asset.visualAssetType).join(", ");
+    row.visualAssetsPlaced = row.visualAssets;
+    const baySkips = skippedAssets.filter((asset) => asset.wallId === row.wallId
+      && Number(asset.bayIndex) === Number(row.bayIndex));
+    row.validationErrors = [row.validationErrors, ...baySkips.map((asset) => asset.skipReason)]
+      .filter(Boolean).join(", ");
+    row.invalidReason = row.validationErrors;
+  });
+}
+
+function findPlannerVisualAssetSource(group, asset) {
+  const placementMatch = findPlacementObject(group, asset.sourcePlacementId);
+  if (placementMatch) return { object: placementMatch, resolvedBy: "placementId" };
+  const componentType = asset.sourceComponentType
+    || (asset.targetKind === "top" ? "woodTop" : "");
+  if (!componentType) return { object: null, resolvedBy: "" };
+  const candidates = [];
+  group.traverse((object) => {
+    if (!object.userData?.isPlacementModel) return;
+    if (object.userData.componentType !== componentType) return;
+    candidates.push(object);
+  });
+  const sameBay = candidates.find((object) => (
+    Number(object.userData.bayIndex) === Number(asset.bayIndex)
+  ));
+  if (sameBay) return { object: sameBay, resolvedBy: "sameBayComponentType" };
+  const nearest = candidates.sort((left, right) => (
+    Math.abs(Number(left.userData.bayIndex) - Number(asset.bayIndex))
+    - Math.abs(Number(right.userData.bayIndex) - Number(asset.bayIndex))
+  ))[0] || null;
+  return {
+    object: nearest,
+    resolvedBy: nearest ? "nearestComponentType" : ""
+  };
+}
+
+function findPlacementObject(group, placementId) {
+  if (!placementId) return null;
+  let match = null;
+  group.traverse((object) => {
+    if (!match && object.userData?.placementId === placementId) match = object;
+  });
+  return match;
+}
+
+function isPlannerSceneDebugEnabled() {
+  return new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
+function normalizeGeneratedVisualDebugRecord(record = {}) {
+  return {
+    assetType: record.visualAssetType || "",
+    visualCategory: record.visualCategory || "",
+    item: record.item || record.visualCategory || "",
+    targetKind: record.targetKind || "",
+    targetComponent: record.targetComponent || record.sourceComponentType || "",
+    targetBayIndex: Number.isFinite(Number(record.targetBayIndex))
+      ? Number(record.targetBayIndex)
+      : Number(record.bayIndex),
+    sourcePlacementId: record.sourcePlacementId || "",
+    sourceComponentType: record.sourceComponentType || "",
+    position: record.finalPosition || record.targetPosition || null,
+    bbox: record.finalBoundingBox || null,
+    ruleSource: record.ruleSource || "",
+    trouserVisualScaling: record.trouserVisualScaling || null,
+    skipReason: formatTrouserVisualScalingDebug(record.trouserVisualScaling)
+  };
+}
+
+function formatTrouserVisualScalingDebug(scaling) {
+  if (!scaling?.applied) return "";
+  return [
+    `raw=${Math.round(Number(scaling.rawBBoxWidth) || 0)}`,
+    `target=${Math.round(Number(scaling.targetWidth) || 0)}`,
+    `scaleX=${Number(scaling.scaleX || 0).toFixed(3)}`,
+    `final=${Math.round(Number(scaling.finalBBoxWidth) || 0)}`
+  ].join(" ");
+}
+
+function normalizeSkippedVisualDebugRecord(record = {}) {
+  return {
+    assetType: record.visualAssetType || record.assetType || "",
+    visualCategory: record.visualCategory || "",
+    item: record.item || record.visualCategory || "",
+    targetKind: record.targetKind || "",
+    targetBayIndex: Number.isFinite(Number(record.targetBayIndex))
+      ? Number(record.targetBayIndex)
+      : Number(record.bayIndex),
+    sourcePlacementId: record.sourcePlacementId || "",
+    sourceComponentType: record.sourceComponentType || "",
+    skipReason: record.skipReason || "",
+    detail: record
+  };
+}
+
+function normalizeLoadedVisualDebugRecord(record = {}) {
+  return {
+    assetType: record.visualAssetType || record.assetType || "",
+    visualCategory: record.visualCategory || "",
+    item: record.item || record.visualCategory || "",
+    targetKind: record.targetKind || "",
+    targetBayIndex: Number.isFinite(Number(record.targetBayIndex))
+      ? Number(record.targetBayIndex)
+      : Number(record.bayIndex),
+    sourcePlacementId: record.sourcePlacementId || "",
+    sourceComponentType: record.sourceComponentType || "",
+    ruleSource: record.ruleSource || ""
+  };
+}
+
+function getAiPlannerVisualDebugPayload(report = {}) {
+  const diagnostics = report.visualAssetDiagnostics || {};
+  const generated = (report.visualAssets || []).map(normalizeGeneratedVisualDebugRecord);
+  const skipped = (diagnostics.skippedVisualAssets || []).map(normalizeSkippedVisualDebugRecord);
+  const loadedAssets = (diagnostics.loadedAssets || []).map(normalizeLoadedVisualDebugRecord);
+  const failedAssets = (diagnostics.failedAssets || []).map(normalizeSkippedVisualDebugRecord);
+  return {
+    activeRender: getAiPlannerActiveRenderPayload(report),
+    generated,
+    skipped,
+    loadedAssets,
+    failedAssets,
+    summary: {
+      generatedCount: generated.length,
+      skippedCount: skipped.length,
+      loadedCount: loadedAssets.length,
+      failedCount: failedAssets.length
+    }
+  };
+}
+
+function getAiPlannerActiveRenderPayload(report = {}) {
+  const info = report.activeRender || {};
+  const diagnostics = report.visualAssetDiagnostics || {};
+  return {
+    renderId: info.renderId || "",
+    planType: info.planType || "",
+    planTitle: info.planTitle || "",
+    planId: info.planId || "",
+    candidatePlanId: info.candidatePlanId || "",
+    visualDebugKey: info.visualDebugKey || "",
+    sceneJsImportUrl: report.sceneJsImportUrl || "",
+    generatedCount: Array.isArray(report.visualAssets) ? report.visualAssets.length : 0,
+    skippedCount: Array.isArray(diagnostics.skippedVisualAssets) ? diagnostics.skippedVisualAssets.length : 0,
+    timestamp: info.timestamp || new Date().toISOString()
+  };
+}
+
+function publishAiPlannerActiveRender(modelReport = {}) {
+  if (typeof window === "undefined") return;
+  const payload = getAiPlannerActiveRenderPayload(modelReport);
+  if (!payload.renderId && !payload.planType) return;
+  window.__AI_PLANNER_ACTIVE_RENDER__ = payload;
+  updateAiPlannerRenderStamp(payload);
+}
+
+function updateAiPlannerRenderStamp(activeRender = {}) {
+  if (typeof document === "undefined" || !activeRender.renderId) return;
+  const stamp = document.querySelector(`[data-ai-render-stamp][data-render-id="${activeRender.renderId}"]`);
+  if (!stamp) return;
+  stamp.textContent = [
+    `renderId: ${activeRender.renderId}`,
+    `planType: ${activeRender.planType || "-"}`,
+    `planTitle: ${activeRender.planTitle || "-"}`,
+    `planId: ${activeRender.planId || "-"}`,
+    `candidatePlanId: ${activeRender.candidatePlanId || "-"}`,
+    `visualDebug: ${activeRender.visualDebugKey || "-"}`,
+    `sceneJsImportUrl: ${activeRender.sceneJsImportUrl || "-"}`,
+    `visualGeneratedCount: ${Number(activeRender.generatedCount) || 0}`,
+    `visualSkippedCount: ${Number(activeRender.skippedCount) || 0}`
+  ].join("\n");
+}
+
+function publishAiPlannerVisualDebug(modelReport = {}) {
+  if (typeof window === "undefined") return;
+  const payload = getAiPlannerVisualDebugPayload(modelReport);
+  window.__AI_PLANNER_VISUAL_DEBUG__ = payload;
+  if (isPlannerSceneDebugEnabled()) {
+    renderAiPlannerVisualDebugTable(payload);
+  }
+}
+
+function renderAiPlannerVisualDebugTable(payload) {
+  if (typeof document === "undefined") return;
+  const host = document.querySelector(".candidate-debug-panel") || document.querySelector(".ai-plan-panel");
+  if (!host) return;
+  let section = document.querySelector("[data-visual-asset-debug-table]");
+  if (!section) {
+    section = document.createElement("section");
+    section.setAttribute("data-visual-asset-debug-table", "true");
+    section.className = "candidate-debug-panel";
+    host.appendChild(section);
+  }
+  const rows = [
+    ...(payload.generated || []).map((record) => ({ status: "generated", ...record, skipReason: "" })),
+    ...(payload.skipped || []).map((record) => ({ status: "skipped", ...record }))
+  ];
+  const activeRender = payload.activeRender || {};
+  section.innerHTML = `
+    <h2>Visual Asset Debug</h2>
+    <dl>
+      <div><dt>activeRenderId</dt><dd>${escapeDebugText(activeRender.renderId || "")}</dd></div>
+      <div><dt>activePlanType</dt><dd>${escapeDebugText(activeRender.planType || "")}</dd></div>
+      <div><dt>activePlanTitle</dt><dd>${escapeDebugText(activeRender.planTitle || "")}</dd></div>
+      <div><dt>activeCandidatePlanId</dt><dd>${escapeDebugText(activeRender.candidatePlanId || "")}</dd></div>
+      <div><dt>generatedCount</dt><dd>${payload.summary.generatedCount}</dd></div>
+      <div><dt>skippedCount</dt><dd>${payload.summary.skippedCount}</dd></div>
+      <div><dt>loadedCount</dt><dd>${payload.summary.loadedCount}</dd></div>
+      <div><dt>failedCount</dt><dd>${payload.summary.failedCount}</dd></div>
+    </dl>
+    <div class="candidate-heatmap-table">
+      <div class="candidate-heatmap-row candidate-heatmap-head">
+        <span>status</span><span>assetType</span><span>item</span><span>targetKind</span>
+        <span>bayIndex</span><span>sourceComponentType</span><span>skipReason</span>
+      </div>
+      ${rows.map((row) => `
+        <div class="candidate-heatmap-row">
+          <span>${escapeDebugText(row.status)}</span>
+          <span>${escapeDebugText(row.assetType)}</span>
+          <span>${escapeDebugText(row.item)}</span>
+          <span>${escapeDebugText(row.targetKind)}</span>
+          <span>${escapeDebugText(row.targetBayIndex ?? "")}</span>
+          <span>${escapeDebugText(row.sourceComponentType || "")}</span>
+          <span>${escapeDebugText(row.skipReason || "")}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function escapeDebugText(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+async function createPlannerVisualAssetModel(assetPath, visualAssetType) {
+  try {
+    const source = await loadVisualAssetModel(assetPath, visualAssetType);
+    const clone = source.clone(true);
+    cleanupLoadedModel(clone);
+    clone.name = `Planner Visual Asset ${visualAssetType}`;
+    clone.userData = {
+      ...clone.userData,
+      isPlannerVisualAsset: true,
+      visualAssetType
+    };
+    clone.traverse((child) => {
+      child.frustumCulled = false;
+      if (!child.isMesh) return;
+      child.castShadow = true;
+      child.receiveShadow = true;
+    });
+    return clone;
+  } catch (error) {
+    console.warn("[ai-planner] visual-asset-load-failed", {
+      visualAssetType,
+      assetPath,
+      reason: error.message
+    });
+    return null;
+  }
+}
+
+function loadVisualAssetModel(assetPath, visualAssetType = "") {
+  const version = plannerVisualAssetVersions[visualAssetType] || plannerVisualAssetVersions.default;
+  const url = /[?&]v=/.test(assetPath)
+    ? assetPath
+    : `${assetPath}${assetPath.includes("?") ? "&" : "?"}v=${version}`;
+  if (!visualAssetModelCache.has(url)) {
+    visualAssetModelCache.set(url, withTimeout(new Promise((resolve, reject) => {
+      loader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
+    }), 12000, url));
+  }
+  return visualAssetModelCache.get(url);
+}
+
+function positionPlannerVisualAsset({
+  visualObject,
+  asset,
+  bay,
+  group,
+  sourcePlacement,
+  roomHeightMm,
+  report
+}) {
+  visualObject.updateMatrixWorld(true);
+  const rawBox = new THREE.Box3().setFromObject(visualObject);
+  const rawSize = rawBox.getSize(new THREE.Vector3());
+  const sourceLocalBox = sourcePlacement ? getObjectBoxRelativeTo(sourcePlacement, group) : null;
+  const sourceCenter = sourceLocalBox && !sourceLocalBox.isEmpty()
+    ? sourceLocalBox.getCenter(new THREE.Vector3())
+    : null;
+  const shelfSurface = getPlannerVisualShelfSurface({
+    asset,
+    sourcePlacement,
+    group
+  });
+  if (asset.targetKind === "shelf" && !shelfSurface.applied) {
+    return {
+      placed: false,
+      skipReason: "shelfSurfaceNotFound",
+      diagnostics: {
+        assetType: asset.visualAssetType || "",
+        sourcePlacementId: asset.sourcePlacementId || "",
+        shelfPlacementHeight: Number.isFinite(Number(asset.heightFromFloor)) ? Number(asset.heightFromFloor) : null
+      }
+    };
+  }
+  if (asset.targetKind === "top" && sourceLocalBox && !sourceLocalBox.isEmpty()) {
+    const availableHeight = meters(Number(roomHeightMm) || 0) - sourceLocalBox.max.y - 0.01;
+    if (availableHeight <= 0) {
+      return { placed: false, skipReason: getTopClearanceSkipReason(asset) };
+    }
+    if (availableHeight > 0 && rawSize.y > availableHeight) {
+      return { placed: false, skipReason: getTopClearanceSkipReason(asset) };
+    }
+  }
+
+  visualObject.scale.setScalar(1);
+  visualObject.updateMatrixWorld(true);
+  const target = getPlannerVisualAssetTarget({
+    asset,
+    bay,
+    sourceLocalBox,
+    sourceCenter,
+    shelfSurfaceLocalBox: shelfSurface.localBox,
+    shelfSurfaceY: shelfSurface.surfaceY
+  });
+  if (asset.visualCategory === "shoe" || String(asset.visualAssetType || "").includes("shoePair")) {
+    target.y -= rawBox.min.y;
+  }
+  visualObject.position.set(target.x, target.y, target.z);
+  if (target.rotation) {
+    visualObject.rotation.set(target.rotation.x || 0, target.rotation.y || 0, target.rotation.z || 0);
+  }
+  visualObject.updateMatrixWorld(true);
+  let finalBox = new THREE.Box3().setFromObject(visualObject);
+  const trouserVisualScaling = scaleTrouserVisualAssetToSourceWidth({
+    visualObject,
+    asset,
+    rawSize,
+    sourceLocalBox,
+    sourcePlacement
+  });
+  if (trouserVisualScaling.applied) {
+    visualObject.updateMatrixWorld(true);
+    finalBox = new THREE.Box3().setFromObject(visualObject);
+  }
+  const railCentering = centerHangingVisualOnRail({
+    visualObject,
+    asset,
+    finalBox,
+    sourceLocalBox
+  });
+  if (railCentering.applied) {
+    visualObject.updateMatrixWorld(true);
+    finalBox = new THREE.Box3().setFromObject(visualObject);
+  }
+  const shelfSurfaceAlignment = alignPlannerVisualToShelfSurface({
+    visualObject,
+    asset,
+    target,
+    shelfSurface,
+    finalBox
+  });
+  if (shelfSurfaceAlignment.applied) {
+    finalBox = shelfSurfaceAlignment.finalBox;
+  }
+  const { finalBox: _shelfSurfaceAlignmentBox, ...shelfSurfaceAlignmentDebug } = shelfSurfaceAlignment;
+  const shoeSurfaceY = asset.visualCategory === "shoe"
+    ? target.surfaceTop ?? target.y
+    : null;
+  const shoeFloatingError = asset.visualCategory === "shoe" && shoeSurfaceY !== null
+    ? finalBox.min.y - shoeSurfaceY
+    : null;
+  const shoeSurfaceBox = asset.visualCategory === "shoe"
+    ? getShoeSurfaceBox({ asset, bay, sourceLocalBox: shelfSurface.localBox || sourceLocalBox })
+    : null;
+  const shoeSurfaceValidation = shoeSurfaceBox
+    ? validateBoxInsideSurface(finalBox, shoeSurfaceBox)
+    : null;
+  const shortHangRailValidation = asset.visualCategory === "shortHang" && sourceLocalBox
+    ? validateShortHangAgainstRail(finalBox, sourceLocalBox)
+    : null;
+  const hangingRailValidation = ["shortHang", "longHang"].includes(asset.visualCategory) && sourceLocalBox
+    ? validateShortHangAgainstRail(finalBox, sourceLocalBox)
+    : null;
+  if (asset.visualCategory === "shoe" && shoeSurfaceValidation
+    && (!shoeSurfaceValidation.insideSurfaceX || !shoeSurfaceValidation.insideSurfaceZ)) {
+    return {
+      placed: false,
+      skipReason: "noValidShoeSurface",
+      diagnostics: {
+        shoeAssetId: asset.id,
+        targetSurfaceType: getShoeTargetSurfaceType(asset, sourcePlacement),
+        targetBayIndex: Number(asset.bayIndex),
+        surfaceBBox: serializeBox(shoeSurfaceBox),
+        finalBBox: serializeBox(finalBox),
+        ...shoeSurfaceValidation,
+        shoeSkippedReason: "noValidShoeSurface"
+      }
+    };
+  }
+  if (asset.visualCategory === "shortHang" && shortHangRailValidation
+    && !shortHangRailValidation.insideRailSpanX) {
+    return {
+      placed: false,
+      skipReason: "assetTooWideForRail",
+      diagnostics: {
+        assetId: asset.id,
+        rawBboxSizeX: toMm(rawSize.x),
+        ...shortHangRailValidation,
+        finalScale: serializeVector(visualObject.scale)
+      }
+    };
+  }
+
+  visualObject.userData = {
+    ...visualObject.userData,
+    attachedZoneId: asset.attachedZoneId,
+    wallId: asset.wallId,
+    bayIndex: Number(asset.bayIndex),
+    targetKind: asset.targetKind || "",
+    visualCategory: asset.visualCategory || "",
+    instanceIndex: Number(asset.instanceIndex) || 0,
+    sourcePlacementId: asset.sourcePlacementId,
+    targetPosition: serializeVectorMm(new THREE.Vector3(target.x, target.y, target.z)),
+    targetY: asset.visualCategory === "shoe" ? toMm(target.y) : null,
+    surfaceTop: shoeSurfaceY === null ? null : toMm(shoeSurfaceY),
+    fullSurfaceTop: asset.visualCategory === "shoe" ? toMm(target.fullSurfaceTop ?? target.surfaceTop ?? target.y) : null,
+    visualSurfaceTop: asset.visualCategory === "shoe" ? toMm(target.visualSurfaceTop ?? target.surfaceTop ?? target.y) : null,
+    shoeShelfVisualDrop: asset.visualCategory === "shoe" ? toMm(target.shoeShelfVisualDrop || 0) : null,
+    rawBBoxSize: serializeVectorMm(rawSize),
+    rawBboxMinY: toMm(rawBox.min.y),
+    shoeSurfaceY: shoeSurfaceY === null ? null : toMm(shoeSurfaceY),
+    shoeFloatingError: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    shoeSurfaceDelta: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    shoeSurfaceDeltaToVisualTop: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    shoeSurfaceBBox: shoeSurfaceBox ? serializeBox(shoeSurfaceBox) : null,
+    shoeSurfaceValidation,
+    shortHangRailValidation,
+    hangingRailValidation,
+    railCentering,
+    trouserVisualScaling,
+    shelfSurfaceAlignment: shelfSurfaceAlignmentDebug
+  };
+  report.runtimeDebug.push({
+    type: "plannerVisualAsset",
+    visualAssetType: asset.visualAssetType,
+    attachedZoneId: asset.attachedZoneId,
+    wallId: asset.wallId,
+    bayIndex: Number(asset.bayIndex),
+    targetKind: asset.targetKind || "",
+    visualCategory: asset.visualCategory || "",
+    instanceIndex: Number(asset.instanceIndex) || 0,
+    railReference: sourceLocalBox && !sourceLocalBox.isEmpty() ? serializeBox(sourceLocalBox) : null,
+    target: serializeVectorMm(new THREE.Vector3(target.x, target.y, target.z)),
+    targetY: asset.visualCategory === "shoe" ? toMm(target.y) : null,
+    surfaceTop: shoeSurfaceY === null ? null : toMm(shoeSurfaceY),
+    fullSurfaceTop: asset.visualCategory === "shoe" ? toMm(target.fullSurfaceTop ?? target.surfaceTop ?? target.y) : null,
+    visualSurfaceTop: asset.visualCategory === "shoe" ? toMm(target.visualSurfaceTop ?? target.surfaceTop ?? target.y) : null,
+    shoeShelfVisualDrop: asset.visualCategory === "shoe" ? toMm(target.shoeShelfVisualDrop || 0) : null,
+    rawBBoxSize: serializeVectorMm(rawSize),
+    finalBBoxSize: serializeVectorMm(finalBox.getSize(new THREE.Vector3())),
+    scale: serializeVector(visualObject.scale),
+    shoeAssetId: asset.visualCategory === "shoe" ? asset.id : "",
+    targetSurfaceType: asset.visualCategory === "shoe" ? getShoeTargetSurfaceType(asset, sourcePlacement) : "",
+    targetBayIndex: asset.visualCategory === "shoe" ? Number(asset.bayIndex) : null,
+    surfaceBBox: shoeSurfaceBox ? serializeBox(shoeSurfaceBox) : null,
+    finalBBox: asset.visualCategory === "shoe" ? serializeBox(finalBox) : null,
+    insideSurfaceX: shoeSurfaceValidation?.insideSurfaceX ?? null,
+    insideSurfaceZ: shoeSurfaceValidation?.insideSurfaceZ ?? null,
+    intersectsPost: shoeSurfaceValidation?.intersectsPost ?? null,
+    centerOffsetFromSurfaceCenterX: shoeSurfaceValidation?.centerOffsetFromSurfaceCenterX ?? null,
+    centerOffsetFromSurfaceCenterZ: shoeSurfaceValidation?.centerOffsetFromSurfaceCenterZ ?? null,
+    assetId: asset.visualCategory === "shortHang" ? asset.id : "",
+    rawBboxSizeX: asset.visualCategory === "shortHang" ? toMm(rawSize.x) : null,
+    railSpanX: hangingRailValidation?.railSpanX ?? null,
+    finalBboxSizeX: hangingRailValidation?.finalBboxSizeX ?? null,
+    insideRailSpanX: hangingRailValidation?.insideRailSpanX ?? null,
+    finalBboxMaxYMinusRailY: hangingRailValidation?.finalBboxMaxYMinusRailY ?? null,
+    centerZDelta: hangingRailValidation?.centerZDelta ?? null,
+    railCenterX: railCentering.railCenterX,
+    railCenterZ: railCentering.railCenterZ,
+    visualBBoxCenterXBefore: railCentering.visualBBoxCenterXBefore,
+    visualBBoxCenterXAfter: railCentering.visualBBoxCenterXAfter,
+    visualRailCenterDeltaX: railCentering.visualRailCenterDeltaX,
+    visualBBoxCenterZBefore: railCentering.visualBBoxCenterZBefore,
+    visualBBoxCenterZAfter: railCentering.visualBBoxCenterZAfter,
+    visualRailCenterDeltaZ: railCentering.visualRailCenterDeltaZ,
+    visualBBoxSizeX: hangingRailValidation?.finalBboxSizeX ?? null,
+    trouserVisualScaling,
+    shelfSurfaceAlignment: shelfSurfaceAlignmentDebug,
+    surfaceY: shoeSurfaceY === null ? null : toMm(shoeSurfaceY),
+    rawBboxMinY: asset.visualCategory === "shoe" ? toMm(rawBox.min.y) : null,
+    finalBboxMinY: asset.visualCategory === "shoe" ? toMm(finalBox.min.y) : null,
+    shoeSurfaceDelta: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    shoeSurfaceDeltaToVisualTop: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    finalBboxMinYMinusSurfaceY: shoeFloatingError === null ? null : toMm(shoeFloatingError),
+    shoeFloatingError: shoeFloatingError === null ? null : Math.abs(toMm(shoeFloatingError)) > 12
+  });
+  return { placed: true, skipReason: "" };
+}
+
+function getPlannerVisualShelfSurface({
+  asset,
+  sourcePlacement,
+  group
+}) {
+  const empty = {
+    applied: false,
+    localBox: null,
+    worldBox: null,
+    surfaceY: null,
+    wholeShelfMaxY: null,
+    selectedBoardMeshName: "",
+    boardSurfaceY: null,
+    boardMeshFound: false,
+    shelfObjectName: "",
+    shelfMeshCount: 0
+  };
+  if (asset.targetKind !== "shelf" || !sourcePlacement) return empty;
+  const componentType = sourcePlacement.userData?.componentType || asset.sourceComponentType || "";
+  if (!["woodShelf", "displayShelf", "glassShelf", "shoeShelf"].includes(componentType)) return empty;
+
+  group.updateMatrixWorld(true);
+  sourcePlacement.updateMatrixWorld(true);
+  const wholeWorldBox = new THREE.Box3().setFromObject(sourcePlacement);
+  const wholeLocalBox = getObjectBoxRelativeTo(sourcePlacement, group);
+  if (wholeWorldBox.isEmpty() || wholeLocalBox.isEmpty()) return empty;
+
+  const boardMeshes = findPlannerShelfBoardMeshes(sourcePlacement, group, wholeLocalBox);
+  const shelfObjects = boardMeshes.length ? boardMeshes : [sourcePlacement];
+  const worldBox = new THREE.Box3();
+  shelfObjects.forEach((shelfObject) => {
+    const shelfObjectBox = new THREE.Box3().setFromObject(shelfObject);
+    if (!shelfObjectBox.isEmpty()) worldBox.union(shelfObjectBox);
+  });
+  const localBox = getObjectsBoxRelativeTo(shelfObjects, group);
+  if (worldBox.isEmpty() || localBox.isEmpty()) {
+    return {
+      ...empty,
+      applied: true,
+      localBox: wholeLocalBox,
+      worldBox: wholeWorldBox,
+      surfaceY: wholeWorldBox.max.y,
+      wholeShelfMaxY: wholeWorldBox.max.y,
+      shelfObjectName: sourcePlacement.name || sourcePlacement.type || "",
+      shelfMeshCount: 1
+    };
+  }
+
+  return {
+    applied: true,
+    localBox,
+    worldBox,
+    surfaceY: worldBox.max.y,
+    wholeShelfMaxY: wholeWorldBox.max.y,
+    selectedBoardMeshName: boardMeshes.map((object) => object.name || object.type || "").filter(Boolean).join(", "),
+    boardSurfaceY: boardMeshes.length ? worldBox.max.y : null,
+    boardMeshFound: boardMeshes.length > 0,
+    shelfObjectName: shelfObjects.map((object) => object.name || object.type || "").filter(Boolean).join(", "),
+    shelfMeshCount: shelfObjects.length
+  };
+}
+
+function findPlannerShelfBoardMeshes(shelfObject, group, wholeLocalBox) {
+  const exactBoardMeshes = [];
+  shelfObject.traverse((child) => {
+    if (!child.isMesh) return;
+    if (child.name === "Geom3D_组件#15") exactBoardMeshes.push(child);
+  });
+  if (exactBoardMeshes.length) return exactBoardMeshes;
+
+  const wholeSize = wholeLocalBox.getSize(new THREE.Vector3());
+  const candidates = [];
+  shelfObject.traverse((child) => {
+    if (!child.isMesh || isMetalShelfMesh(child)) return;
+    const box = getObjectBoxRelativeTo(child, group);
+    if (!box || box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    const widthRatio = wholeSize.x ? size.x / wholeSize.x : 0;
+    const depthRatio = wholeSize.z ? size.z / wholeSize.z : 0;
+    if (widthRatio < 0.82 || depthRatio < 0.82) return;
+    if (toMm(size.y) > 45) return;
+    candidates.push({
+      mesh: child,
+      widthRatio,
+      depthRatio,
+      thickness: size.y,
+      area: size.x * size.z
+    });
+  });
+  candidates.sort((a, b) => (
+    b.area - a.area
+    || a.thickness - b.thickness
+    || b.widthRatio - a.widthRatio
+    || b.depthRatio - a.depthRatio
+  ));
+  return candidates.slice(0, 1).map((candidate) => candidate.mesh);
+}
+
+function isMetalShelfMesh(mesh) {
+  return getMaterialNames(mesh).some((name) => /metal|iron|steel|aluminum|m07|bracket|support|connector|灰色支撑件/i.test(name));
+}
+
+const SHELF_TOP_VISUAL_COMPENSATION_MM = -22;
+
+function alignPlannerVisualToShelfSurface({
+  visualObject,
+  asset,
+  target,
+  shelfSurface,
+  finalBox
+}) {
+  const empty = {
+    applied: false,
+    assetType: asset.visualAssetType || "",
+    sourcePlacementId: asset.sourcePlacementId || "",
+    shelfPlacementHeight: Number.isFinite(Number(asset.heightFromFloor)) ? Number(asset.heightFromFloor) : null,
+    shelfBoxMaxY: shelfSurface?.worldBox && !shelfSurface.worldBox.isEmpty() ? toMm(shelfSurface.worldBox.max.y) : null,
+    selectedBoardMeshName: shelfSurface?.selectedBoardMeshName || "",
+    boardSurfaceY: Number.isFinite(shelfSurface?.boardSurfaceY) ? toMm(shelfSurface.boardSurfaceY) : null,
+    wholeShelfMaxY: Number.isFinite(shelfSurface?.wholeShelfMaxY) ? toMm(shelfSurface.wholeShelfMaxY) : null,
+    delta: Number.isFinite(shelfSurface?.wholeShelfMaxY) && Number.isFinite(shelfSurface?.surfaceY)
+      ? toMm(shelfSurface.wholeShelfMaxY - shelfSurface.surfaceY)
+      : null,
+    visualBoxMinY: finalBox && !finalBox.isEmpty() ? toMm(finalBox.min.y) : null,
+    visualCompensationY: SHELF_TOP_VISUAL_COMPENSATION_MM,
+    appliedYAdjustment: 0,
+    finalObjectY: toMm(visualObject.position.y),
+    finalVisualY: toMm(visualObject.position.y),
+    shelfObjectName: shelfSurface?.shelfObjectName || "",
+    shelfMeshCount: shelfSurface?.shelfMeshCount || 0
+  };
+  if (asset.targetKind !== "shelf" || !shelfSurface?.localBox || shelfSurface.localBox.isEmpty()
+    || !finalBox || finalBox.isEmpty()) {
+    return empty;
+  }
+
+  const shelfSurfaceY = shelfSurface.surfaceY;
+  const compensatedSurfaceY = shelfSurfaceY + meters(SHELF_TOP_VISUAL_COMPENSATION_MM);
+  const appliedYAdjustment = compensatedSurfaceY - finalBox.min.y;
+  visualObject.position.y += appliedYAdjustment;
+  visualObject.updateMatrixWorld(true);
+  const adjustedBox = new THREE.Box3().setFromObject(visualObject);
+  target.y = visualObject.position.y;
+  target.surfaceTop = compensatedSurfaceY;
+  target.fullSurfaceTop = shelfSurfaceY;
+  target.visualSurfaceTop = compensatedSurfaceY;
+  target.shoeShelfVisualDrop = meters(SHELF_TOP_VISUAL_COMPENSATION_MM);
+
+  const diagnostic = {
+    ...empty,
+    applied: true,
+    shelfBoxMaxY: toMm(shelfSurface.worldBox.max.y),
+    selectedBoardMeshName: shelfSurface.selectedBoardMeshName || "",
+    boardSurfaceY: Number.isFinite(shelfSurface.boardSurfaceY) ? toMm(shelfSurface.boardSurfaceY) : null,
+    wholeShelfMaxY: Number.isFinite(shelfSurface.wholeShelfMaxY) ? toMm(shelfSurface.wholeShelfMaxY) : null,
+    delta: Number.isFinite(shelfSurface.wholeShelfMaxY) ? toMm(shelfSurface.wholeShelfMaxY - shelfSurfaceY) : null,
+    shelfSurfaceY: toMm(shelfSurfaceY),
+    visualCompensationY: SHELF_TOP_VISUAL_COMPENSATION_MM,
+    visualBoxMinY: toMm(finalBox.min.y),
+    appliedYAdjustment: toMm(appliedYAdjustment),
+    finalObjectY: toMm(visualObject.position.y),
+    finalVisualY: toMm(visualObject.position.y),
+    finalVisualBoxMinY: toMm(adjustedBox.min.y)
+  };
+  console.log("[ai-planner shelf visual surface]", {
+    assetType: diagnostic.assetType,
+    sourcePlacementId: diagnostic.sourcePlacementId,
+    shelfPlacementHeight: diagnostic.shelfPlacementHeight,
+    "shelfBox.max.y": diagnostic.shelfBoxMaxY,
+    selectedBoardMeshName: diagnostic.selectedBoardMeshName,
+    boardSurfaceY: diagnostic.boardSurfaceY,
+    visualCompensationY: diagnostic.visualCompensationY,
+    wholeShelfMaxY: diagnostic.wholeShelfMaxY,
+    delta: diagnostic.delta,
+    "visualBox.min.y": diagnostic.visualBoxMinY,
+    appliedYAdjustment: diagnostic.appliedYAdjustment,
+    finalObjectY: diagnostic.finalObjectY,
+    finalVisualY: diagnostic.finalVisualY
+  });
+  return {
+    ...diagnostic,
+    finalBox: adjustedBox
+  };
+}
+
+function getPlannerVisualAssetTarget({
+  asset,
+  bay,
+  sourceLocalBox,
+  sourceCenter,
+  shelfSurfaceLocalBox = null,
+  shelfSurfaceY = null
+}) {
+  const targetKind = asset.targetKind || "rail";
+  if (targetKind === "shelf") {
+    const surfaceCenter = shelfSurfaceLocalBox && !shelfSurfaceLocalBox.isEmpty()
+      ? shelfSurfaceLocalBox.getCenter(new THREE.Vector3())
+      : null;
+    const surfaceTop = shelfSurfaceLocalBox && !shelfSurfaceLocalBox.isEmpty()
+      ? shelfSurfaceY
+      : 0;
+    return {
+      x: surfaceCenter ? surfaceCenter.x : bay.centerX,
+      y: surfaceTop,
+      z: surfaceCenter ? surfaceCenter.z : 0,
+      surfaceTop,
+      fullSurfaceTop: surfaceTop,
+      visualSurfaceTop: surfaceTop,
+      shoeShelfVisualDrop: 0
+    };
+  }
+  const fallbackHeight = meters(Number(asset.heightFromFloor || asset.railHeightFromFloor) || 0);
+  if (targetKind === "floor") {
+    const isShoeAsset = asset.visualCategory === "shoe" || String(asset.visualAssetType || "").includes("shoePair");
+    return {
+      x: bay.centerX,
+      y: isShoeAsset ? 0 : 0.005,
+      z: 0,
+      surfaceTop: 0
+    };
+  }
+  if (targetKind === "top") {
+    const topCenter = sourceLocalBox && !sourceLocalBox.isEmpty()
+      ? sourceLocalBox.getCenter(new THREE.Vector3())
+      : null;
+    return {
+      x: topCenter ? topCenter.x : bay.centerX,
+      y: (sourceLocalBox && !sourceLocalBox.isEmpty() ? sourceLocalBox.max.y : fallbackHeight) + 0.005,
+      z: topCenter ? topCenter.z : 0
+    };
+  }
+  if (sourceLocalBox && !sourceLocalBox.isEmpty()) {
+    const railCenter = sourceLocalBox.getCenter(new THREE.Vector3());
+    return {
+      x: railCenter.x,
+      y: railCenter.y,
+      z: railCenter.z
+    };
+  }
+  return {
+    x: bay.centerX,
+    y: meters(Number(asset.railHeightFromFloor) || 1850),
+    z: sourceCenter ? sourceCenter.z : 0
+  };
+}
+
+function getShoeTargetSurfaceType(asset, sourcePlacement) {
+  if (asset.targetKind === "shelf") return sourcePlacement?.userData?.componentType || "woodShelf";
+  return "floor";
+}
+
+function getShoeSurfaceBox({ asset, bay, sourceLocalBox }) {
+  if (asset.targetKind === "shelf" && sourceLocalBox && !sourceLocalBox.isEmpty()) {
+    return sourceLocalBox.clone();
+  }
+  if (asset.targetKind !== "floor") return null;
+  const halfWidth = Math.max(0.1, Number(bay.innerBayWidth || bay.width || 0.8) * 0.5);
+  const halfDepth = 0.28;
+  return new THREE.Box3(
+    new THREE.Vector3(bay.centerX - halfWidth, 0, -halfDepth),
+    new THREE.Vector3(bay.centerX + halfWidth, 0.02, halfDepth)
+  );
+}
+
+function scaleTrouserVisualAssetToSourceWidth({
+  visualObject,
+  asset,
+  rawSize,
+  sourceLocalBox,
+  sourcePlacement
+}) {
+  const empty = {
+    applied: false,
+    assetType: asset.visualAssetType || "",
+    sourcePlacementId: asset.sourcePlacementId || "",
+    rawBBoxWidth: toMm(rawSize?.x || 0),
+    targetWidth: null,
+    scaleX: visualObject.scale.x,
+    finalBBoxWidth: null
+  };
+  if (!isTrouserPlannerVisualAsset(asset)) return empty;
+  const targetWidth = getTrouserVisualTargetWidth(sourcePlacement, sourceLocalBox);
+  if (!Number.isFinite(targetWidth) || targetWidth <= 0 || !rawSize?.x) return {
+    ...empty,
+    targetWidth: Number.isFinite(targetWidth) ? toMm(targetWidth) : null
+  };
+  visualObject.scale.x *= targetWidth / rawSize.x;
+  visualObject.updateMatrixWorld(true);
+  let finalBox = new THREE.Box3().setFromObject(visualObject);
+  if (sourceLocalBox && !sourceLocalBox.isEmpty()) {
+    const sourceCenter = sourceLocalBox.getCenter(new THREE.Vector3());
+    const visualCenter = finalBox.getCenter(new THREE.Vector3());
+    visualObject.position.x += sourceCenter.x - visualCenter.x;
+    visualObject.updateMatrixWorld(true);
+    finalBox = new THREE.Box3().setFromObject(visualObject);
+  }
+  return {
+    ...empty,
+    applied: true,
+    targetWidth: toMm(targetWidth),
+    scaleX: visualObject.scale.x,
+    finalBBoxWidth: toMm(finalBox.getSize(new THREE.Vector3()).x)
+  };
+}
+
+function isTrouserPlannerVisualAsset(asset = {}) {
+  return asset.visualCategory === "trouser" || asset.visualAssetType === "trouser-5";
+}
+
+function getTrouserVisualTargetWidth(sourcePlacement, sourceLocalBox) {
+  const explicitWidth = Number(
+    sourcePlacement?.userData?.requestedVisualWidth
+    ?? sourcePlacement?.userData?.visualScaleWidth
+    ?? sourcePlacement?.userData?.innerBayWidth
+  );
+  if (Number.isFinite(explicitWidth) && explicitWidth > 0) return meters(explicitWidth);
+  const bayWidth = Number(sourcePlacement?.userData?.bayWidth);
+  if (Number.isFinite(bayWidth) && bayWidth > 0) return bayWidth;
+  const actualWidth = Number(sourcePlacement?.userData?.actualWidth);
+  if (Number.isFinite(actualWidth) && actualWidth > 0) return actualWidth;
+  if (sourceLocalBox && !sourceLocalBox.isEmpty()) {
+    return sourceLocalBox.getSize(new THREE.Vector3()).x;
+  }
+  return null;
+}
+
+function centerHangingVisualOnRail({ visualObject, asset, finalBox, sourceLocalBox }) {
+  const empty = {
+    applied: false,
+    railCenterX: null,
+    railCenterZ: null,
+    visualBBoxCenterXBefore: null,
+    visualBBoxCenterXAfter: null,
+    visualRailCenterDeltaX: null,
+    visualBBoxCenterZBefore: null,
+    visualBBoxCenterZAfter: null,
+    visualRailCenterDeltaZ: null
+  };
+  if (!["shortHang", "longHang"].includes(asset.visualCategory)
+    || !sourceLocalBox
+    || sourceLocalBox.isEmpty()) {
+    return empty;
+  }
+  const railCenter = sourceLocalBox.getCenter(new THREE.Vector3());
+  const visualCenterBefore = finalBox.getCenter(new THREE.Vector3());
+  const deltaX = railCenter.x - visualCenterBefore.x;
+  const deltaZ = railCenter.z - visualCenterBefore.z;
+  if (Math.abs(deltaX) > HANGING_VISUAL_RAIL_CENTER_TOLERANCE) {
+    visualObject.position.x += deltaX;
+  }
+  if (Math.abs(deltaZ) > HANGING_VISUAL_RAIL_CENTER_TOLERANCE) {
+    visualObject.position.z += deltaZ;
+  }
+  visualObject.updateMatrixWorld(true);
+  const centeredBox = new THREE.Box3().setFromObject(visualObject);
+  const visualCenterAfter = centeredBox.getCenter(new THREE.Vector3());
+  return {
+    applied: Math.abs(deltaX) > HANGING_VISUAL_RAIL_CENTER_TOLERANCE
+      || Math.abs(deltaZ) > HANGING_VISUAL_RAIL_CENTER_TOLERANCE,
+    railCenterX: toMm(railCenter.x),
+    railCenterZ: toMm(railCenter.z),
+    visualBBoxCenterXBefore: toMm(visualCenterBefore.x),
+    visualBBoxCenterXAfter: toMm(visualCenterAfter.x),
+    visualRailCenterDeltaX: toMm(visualCenterAfter.x - railCenter.x),
+    visualBBoxCenterZBefore: toMm(visualCenterBefore.z),
+    visualBBoxCenterZAfter: toMm(visualCenterAfter.z),
+    visualRailCenterDeltaZ: toMm(visualCenterAfter.z - railCenter.z)
+  };
+}
+
+function validateBoxInsideSurface(box, surfaceBox) {
+  const tolerance = 0.002;
+  const boxCenter = box.getCenter(new THREE.Vector3());
+  const surfaceCenter = surfaceBox.getCenter(new THREE.Vector3());
+  const insideSurfaceX = box.min.x >= surfaceBox.min.x - tolerance
+    && box.max.x <= surfaceBox.max.x + tolerance;
+  const insideSurfaceZ = box.min.z >= surfaceBox.min.z - tolerance
+    && box.max.z <= surfaceBox.max.z + tolerance;
+  return {
+    insideSurfaceX,
+    insideSurfaceZ,
+    intersectsPost: false,
+    centerOffsetFromSurfaceCenterX: toMm(boxCenter.x - surfaceCenter.x),
+    centerOffsetFromSurfaceCenterZ: toMm(boxCenter.z - surfaceCenter.z)
+  };
+}
+
+function validateShortHangAgainstRail(box, railBox) {
+  const tolerance = 0.002;
+  const boxCenter = box.getCenter(new THREE.Vector3());
+  const railCenter = railBox.getCenter(new THREE.Vector3());
+  const railSpanX = Math.max(0, railBox.max.x - railBox.min.x);
+  const finalBboxSizeX = Math.max(0, box.max.x - box.min.x);
+  return {
+    railSpanX: toMm(railSpanX),
+    finalBboxSizeX: toMm(finalBboxSizeX),
+    insideRailSpanX: box.min.x >= railBox.min.x - tolerance && box.max.x <= railBox.max.x + tolerance,
+    finalBboxMaxYMinusRailY: toMm(box.max.y - railBox.max.y),
+    centerZDelta: toMm(boxCenter.z - railCenter.z)
+  };
+}
+
+function getTopClearanceSkipReason(asset) {
+  if (asset.visualCategory === "luggage") return "noTopClearanceForLuggage";
+  if (asset.visualCategory === "bedding") return "noTopClearanceForBedding";
+  return "noTopClearanceForVisualAsset";
 }
 
 function getVisualPostX(postPosition, postCount, shouldInsetEnds, inset) {
@@ -1457,7 +3382,7 @@ async function addPlacement(
   aluminumBaseWoodShelfSupportRegistry = null
 ) {
   const y = meters(placement.heightFromFloor);
-  const product = design.productBySku[placement.productSku] || design.productByType[placement.componentType];
+  const product = resolvePlacementSceneProduct(placement, design);
   const name = product?.nameCn || placement.componentType;
   const transform = getComponentTransform(placement.componentType, modelTransforms, report);
   const requestedVisualWidth = getCarbonRequestedVisualWidth({
@@ -1486,17 +3411,21 @@ async function addPlacement(
       && Number.isFinite(carbonPostInnerWidth)
       ? Math.min(requestedVisualWidth, carbonPostInnerWidth)
       : requestedVisualWidth;
-  const model = await createModelOrMissing(
+  const targetSize = modelTransforms.targetSize(placement.componentType, visualWidth, depth, product);
+  let model = await createModelOrMissing(
     product,
     series,
     report,
-    modelTransforms.targetSize(placement.componentType, visualWidth, depth, product),
+    targetSize,
     name,
     transform,
     placement.componentType,
     modelTransforms
   );
   applyPlacementColor(model, placement.componentType, config.frameColor, modelTransforms, series?.seriesId);
+  if (isWireBasketDrawerSku(placement.productSku)) {
+    applyWireBasketWhiteMaterial(model);
+  }
   const wallMountedSupportColorAdjustment = series?.seriesId === "wall-mounted-v2"
     && ["woodShelf", "shoeShelf"].includes(placement.componentType)
     ? applyWallMountedShelfSupportColor(model, config.frameColor)
@@ -1539,6 +3468,18 @@ async function addPlacement(
       model.position.x -= fixedModuleLateralVisualOffset;
     }
   }
+  if (placement.componentType === "drawerDouble") {
+    applyDrawerDoubleTopPanelWoodMaterial(model);
+  }
+  model = await createDrawerDoubleCompositeModel({
+    baseModel: model,
+    placement,
+    series,
+    report,
+    targetSize,
+    transform,
+    modelTransforms
+  });
   group.add(model);
   group.updateMatrixWorld(true);
   const hasWallMountedDistance = series?.seriesId === "wall-mounted-v2"
@@ -1778,11 +3719,17 @@ async function addPlacement(
     ...model.userData,
     isPlacementModel: true,
     placementId: placement.id,
+    componentType: placement.componentType,
     wallId: placement.wallId,
     bayIndex: placement.bayIndex,
     bayCenterX: x,
     bayWidth,
     actualWidth,
+    requestedVisualWidth: toMm(requestedVisualWidth),
+    visualScaleWidth: placement.visualScaleWidth,
+    innerBayWidth: placement.innerBayWidth,
+    componentCutLength: placement.componentCutLength,
+    widthSource: placement.widthSource || "",
     resizeMode: transform.resizeMode,
     scaleAxis: transform.scaleAxis,
     alignMode: transform.alignMode,
@@ -1820,7 +3767,7 @@ async function addPlacement(
     componentType: placement.componentType,
     productSku: product?.sku || placement.productSku || "",
     isBackCornerBackPanel: model.userData.isBackCornerBackPanel === true,
-    modelPath: product?.modelPath || product?.glbAssetPath || "",
+    modelPath: product?.glbAssetPath || product?.modelPath || "",
     heightFromFloor: placement.heightFromFloor,
     postCenterDistance: placement.postCenterDistance,
     postProfileWidth: placement.postProfileWidth,
@@ -2520,8 +4467,163 @@ function getAluminumPostModelPath(config) {
   return aluminumPostModelPaths[`${postStyle}:${connectionMode}`];
 }
 
+function getDrawerDoubleInsertRequests(placement) {
+  if (placement.componentType !== "drawerDouble") return [];
+  return [
+    { layer: "top", sku: placement.topDrawerSku },
+    { layer: "bottom", sku: placement.bottomDrawerSku }
+  ].map((request) => ({
+    ...request,
+    modelPath: drawerDoubleInsertModelPathsBySku.get(request.sku)
+  })).filter((request) => request.modelPath);
+}
+
+async function createDrawerDoubleCompositeModel({
+  baseModel,
+  placement,
+  series,
+  report,
+  targetSize,
+  transform,
+  modelTransforms
+}) {
+  const insertRequests = getDrawerDoubleInsertRequests(placement);
+  if (!insertRequests.length || baseModel.name === "Missing Model") return baseModel;
+  const defaultTrayLayers = getDrawerDoubleDefaultTrayLayers(baseModel);
+
+  const composite = new THREE.Group();
+  composite.name = baseModel.name || "Drawer Double";
+  composite.userData = {
+    ...baseModel.userData,
+    drawerDoubleBaseModel: true,
+    drawerDoubleInsertModelPaths: insertRequests.map((request) => request.modelPath)
+  };
+  composite.add(baseModel);
+
+  for (const request of insertRequests) {
+    const targetLayer = defaultTrayLayers[request.layer];
+    if (!targetLayer) continue;
+    targetLayer.mesh.parent?.remove(targetLayer.mesh);
+    const insertModel = await createModelOrMissing(
+      {
+        sku: `drawerDoubleInsert:${request.sku}`,
+        nameCn: "Drawer Double Insert",
+        modelPath: request.modelPath,
+        glbAssetPath: request.modelPath
+      },
+      series,
+      report,
+      targetSize,
+      "Drawer Double Insert",
+      transform,
+      placement.componentType,
+      modelTransforms
+    );
+    pruneDrawerDoubleInsertModel(insertModel, request.modelPath);
+    if (isWireBasketDrawerSku(request.sku)) {
+      applyWireBasketWhiteMaterial(insertModel);
+    }
+    alignDrawerDoubleInsertToTray(insertModel, targetLayer.box);
+    insertModel.userData = {
+      ...insertModel.userData,
+      isDrawerDoubleInsert: true,
+      drawerDoubleInsertLayer: request.layer,
+      drawerDoubleInsertSku: request.sku,
+      drawerDoubleInsertModelPath: request.modelPath
+    };
+    composite.add(insertModel);
+  }
+  return composite;
+}
+
+function getDrawerDoubleDefaultTrayLayers(baseModel) {
+  baseModel.updateMatrixWorld(true);
+  const trayMeshes = [];
+  baseModel.traverse((child) => {
+    if (!child.isMesh) return;
+    const materialNames = getMaterialNames(child);
+    if (!materialNames.some((name) => name === "[Color M05]")) return;
+    const box = new THREE.Box3().setFromObject(child);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    if (size.x < 0.45 || size.x > 0.8 || size.z < 0.35 || size.z > 0.55) return;
+    trayMeshes.push({
+      mesh: child,
+      box,
+      center: box.getCenter(new THREE.Vector3()),
+      size
+    });
+  });
+  trayMeshes.sort((a, b) => a.center.y - b.center.y);
+  return {
+    bottom: trayMeshes[0] || null,
+    top: trayMeshes[trayMeshes.length - 1] || null
+  };
+}
+
+function pruneDrawerDoubleInsertModel(insertModel, insertModelPath) {
+  insertModel.updateMatrixWorld(true);
+  const removable = [];
+  insertModel.traverse((child) => {
+    if (!child.isMesh) return;
+    if (!isDrawerDoubleInsertMesh(child, insertModelPath)) {
+      removable.push(child);
+    }
+  });
+  removable.forEach((child) => child.parent?.remove(child));
+}
+
+function isDrawerDoubleInsertMesh(mesh, insertModelPath) {
+  const path = getObjectNamePath(mesh).join("/");
+  const materialNames = getMaterialNames(mesh);
+  if (/wire-basket/i.test(insertModelPath)) {
+    return /组件#/.test(path)
+      || materialNames.some((name) => /Translucent Glass Safety/i.test(name));
+  }
+  if (/leather-storage/i.test(insertModelPath)) {
+    const box = new THREE.Box3().setFromObject(mesh);
+    return !box.isEmpty() && box.min.y < -0.001;
+  }
+  return false;
+}
+
+function getObjectNamePath(object) {
+  const names = [];
+  let current = object;
+  while (current) {
+    names.unshift(current.name || "");
+    current = current.parent;
+  }
+  return names.filter(Boolean);
+}
+
+function alignDrawerDoubleInsertToTray(insertModel, trayBox) {
+  insertModel.updateMatrixWorld(true);
+  const insertBox = new THREE.Box3().setFromObject(insertModel);
+  if (insertBox.isEmpty() || trayBox.isEmpty()) return;
+  const insertCenter = insertBox.getCenter(new THREE.Vector3());
+  const trayCenter = trayBox.getCenter(new THREE.Vector3());
+  insertModel.position.x += trayCenter.x - insertCenter.x;
+  insertModel.position.y += trayCenter.y - insertCenter.y;
+  insertModel.position.z += trayCenter.z - insertCenter.z;
+  insertModel.updateMatrixWorld(true);
+}
+
+function resolvePlacementSceneProduct(placement, design) {
+  if (
+    placement.componentType === "drawerDouble"
+    && (placement.topDrawerSku || placement.bottomDrawerSku)
+  ) {
+    return clientDrawerDoublePreviewProduct;
+  }
+  if (placement.componentType === "drawerSingle") {
+    return design.productBySku[placement.productSku];
+  }
+  return design.productBySku[placement.productSku] || design.productByType[placement.componentType];
+}
+
 async function createModelOrMissing(product, series, report, targetSize, label, transform, componentType = "", modelTransforms) {
-  const modelPath = product?.modelPath || product?.glbAssetPath || "";
+  const modelPath = product?.glbAssetPath || product?.modelPath || "";
   if (!modelPath) {
     report.failed.add(label);
     report.missingPlacements.push({ name: label, reason: "modelPath is empty" });
@@ -3424,6 +5526,48 @@ function applyPlacementColor(object, componentType, frameColor, modelTransforms,
   }
 }
 
+function isWireBasketDrawerSku(sku) {
+  return wireBasketDrawerSkus.has(String(sku || "").trim());
+}
+
+function applyWireBasketWhiteMaterial(object) {
+  applyModelColor(
+    object,
+    theme.colors.white,
+    { metalness: 0.25, roughness: 0.42 },
+    (material) => isWireBasketMaterial(material)
+  );
+}
+
+function isWireBasketMaterial(material) {
+  return /(?:metal|aluminum|\[Color M07\]|Translucent Glass Safety)/i.test(material?.name || "");
+}
+
+function applyDrawerDoubleTopPanelWoodMaterial(model) {
+  const topPanel = findDrawerDoubleTopPanelMesh(model);
+  if (!topPanel) return;
+  applyMeshMaterialColor(topPanel, theme.colors.woodBrown, { metalness: 0, roughness: 0.58 });
+}
+
+function findDrawerDoubleTopPanelMesh(model) {
+  model.updateMatrixWorld(true);
+  const candidates = [];
+  model.traverse((child) => {
+    if (!child.isMesh || child.userData?.isDrawerDoubleInsert) return;
+    const box = new THREE.Box3().setFromObject(child);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    if (size.x < 0.55 || size.z < 0.35 || size.y > 0.04) return;
+    candidates.push({
+      mesh: child,
+      centerY: box.getCenter(new THREE.Vector3()).y,
+      area: size.x * size.z
+    });
+  });
+  candidates.sort((a, b) => b.centerY - a.centerY || b.area - a.area);
+  return candidates[0]?.mesh || null;
+}
+
 function usesCarbonVisualWidthCompensation(componentType) {
   return [
     "woodShelf",
@@ -3467,6 +5611,19 @@ function applyModelColor(object, color, materialPatch = {}, materialFilter = nul
     });
     child.material = Array.isArray(child.material) ? nextMaterials : nextMaterials[0];
   });
+}
+
+function applyMeshMaterialColor(mesh, color, materialPatch = {}) {
+  if (!mesh?.isMesh || !mesh.material) return;
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const nextMaterials = materials.map((material) => {
+    const next = material.clone();
+    if (next.color) next.color.set(color);
+    if ("metalness" in next && materialPatch.metalness !== undefined) next.metalness = materialPatch.metalness;
+    if ("roughness" in next && materialPatch.roughness !== undefined) next.roughness = materialPatch.roughness;
+    return next;
+  });
+  mesh.material = Array.isArray(mesh.material) ? nextMaterials : nextMaterials[0];
 }
 
 function applyComponentRotation(object, transform) {

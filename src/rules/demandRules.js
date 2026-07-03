@@ -2,8 +2,17 @@ import * as XLSX from "xlsx";
 import { DEFAULT_BAY_WIDTH, DEFAULT_ZONE_PRIORITY, PLAN_LEVELS } from "./commonRules.js?v=closet-rules-preview-20260621-11";
 
 const RULES_URL = "/data/closet-rules.xlsx";
+const CASE_MATCHING_RULES_URL = "/customer-home/case/CaseMatchingRules.xlsx";
 let rulesPromise = null;
 let rulesData = null;
+let caseMatchingRulesPromise = null;
+let caseMatchingRulesData = null;
+let caseMatchingRuleLoadStatus = {
+  attempted: false,
+  loaded: false,
+  error: null,
+  fallbackToLegacy: true
+};
 
 export function loadClosetRules(url = RULES_URL) {
   if (!rulesPromise) {
@@ -24,6 +33,53 @@ export function loadClosetRules(url = RULES_URL) {
 export function getClosetRules() {
   if (!rulesData) throw new Error("Closet rules have not been loaded.");
   return rulesData;
+}
+
+export function loadCaseMatchingRules(url = CASE_MATCHING_RULES_URL) {
+  if (!caseMatchingRulesPromise) {
+    caseMatchingRuleLoadStatus = {
+      attempted: true,
+      loaded: false,
+      error: null,
+      fallbackToLegacy: true
+    };
+    caseMatchingRulesPromise = fetch(`${url}?v=component-upgrade-rules-20260627-01`, { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Unable to load ${url}`);
+        return response.arrayBuffer();
+      })
+      .then(parseCaseMatchingRulesWorkbook)
+      .then((data) => {
+        caseMatchingRulesData = data;
+        caseMatchingRuleLoadStatus = {
+          attempted: true,
+          loaded: data.enabled === true,
+          error: null,
+          fallbackToLegacy: data.enabled !== true
+        };
+        return data;
+      })
+      .catch((error) => {
+        console.warn("[ai-planner] optional CaseMatchingRules load failed", error);
+        caseMatchingRulesData = createCaseMatchingRulesFallback(error);
+        caseMatchingRuleLoadStatus = {
+          attempted: true,
+          loaded: false,
+          error: error?.message || String(error),
+          fallbackToLegacy: true
+        };
+        return caseMatchingRulesData;
+      });
+  }
+  return caseMatchingRulesPromise;
+}
+
+export function getCaseMatchingRules() {
+  return caseMatchingRulesData;
+}
+
+export function getCaseMatchingRuleLoadStatus() {
+  return { ...caseMatchingRuleLoadStatus };
 }
 
 export function resolveDemandRule(label) {
@@ -188,6 +244,104 @@ function parseRulesWorkbook(buffer) {
   };
 }
 
+function parseCaseMatchingRulesWorkbook(buffer) {
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const caseProfiles = optionalRows(workbook, "CaseProfile").map(normalizeCaseProfileRow)
+    .filter((row) => row.caseId);
+  const caseTags = optionalRows(workbook, "CaseTags").map(normalizeCaseTagRow)
+    .filter((row) => row.caseId);
+  const componentUpgradeRules = optionalRows(workbook, "ComponentUpgradeRules")
+    .map(normalizeComponentUpgradeRuleRow)
+    .filter((row) => row.upgradeAction);
+  const componentCapability = optionalRows(workbook, "ComponentCapability");
+  const readme = optionalRows(workbook, "README");
+  return {
+    enabled: caseProfiles.length > 0,
+    source: "CaseMatchingRules.xlsx",
+    loadedSheets: workbook.SheetNames.filter((sheetName) => [
+      "README",
+      "CaseProfile",
+      "CaseTags",
+      "ComponentUpgradeRules",
+      "ComponentCapability"
+    ].includes(sheetName)),
+    caseProfiles,
+    caseProfileById: new Map(caseProfiles.map((row) => [row.caseId, row])),
+    caseTags,
+    caseTagsById: new Map(caseTags.map((row) => [row.caseId, row])),
+    componentUpgradeRules,
+    componentCapability,
+    readme
+  };
+}
+
+function createCaseMatchingRulesFallback(error) {
+  return {
+    enabled: false,
+    source: "CaseMatchingRules.xlsx",
+    loadedSheets: [],
+    caseProfiles: [],
+    caseProfileById: new Map(),
+    caseTags: [],
+    caseTagsById: new Map(),
+    componentUpgradeRules: [],
+    componentCapability: [],
+    readme: [],
+    error: error?.message || String(error || "")
+  };
+}
+
+function normalizeCaseProfileRow(row) {
+  return {
+    ...row,
+    caseId: stringValue(row.CaseID || row.caseId),
+    persona: stringValue(row.PersonaName || row.persona),
+    primaryType: stringValue(row.PrimaryType || row.primaryType),
+    bayLayout: stringValue(row.BayLayout || row.bayLayout),
+    bayCount: number(row.BayCount, 0),
+    priorityTag: stringValue(row.PriorityTag || row.priorityTag),
+    defaultTier: stringValue(row.DefaultTier || row.defaultTier),
+    notes: stringValue(row.Notes || row.notes),
+    scores: {
+      shortClothes: number(row.ShortScore, 0),
+      longClothes: number(row.LongScore, 0),
+      shoes: number(row.ShoesScore, 0),
+      bags: number(row.BagsScore, 0),
+      bedding: number(row.BeddingScore, 0),
+      luggage: number(row.LuggageScore, 0),
+      jewelry: number(row.JewelryScore, 0),
+      trouser: number(row.TrouserScore, 0)
+    }
+  };
+}
+
+function normalizeCaseTagRow(row) {
+  return {
+    ...row,
+    caseId: stringValue(row.CaseID || row.caseId),
+    tags: splitRuleList(row.Tags),
+    avoidWhen: splitRuleList(row.AvoidWhen),
+    priorityNote: stringValue(row.PriorityNote || row.priorityNote)
+  };
+}
+
+function normalizeComponentUpgradeRuleRow(row) {
+  return {
+    ...row,
+    upgradeAction: stringValue(row.UpgradeAction || row.upgradeAction),
+    fromZone: stringValue(row.FromZone || row.fromZone),
+    addComponent: stringValue(row["ToZone / AddComponent"] || row.ToZone || row.AddComponent || row.addComponent),
+    condition: stringValue(row.Condition || row.condition),
+    priority: number(row.Priority, 999),
+    note: stringValue(row.Note || row.Notes || row.note),
+    upgradeType: stringValue(row.UpgradeType || row.upgradeType),
+    upgradeTarget: stringValue(row.UpgradeTarget || row.upgradeTarget),
+    protectCoreRequirement: parseBoolean(row.ProtectCoreRequirement),
+    maxCoreReplacement: number(row.MaxCoreReplacement, 0),
+    maxReplaceRatio: number(row.MaxReplaceRatio, 0)
+  };
+}
+
 function findCapacityRule(data, componentType, itemType) {
   return data.capacityRules.find((rule) => rule.componentType === componentType && rule.itemType === itemType)
     || data.capacityRules.find((rule) => rule.itemType === itemType)
@@ -197,6 +351,12 @@ function findCapacityRule(data, componentType, itemType) {
 function rows(workbook, sheetName) {
   const sheet = workbook.Sheets[sheetName];
   if (!sheet) throw new Error(`Missing rules sheet: ${sheetName}`);
+  return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+}
+
+function optionalRows(workbook, sheetName) {
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) return [];
   return XLSX.utils.sheet_to_json(sheet, { defval: "" });
 }
 
@@ -221,6 +381,14 @@ function formatQuantity(value) {
 function number(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function stringValue(value) {
+  return String(value ?? "").trim();
+}
+
+function splitRuleList(value) {
+  return stringValue(value).split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function parseBoolean(value) {

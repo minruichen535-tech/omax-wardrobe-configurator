@@ -6,15 +6,19 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=planner-flow-order-20260622-06";
-import { loadClosetRules } from "../rules/demandRules.js?v=closet-rules-preview-20260621-11";
+} from "./planRules.js?v=trouser-shelf-preserve-20260630-01";
+import {
+  loadCaseMatchingRules,
+  loadClosetRules
+} from "../rules/demandRules.js?v=component-upgrade-rules-20260627-01";
 
 const state = {
   step: 0,
   answers: {},
   recommendation: null,
   selectedProductSystem: null,
-  selectedPlan: null
+  selectedPlan: null,
+  currentPlans: []
 };
 
 const shell = document.querySelector(".planner-shell");
@@ -38,13 +42,84 @@ const layoutOptions = [
   { value: "U型", title: "U型", subtitle: "三面布局", sketch: "└─┘" }
 ];
 const recommendedPlanTypes = ["basic", "value", "premium"];
+const planDisplayNames = {
+  basic: "基础实用款",
+  value: "高性价比款",
+  premium: "高配理想款"
+};
+const planDemandCoverage = {
+  basic: "满足约 75%",
+  value: "满足约 90%",
+  premium: "满足约 100%"
+};
+const planFeatureSummaries = {
+  basic: "满足基础收纳需求",
+  value: "收纳效率与预算平衡",
+  premium: "兼顾未来扩展与功能体验"
+};
 const recommendedPlanFallbacks = {
   basic: { planName: "基础实用款", planCapacityCoverage: "基础方案候选暂未生成" },
   value: { planName: "高性价比款", planCapacityCoverage: "性价比方案候选暂未生成" },
   premium: { planName: "高配理想款", planCapacityCoverage: "高配方案候选暂未生成" }
 };
+const upgradeCatalog = [
+  { key: "trouserRack", name: "裤架", price: 660, solves: "解决裤装收纳问题", keywords: ["裤"] },
+  { key: "jewelryBox", name: "首饰盒", price: 700, solves: "解决首饰分类问题", keywords: ["首饰"] },
+  { key: "cabinet", name: "柜体", price: 800, solves: "提升封闭收纳与杂物整理能力", keywords: ["被褥", "行李箱", "综合收纳", "文件", "电子设备"] },
+  { key: "lighting", name: "灯光", price: null, solves: "提升展示与夜间取放体验", keywords: ["展示", "收藏", "包包", "摆件"] },
+  { key: "glassShelf", name: "玻璃层板", price: null, solves: "增强包包与展示区通透感", keywords: ["包包", "展示", "收藏"] },
+  { key: "meshBasket", name: "网篮", price: null, solves: "改善小件与换季物品分类", keywords: ["被褥", "行李箱", "综合收纳"] }
+];
+const demandCapacityLevels = {
+  "长衣": [
+    { level: "少量", value: 10, unit: "件", perPerson: true },
+    { level: "中等", value: 20, unit: "件", perPerson: true },
+    { level: "较多", value: 30, unit: "件", perPerson: true, plus: true }
+  ],
+  "短衣": [
+    { level: "少量", value: 20, unit: "件", perPerson: true },
+    { level: "中等", value: 40, unit: "件", perPerson: true },
+    { level: "较多", value: 60, unit: "件", perPerson: true, plus: true }
+  ],
+  "裤子": [
+    { level: "少量", value: 10, unit: "条", perPerson: true },
+    { level: "中等", value: 20, unit: "条", perPerson: true },
+    { level: "较多", value: 35, unit: "条", perPerson: true, plus: true }
+  ],
+  "鞋子": [
+    { level: "少量", value: 8, unit: "双", perPerson: true },
+    { level: "中等", value: 15, unit: "双", perPerson: true },
+    { level: "较多", value: 25, unit: "双", perPerson: true, plus: true }
+  ],
+  "包包": [
+    { level: "少量", value: 3, unit: "个", perPerson: true },
+    { level: "中等", value: 6, unit: "个", perPerson: true },
+    { level: "较多", value: 10, unit: "个", perPerson: true, plus: true }
+  ],
+  "首饰": [
+    { level: "少量" },
+    { level: "中等" },
+    { level: "较多" }
+  ],
+  "被褥": [
+    { level: "少量", value: 1, unit: "套", perPerson: true },
+    { level: "中等", value: 2, unit: "套", perPerson: true },
+    { level: "较多", value: 3, unit: "套", perPerson: true, plus: true }
+  ],
+  "行李箱": [
+    { level: "少量", value: 1, unit: "个" },
+    { level: "中等", value: 2, unit: "个" },
+    { level: "较多", value: 3, unit: "个", plus: true }
+  ],
+  "展示收藏": [
+    { level: "少量" },
+    { level: "中等" },
+    { level: "较多" }
+  ]
+};
 let analysisLoadingTimers = [];
 let activePlanPreviewCleanup = null;
+let activeResultPreviewCleanup = null;
 let planCardPreviewCleanups = [];
 const optionIconMap = {
   "1人": "one-people.png",
@@ -128,6 +203,8 @@ function clearAnalysisLoadingTimers() {
 function clearPlanCardPreviews() {
   planCardPreviewCleanups.forEach((cleanup) => cleanup?.());
   planCardPreviewCleanups = [];
+  activeResultPreviewCleanup?.();
+  activeResultPreviewCleanup = null;
 }
 
 function renderQuestion(direction = "forward") {
@@ -209,13 +286,12 @@ function renderOptions(question) {
     if (disabledReason) {
       button.disabled = true;
       button.title = "当前空间不适合该预算区间";
-      button.style.opacity = "0.35";
-      button.style.cursor = "not-allowed";
+      button.dataset.disabledReason = "当前空间暂不适合该预算";
     }
     button.innerHTML = iconPath
       ? `<img class="option-icon people-icon" src="${iconPath}" alt="" loading="lazy" /><strong>${option}</strong>`
       : `<span>${String(index + 1).padStart(2, "0")}</span><strong>${option}</strong><i>→</i>${
-        disabledReason ? `<small>${disabledReason}</small>` : ""
+        disabledReason ? `<small class="budget-disabled-note">当前空间暂不适合该预算</small>` : ""
       }`;
     button.addEventListener("click", () => selectOption(question.key, option, button));
     list.appendChild(button);
@@ -252,6 +328,7 @@ function renderMultiOptions(question) {
   const directionKey = `${question.key}WeightDirections`;
   const directions = { ...(state.answers[directionKey] || {}) };
   const selected = new Set(Object.entries(weights).filter(([, weight]) => Number(weight) > 0).map(([option]) => option));
+  updateDemandQuantityProfile(question.key, weights);
   const wrapper = document.createElement("div");
   wrapper.className = "multi-select-panel";
   const list = document.createElement("div");
@@ -273,6 +350,7 @@ function renderMultiOptions(question) {
       ${iconPath ? `<img class="option-icon demand-icon" src="${iconPath}" alt="" loading="lazy" />` : ""}
       <strong>${option}</strong>
       <em class="weight-blocks" aria-hidden="true">${renderWeightBlocks(weight)}</em>
+      ${renderDemandLevelLabels(option, weight)}
     `;
     button.addEventListener("click", () => {
       const currentWeight = Number(weights[option]) || 0;
@@ -298,9 +376,12 @@ function renderMultiOptions(question) {
       state.answers[question.key] = { ...weights };
       state.answers[weightKey] = { ...weights };
       state.answers[directionKey] = { ...directions };
+      updateDemandQuantityProfile(question.key, weights);
       button.dataset.selected = nextWeight > 0 ? "true" : "false";
       button.dataset.weight = String(nextWeight);
       button.querySelector(".weight-blocks").innerHTML = renderWeightBlocks(nextWeight);
+      const levelLabels = button.querySelector(".demand-level-labels");
+      if (levelLabels) levelLabels.outerHTML = renderDemandLevelLabels(option, nextWeight);
     });
     list.appendChild(button);
   });
@@ -310,10 +391,15 @@ function renderMultiOptions(question) {
   next.className = "dimension-next multi-next";
   next.innerHTML = "继续分析 <i>→</i>";
   next.addEventListener("click", () => {
+    console.log("[ai-planner] multi-requirement-submit", {
+      selectedCount: selected.size,
+      weights: { ...weights }
+    });
     if (!selected.size) return;
     state.answers[question.key] = { ...weights };
     state.answers[weightKey] = { ...weights };
     state.answers[directionKey] = { ...directions };
+    updateDemandQuantityProfile(question.key, weights);
     nextStep();
   });
 
@@ -326,6 +412,66 @@ function renderWeightBlocks(weight) {
   return Array.from({ length: 3 }, (_, index) => (
     `<b data-active="${index < activeCount ? "true" : "false"}"></b>`
   )).join("");
+}
+
+function renderDemandLevelLabels(option, activeWeight = 0) {
+  const levels = demandCapacityLevels[option];
+  if (!levels) return "";
+  return `
+    <small class="demand-level-labels">
+      ${levels.map((level, index) => `
+        <span data-active="${Number(activeWeight) === index + 1 ? "true" : "false"}">${formatDemandLevelLabel(level, state.answers.people || "1人")}</span>
+      `).join("")}
+    </small>
+  `;
+}
+
+function updateDemandQuantityProfile(questionKey, weights = {}) {
+  if (questionKey !== "demands") return;
+  const profile = {};
+  Object.entries(weights).forEach(([name, weight]) => {
+    const entry = getDemandQuantityEntry(name, Number(weight) || 0, state.answers.people || "1人");
+    if (entry) profile[name] = entry;
+  });
+  state.answers.demandQuantityProfile = profile;
+}
+
+function getDemandQuantityEntry(name, weight, peopleLabel) {
+  const levels = demandCapacityLevels[name];
+  const normalizedWeight = Math.max(0, Math.min(3, Number(weight) || 0));
+  const level = levels?.[normalizedWeight - 1];
+  if (!level || normalizedWeight <= 0) return null;
+  const peopleCount = parsePeopleCount(peopleLabel);
+  const quantity = Number.isFinite(Number(level.value))
+    ? Number(level.value) * (level.perPerson ? peopleCount : 1)
+    : null;
+  const estimate = quantity == null
+    ? level.level
+    : `约${quantity}${level.unit || "件"}${level.plus ? "+" : ""}`;
+  return {
+    label: name,
+    level: level.level,
+    weight: normalizedWeight,
+    quantity,
+    unit: level.unit || "",
+    perPerson: Boolean(level.perPerson),
+    peopleCount,
+    estimate,
+    levelLabel: formatDemandLevelLabel(level, peopleLabel)
+  };
+}
+
+function formatDemandLevelLabel(level, peopleLabel) {
+  if (!Number.isFinite(Number(level?.value))) return level?.label || level?.level || "";
+  const peopleCount = parsePeopleCount(peopleLabel);
+  const quantity = Number(level.value) * (level.perPerson ? peopleCount : 1);
+  const prefix = level.value === 1 && !level.perPerson ? "" : "约";
+  return `${level.level}（${prefix}${quantity}${level.unit || "件"}${level.plus ? "+" : ""}）`;
+}
+
+function parsePeopleCount(value) {
+  const match = String(value || "").match(/\d+/);
+  return match ? Number(match[0]) : 1;
 }
 
 function getOptionIconPath(option) {
@@ -409,6 +555,10 @@ function nextStep() {
 }
 
 function renderAnalysisLoading() {
+  console.log("[ai-planner] render-analysis-loading", {
+    step: state.step,
+    answers: state.answers
+  });
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
   state.recommendation = buildPlanRecommendation(state.answers);
@@ -417,7 +567,7 @@ function renderAnalysisLoading() {
   currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
-  title.textContent = "正在分析您的收纳需求";
+  title.textContent = "需求分析";
   note.textContent = "我们会根据空间尺寸、使用人数、收纳物品和预算，为您生成更适合的配置方向。";
 
   answerContent.innerHTML = `
@@ -439,11 +589,15 @@ function renderAnalysisLoading() {
   });
   analysisLoadingTimers.push(window.setTimeout(() => {
     clearAnalysisLoadingTimers();
-    renderAiRecommendedPlans();
+    renderAnalysis({ fadeIn: true });
   }, 5000));
 }
 
 function renderAnalysis({ fadeIn = false } = {}) {
+  console.log("[ai-planner] render-analysis-start", {
+    fadeIn,
+    step: state.step
+  });
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
   state.recommendation = state.recommendation || buildPlanRecommendation(state.answers);
@@ -460,7 +614,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
   currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
-  title.textContent = "正在分析您的收纳需求";
+  title.textContent = "需求分析";
   note.textContent = "我们会根据空间尺寸、使用人数、收纳物品和预算，为您生成更适合的配置方向。";
 
   answerContent.innerHTML = `
@@ -468,17 +622,20 @@ function renderAnalysis({ fadeIn = false } = {}) {
       ${renderReportSection("基础信息", `
         <div class="analysis-grid">
           <p><small>空间类型 / 尺寸</small><strong>${state.answers.spaceUse || "定制空间"} / ${dimensions.layoutType || "I型"} / ${dimensions.width} × ${dimensions.depth} × ${dimensions.height || 2700}mm</strong></p>
+          <p><small>房间数量</small><strong>1 间</strong></p>
           <p><small>使用人数</small><strong class="analysis-icon-value">${renderInlineIconText(state.answers.people || state.answers.style || "待确认")}</strong></p>
           <p><small>预算区间</small><strong>${state.answers.budget || "待确认"}</strong></p>
+          <p><small>产品系列</small><strong>${(state.selectedProductSystem || state.answers.selectedProductSystem)?.name || "待确认"}</strong></p>
           <p><small>主要需求</small><strong>${demands.length ? renderDemandChips(demands) : "综合收纳"}</strong></p>
         </div>
       `)}
-      ${renderReportSection("需求画像", renderDemandPersona(demandPersona))}
+      ${renderReportSection("需求分析", renderDemandFocusList(demands))}
+      ${renderReportSection("空间建议", Object.keys(demandRatios).length ? renderStackedRatioBar(demandRatios, labels) : "<p>根据当前空间保持挂衣、层板和功能区均衡分配。</p>")}
+      ${renderReportSection("推荐布局逻辑", renderLayoutLogicList(demands, demandPersona))}
       ${zoneCards.length ? renderReportSection("收纳物品估算", renderZoneCards(zoneCards)) : ""}
-      ${Object.keys(demandRatios).length ? renderReportSection("功能区比例", renderStackedRatioBar(demandRatios, labels)) : ""}
       <div class="analysis-actions">
         <button class="analysis-back" type="button">← 返回上一题</button>
-        <button class="dimension-next analysis-next" type="button">生成推荐方案 <i>→</i></button>
+        <button class="dimension-next analysis-next" type="button">生成方案 <i>→</i></button>
       </div>
     </div>
   `;
@@ -487,6 +644,9 @@ function renderAnalysis({ fadeIn = false } = {}) {
     renderQuestion("back");
   });
   answerContent.querySelector(".analysis-next").addEventListener("click", renderAiRecommendedPlans);
+  if (fadeIn) {
+    analysisLoadingTimers.push(window.setTimeout(renderAiRecommendedPlans, 450));
+  }
 }
 
 function renderProductSystemSelection() {
@@ -567,6 +727,7 @@ function renderAiRecommendedPlans() {
   };
   const generatedPlans = generateRecommendedPlans(planInput);
   const recommendedPlans = ensureRecommendedPlanTiers(generatedPlans);
+  state.currentPlans = recommendedPlans;
   const candidateDebugStats = getCandidatePlanDebugStats();
   const payload = {
     selectedProductSystem,
@@ -595,8 +756,8 @@ function renderAiRecommendedPlans() {
   currentProgress.textContent = "方案";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
-  title.textContent = "推荐方案";
-  note.textContent = "基于您选择的产品系统与空间需求，先为您整理三种方案方向。";
+  title.textContent = "三套方案";
+  note.textContent = "先在三套完整方案中选择方向，再进行个性化微调。";
 
   answerContent.innerHTML = `
     <div class="ai-plan-panel">
@@ -607,9 +768,7 @@ function renderAiRecommendedPlans() {
         <span>${payload.peopleCount || "使用人数待确认"}</span>
         <span>${payload.budgetRange || "预算待确认"}</span>
       </div>
-      <div class="ai-plan-grid">
-        ${recommendedPlans.map(renderAiPlanCard).join("")}
-      </div>
+      ${renderSingleModelPlanResult(recommendedPlans)}
       ${isCandidateDebugEnabled() ? renderCandidateDebugPanel(
         candidateDebugStats,
         recommendedPlans,
@@ -620,38 +779,200 @@ function renderAiRecommendedPlans() {
 
   updateAiPlanDebugBadge(generatedPlans, recommendedPlans);
 
-  answerContent.querySelectorAll("[data-ai-plan]").forEach((button) => {
+  answerContent.querySelectorAll("[data-ai-plan-option]").forEach((button) => {
     button.addEventListener("click", () => {
-      const selected = recommendedPlans.find((plan) => plan.planType === button.dataset.aiPlan);
+      const selected = recommendedPlans.find((plan) => plan.planType === button.dataset.aiPlanOption);
       if (!selected) return;
       state.selectedPlan = selected;
+      updateSingleModelPlanResult(selected, recommendedPlans, selectedProductSystem);
+    });
+  });
+  answerContent.querySelector(".ai-plan-panel")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-view-full-analysis]")) {
+      renderAnalysis({ fadeIn: true });
+      return;
+    }
+    if (event.target.closest("[data-submit-selected-plan]")) {
+      const selectedType = answerContent.querySelector("[data-selected-plan-detail]")?.dataset.selectedPlanDetail || "basic";
+      const selected = recommendedPlans.find((plan) => plan.planType === selectedType) || recommendedPlans[0];
+      if (!selected || selected.isFallback) return;
+      state.selectedPlan = selected;
       renderLeadForm(selected);
-    });
+      return;
+    }
+    if (event.target.closest("[data-result-back]")) {
+      state.step = getCurrentQuestions().length - 1;
+      renderQuestion("back");
+    }
   });
-  answerContent.querySelectorAll("[data-preview-plan]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const selected = recommendedPlans.find((plan) => plan.planType === button.dataset.previewPlan);
-      if (!selected) return;
-      openPlanPreviewModal(selected, selectedProductSystem);
-    });
+  updateSingleModelPlanResult(
+    recommendedPlans.find((plan) => plan.planType === "basic") || recommendedPlans[0],
+    recommendedPlans,
+    selectedProductSystem
+  );
+}
+
+function renderSingleModelPlanResult(plans) {
+  return `
+    <div class="ai-plan-result-layout">
+      <section class="ai-plan-result-preview" aria-label="方案模型预览">
+        <div class="result-plan-preview-root" data-result-plan-preview data-preview-state="loading">
+          <div class="plan-preview-shell" aria-hidden="true">
+            <span></span>
+            <i></i>
+            <b></b>
+          </div>
+        </div>
+      </section>
+      <aside class="ai-plan-result-sidebar">
+        <div class="ai-plan-switcher" role="tablist" aria-label="方案选择">
+          ${plans.map(renderPlanSwitchButton).join("")}
+        </div>
+        <section class="ai-plan-selected-detail" data-selected-plan-detail="basic"></section>
+      </aside>
+    </div>
+  `;
+}
+
+function renderPlanSwitchButton(plan) {
+  const displayName = getPlanDisplayName(plan);
+  const weakTag = plan.planType === "value" ? "<small>客户选择较多</small>" : "";
+  return `
+    <button
+      class="ai-plan-switch"
+      type="button"
+      data-ai-plan-option="${plan.planType}"
+      data-selected="${plan.planType === "basic" ? "true" : "false"}"
+      ${plan.isFallback ? "disabled" : ""}
+    >
+      <strong>${displayName}</strong>
+      ${weakTag}
+    </button>
+  `;
+}
+
+function updateSingleModelPlanResult(plan, plans, selectedProductSystem) {
+  if (!plan) return;
+  answerContent.querySelectorAll("[data-ai-plan-option]").forEach((button) => {
+    button.dataset.selected = button.dataset.aiPlanOption === plan.planType ? "true" : "false";
   });
-  loadPlanCardPreviews(recommendedPlans, selectedProductSystem);
+  const detail = answerContent.querySelector("[data-selected-plan-detail]");
+  if (detail) {
+    detail.dataset.selectedPlanDetail = plan.planType;
+    detail.innerHTML = renderSelectedPlanDetail(plan, plans);
+  }
+  loadResultPlanPreview(answerContent.querySelector("[data-result-plan-preview]"), plan, selectedProductSystem);
+}
+
+function renderSelectedPlanDetail(plan, plans) {
+  const hasPrice = Number.isFinite(Number(plan.planPrice)) && Number(plan.planPrice) > 0;
+  return `
+    <div class="selected-plan-heading">
+      <small>当前方案</small>
+      <h2>${getPlanDisplayName(plan)}</h2>
+    </div>
+    <div class="selected-plan-price">
+      <span>当前价格</span>
+      <strong>${hasPrice ? formatPlanPrice(plan.planPrice) : "价格待确认"}</strong>
+    </div>
+    <div class="selected-plan-fit">
+      <span>满足度</span>
+      <strong>${getPlanDemandCoverage(plan.planType)}</strong>
+      <p>${getPlanFeatureSummary(plan.planType)}</p>
+    </div>
+    <div class="selected-plan-diff">
+      <span>新增功能说明</span>
+      ${renderPlanDifferenceList(plan, plans)}
+    </div>
+    <div class="selected-plan-actions">
+      <button class="analysis-back" type="button" data-view-full-analysis>查看完整分析</button>
+      <button class="dimension-next" type="button" data-submit-selected-plan ${plan.isFallback ? "disabled" : ""}>提交方案 <i>→</i></button>
+      <button class="result-back-link" type="button" data-result-back>← 返回重新调整需求</button>
+    </div>
+  `;
+}
+
+function renderPlanDifferenceList(plan, plans) {
+  if (plan.planType === "basic") {
+    return `
+      <p>满足当前核心收纳需求。</p>
+      <ul><li>✓ 保留基础功能配置</li></ul>
+    `;
+  }
+  const previousType = plan.planType === "premium" ? "value" : "basic";
+  const previousPlan = plans.find((item) => item.planType === previousType);
+  const diffItems = getPlanComponentDiffItems(previousPlan, plan);
+  const prefix = plan.planType === "premium" ? "相比高性价比款新增：" : "相比基础实用款新增：";
+  return `
+    <p>${prefix}</p>
+    <ul>
+      ${diffItems.length
+        ? diffItems.map((item) => `<li>✓ ${item}</li>`).join("")
+        : "<li>✓ 当前真实组件差异较小，主要优化空间分配与容量覆盖</li>"}
+    </ul>
+  `;
+}
+
+function getPlanComponentDiffItems(basePlan, nextPlan) {
+  const baseCounts = getPlanComponentCounts(basePlan);
+  const nextCounts = getPlanComponentCounts(nextPlan);
+  const labels = [];
+  Array.from(new Set([...Object.keys(baseCounts), ...Object.keys(nextCounts)])).forEach((componentType) => {
+    const delta = (nextCounts[componentType] || 0) - (baseCounts[componentType] || 0);
+    if (delta <= 0) return;
+    labels.push(getComponentUpgradeLabel(componentType, delta));
+  });
+  return labels.filter(Boolean);
+}
+
+function getPlanComponentCounts(plan) {
+  const placements = Array.isArray(plan?.configPreset?.placements) && plan.configPreset.placements.length
+    ? plan.configPreset.placements
+    : (Array.isArray(plan?.configPreset?.explicitPlacements) ? plan.configPreset.explicitPlacements : []);
+  return placements.reduce((counts, placement) => {
+    const type = placement?.componentType;
+    if (!type) return counts;
+    counts[type] = (counts[type] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function getComponentUpgradeLabel(componentType, delta = 1) {
+  const countText = delta > 1 ? ` ×${delta}` : "";
+  const labels = {
+    cabinet: `抽屉/柜体收纳${countText}`,
+    trouserRack: `裤架收纳${countText}`,
+    jewelryBox: `首饰收纳${countText}`,
+    woodShelf: `更多叠放区${countText}`,
+    glassShelf: `展示层板${countText}`,
+    singleRail: `更多挂衣区${countText}`,
+    doubleRail: `双层挂衣区${countText}`,
+    lighting: `灯光体验${countText}`,
+    meshBasket: `网篮分类${countText}`
+  };
+  return labels[componentType] || `${componentType}${countText}`;
 }
 
 function renderAiPlanCard(plan) {
   const hasPrice = Number.isFinite(Number(plan.planPrice)) && Number(plan.planPrice) > 0;
+  const displayName = getPlanDisplayName(plan);
+  const weakTag = plan.planType === "value" ? "<span class=\"ai-plan-soft-tag\">客户选择较多</span>" : "";
   return `
     <article class="ai-plan-card" data-plan-type="${plan.planType}" data-plan-fallback="${plan.isFallback ? "true" : "false"}">
       <span class="ai-plan-type">${plan.planType}</span>
-      <button class="planPreview" type="button" data-preview-plan="${plan.planType}" aria-label="查看${plan.planName}3D预览">
+      <button class="planPreview" type="button" data-preview-plan="${plan.planType}" aria-label="查看${displayName}3D预览">
         <div class="plan-card-preview-root" data-card-preview-plan="${plan.planType}" data-preview-error="none">
-          ${plan.planPreview ? `<img src="${plan.planPreview}" alt="${plan.planName}" loading="lazy" />` : `<span aria-hidden="true"></span>`}
+          ${plan.planPreview ? `<img src="${plan.planPreview}" alt="${displayName}" loading="lazy" />` : `<span aria-hidden="true"></span>`}
         </div>
         <em class="ai-plan-budget">${hasPrice ? formatPlanPrice(plan.planPrice) : "价格待确认"}<span>${plan.planCapacityCoverage}</span></em>
         <strong>点击查看3D预览</strong>
         <small>可旋转查看</small>
       </button>
-      <h2>${plan.planName}</h2>
+      <h2>${displayName}${weakTag}</h2>
+      <div class="ai-plan-fit">
+        <strong>${getPlanDemandCoverage(plan.planType)}</strong>
+        <span>${getPlanFeatureSummary(plan.planType)}</span>
+      </div>
       <div class="ai-plan-capacity">
         <small>预计可收纳</small>
         <ul>
@@ -673,18 +994,18 @@ function isDevelopmentEnvironment() {
 
 function renderAiPlanDebugBadge(generatedPlans, renderedPlans) {
   return `
-    <aside class="ai-plan-debug-badge" aria-label="AI plan render debug">
+    <aside class="ai-plan-debug-badge" aria-label="plan render debug">
       <span>plans.length = ${Array.isArray(generatedPlans) ? generatedPlans.length : 0}</span>
-      <span data-ai-plan-card-count>card DOM count = 0</span>
+      <span data-ai-plan-card-count>plan DOM count = 0</span>
       <span>planTypes = ${renderedPlans.map((plan) => plan.planType).join("/")}</span>
     </aside>
   `;
 }
 
 function updateAiPlanDebugBadge(generatedPlans, renderedPlans) {
-  const cardCount = answerContent.querySelectorAll(".ai-plan-card").length;
+  const cardCount = answerContent.querySelectorAll(".ai-plan-card, .ai-plan-switch").length;
   const cardCountLabel = answerContent.querySelector("[data-ai-plan-card-count]");
-  if (cardCountLabel) cardCountLabel.textContent = `card DOM count = ${cardCount}`;
+  if (cardCountLabel) cardCountLabel.textContent = `plan DOM count = ${cardCount}`;
   console.log("[ai-planner] plan-card-dom", {
     plansLength: Array.isArray(generatedPlans) ? generatedPlans.length : 0,
     cardCount,
@@ -751,6 +1072,9 @@ function renderCandidateDebugPanel(stats, plans, budgetRange) {
           <div><dt>valuePremiumSimilarity</dt><dd>${escapeDebugValue(JSON.stringify(stats.valuePremiumSimilarity || {}))}</dd></div>
           <div><dt>duplicatePlanDetected</dt><dd>${stats.duplicatePlanDetected ? "true" : "false"}</dd></div>
           <div><dt>reselectionReason</dt><dd>${escapeDebugValue(stats.reselectionReason || "none")}</dd></div>
+          <div><dt>caseMatchingRuleLoad</dt><dd>${escapeDebugValue(formatCaseMatchingRuleLoadDebug(stats.caseMatchingRuleLoad))}</dd></div>
+          <div><dt>caseMatching</dt><dd>${escapeDebugValue(formatCaseMatchingDebug(stats.caseMatching))}</dd></div>
+          <div><dt>candidateQa</dt><dd>${escapeDebugValue(formatCandidateQaDebug(stats.candidateQa))}</dd></div>
         </dl>
       </header>
       <div class="candidate-debug-plans">
@@ -830,6 +1154,9 @@ function renderSelectedPlanDebug(plan) {
         <div><dt>shelfGaps</dt><dd>${formatShelfGapDiagnostics(debug.shelfGaps)}</dd></div>
         <div><dt>estimatedPrice</dt><dd>${debug.estimatedPrice ?? plan.planPrice ?? "-"}</dd></div>
         <div><dt>estimatedCapacity</dt><dd>${formatDebugObject(debug.estimatedCapacity)}</dd></div>
+        <div><dt>caseMatchingRuleLoad</dt><dd>${escapeDebugValue(formatCaseMatchingRuleLoadDebug(debug.caseMatchingRuleLoad))}</dd></div>
+        <div><dt>caseMatching</dt><dd>${escapeDebugValue(formatCaseMatchingDebug(debug.caseMatching))}</dd></div>
+        <div><dt>candidateQa</dt><dd>${escapeDebugValue(formatCandidateQaDebug(debug.candidateQa))}</dd></div>
         <div><dt>rejectedReason</dt><dd>${escapeDebugValue(debug.rejectedReason || "none")}</dd></div>
       </dl>
     </article>
@@ -856,6 +1183,57 @@ function formatShelfGapDiagnostics(diagnostics) {
   )).join(", "));
 }
 
+function formatCandidateQaDebug(candidateQa) {
+  if (!candidateQa) return "none";
+  const issueSummary = (candidateQa.issues || [])
+    .map((issue) => [
+      issue.ruleId,
+      issue.reason,
+      issue.failedPair,
+      issue.category
+    ].filter(Boolean).join(":"))
+    .join(", ");
+  return JSON.stringify({
+    passed: candidateQa.passed,
+    selectionMode: candidateQa.selectionMode,
+    attemptedTierSets: candidateQa.attemptedTierSets,
+    selectedAttemptIndex: candidateQa.selectedAttemptIndex,
+    failedAttemptCount: candidateQa.failedAttemptCount,
+    capacitySource: candidateQa.capacitySource,
+    capacityByPlan: candidateQa.capacityByPlan || {},
+    capacityDiff: candidateQa.capacityDiff || [],
+    missingWidthFallbackCount: candidateQa.missingWidthFallbackCount || 0,
+    capacityContributions: candidateQa.capacityContributions || [],
+    issueCount: candidateQa.issues?.length || 0,
+    issues: issueSummary || "none",
+    originalSelectedCandidateIds: candidateQa.originalSelectedCandidateIds || {},
+    finalSelectedCandidateIds: candidateQa.finalSelectedCandidateIds || {},
+    summary: candidateQa.summary || {}
+  });
+}
+
+function formatCaseMatchingDebug(caseMatching) {
+  if (!caseMatching) return "none";
+  return JSON.stringify({
+    enabled: caseMatching.enabled === true,
+    selectedCaseId: caseMatching.selectedCaseId || null,
+    selectedPersona: caseMatching.selectedPersona || "",
+    score: caseMatching.score || 0,
+    userRequirementVector: caseMatching.userRequirementVector || {},
+    topCandidates: (caseMatching.topCandidates || []).slice(0, 5)
+  });
+}
+
+function formatCaseMatchingRuleLoadDebug(ruleLoad) {
+  if (!ruleLoad) return "none";
+  return JSON.stringify({
+    attempted: ruleLoad.attempted === true,
+    loaded: ruleLoad.loaded === true,
+    error: ruleLoad.error || null,
+    fallbackToLegacy: ruleLoad.fallbackToLegacy === true
+  });
+}
+
 function escapeDebugValue(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -869,7 +1247,7 @@ function normalizeRecommendedPlan(plan = {}, index = 0) {
   return {
     ...plan,
     planType,
-    planName: plan.planName || plan.name || planType,
+    planName: planDisplayNames[planType] || plan.planName || plan.name || planType,
     planPrice: Number(plan.planPrice ?? plan.price ?? 0),
     planPreview: plan.planPreview || null,
     planCapacityCoverage: plan.planCapacityCoverage || plan.coverage || "",
@@ -908,7 +1286,7 @@ async function loadPlanCardPreviews(plans, selectedProductSystem) {
   const roots = Array.from(answerContent.querySelectorAll("[data-card-preview-plan]"));
   if (!roots.length) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=wall-mounted-placement-rules-20260621-05");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
     await Promise.all(roots.map(async (root) => {
       const plan = plans.find((item) => item.planType === root.dataset.cardPreviewPlan);
       if (!plan || plan.isFallback) {
@@ -949,6 +1327,137 @@ function setPlanCardPreviewFallback(root, errorType, message) {
   `;
 }
 
+async function loadResultPlanPreview(container, plan, selectedProductSystem) {
+  activeResultPreviewCleanup?.();
+  activeResultPreviewCleanup = null;
+  if (!container) return;
+  clearAiPlannerPreviewRuntimeState();
+  const renderInfo = createAiPlannerRenderInfo(plan);
+  if (!plan || plan.isFallback) {
+    setResultPlanPreviewFallback(container, "missing-plan", "该档方案候选暂未生成");
+    return;
+  }
+  container.dataset.previewState = "loading";
+  container.dataset.previewError = "none";
+  container.dataset.activeRenderId = renderInfo.renderId;
+  container.innerHTML = `
+    <div class="plan-preview-shell" aria-hidden="true">
+      <span></span>
+      <i></i>
+      <b></b>
+    </div>
+  `;
+  renderAiPlannerPreviewStamp(container, renderInfo);
+  publishAiPlannerActiveRender(renderInfo, { generatedCount: 0, skippedCount: 0, sceneJsImportUrl: "" });
+  try {
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
+    const cleanup = await mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem, renderInfo });
+    if (!container.isConnected) {
+      cleanup?.();
+      return;
+    }
+    activeResultPreviewCleanup = cleanup;
+    container.dataset.previewState = "ready";
+    container.dataset.previewError = "none";
+  } catch (error) {
+    console.warn("[ai-planner] result preview fallback", plan.planType, error);
+    setResultPlanPreviewFallback(container, "mount-failed", "3D 预览暂时无法加载");
+  }
+}
+
+function createAiPlannerRenderInfo(plan = {}) {
+  const renderId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const visualDebugKey = new URLSearchParams(window.location.search).get("visualDebug") || "";
+  return {
+    renderId,
+    planType: plan?.planType || "",
+    planTitle: getPlanDisplayName(plan),
+    planId: plan?.planId || plan?.id || plan?.code || "",
+    candidatePlanId: plan?.candidatePlanId || plan?.planId || plan?.id || plan?.code || "",
+    visualDebugKey,
+    timestamp: new Date().toISOString()
+  };
+}
+
+function clearAiPlannerPreviewRuntimeState() {
+  if (typeof window !== "undefined") {
+    window.__AI_PLANNER_VISUAL_DEBUG__ = null;
+    window.__AI_PLANNER_ACTIVE_RENDER__ = null;
+  }
+  document.documentElement.removeAttribute("data-model-report");
+}
+
+function publishAiPlannerActiveRender(renderInfo, counts = {}) {
+  if (typeof window === "undefined" || !renderInfo) return;
+  window.__AI_PLANNER_ACTIVE_RENDER__ = {
+    renderId: renderInfo.renderId,
+    planType: renderInfo.planType,
+    planTitle: renderInfo.planTitle,
+    planId: renderInfo.planId,
+    candidatePlanId: renderInfo.candidatePlanId,
+    visualDebugKey: renderInfo.visualDebugKey,
+    sceneJsImportUrl: counts.sceneJsImportUrl || "",
+    generatedCount: Number(counts.generatedCount) || 0,
+    skippedCount: Number(counts.skippedCount) || 0,
+    timestamp: renderInfo.timestamp
+  };
+}
+
+function renderAiPlannerPreviewStamp(container, renderInfo, counts = {}) {
+  if (!container || !renderInfo) return;
+  const old = container.querySelector("[data-ai-render-stamp]");
+  old?.remove();
+  const stamp = document.createElement("div");
+  stamp.setAttribute("data-ai-render-stamp", "true");
+  stamp.dataset.renderId = renderInfo.renderId;
+  stamp.style.cssText = [
+    "position:absolute",
+    "top:10px",
+    "left:10px",
+    "z-index:20",
+    "max-width:360px",
+    "padding:8px 10px",
+    "border-radius:8px",
+    "background:rgba(255,255,255,0.86)",
+    "color:#333",
+    "font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace",
+    "box-shadow:0 4px 16px rgba(0,0,0,0.08)",
+    "pointer-events:none",
+    "white-space:pre-wrap"
+  ].join(";");
+  stamp.textContent = formatAiPlannerRenderStamp(renderInfo, counts);
+  container.style.position = container.style.position || "relative";
+  container.appendChild(stamp);
+}
+
+function formatAiPlannerRenderStamp(renderInfo, counts = {}) {
+  return [
+    `renderId: ${renderInfo.renderId}`,
+    `planType: ${renderInfo.planType || "-"}`,
+    `planTitle: ${renderInfo.planTitle || "-"}`,
+    `planId: ${renderInfo.planId || "-"}`,
+    `candidatePlanId: ${renderInfo.candidatePlanId || "-"}`,
+    `visualDebug: ${renderInfo.visualDebugKey || "-"}`,
+    `sceneJsImportUrl: ${counts.sceneJsImportUrl || "-"}`,
+    `visualGeneratedCount: ${Number(counts.generatedCount) || 0}`,
+    `visualSkippedCount: ${Number(counts.skippedCount) || 0}`
+  ].join("\n");
+}
+
+function setResultPlanPreviewFallback(container, errorType, message) {
+  if (!container?.isConnected) return;
+  container.dataset.previewState = "fallback";
+  container.dataset.previewError = errorType;
+  container.innerHTML = `
+    <div class="plan-preview-shell" aria-hidden="true">
+      <span></span>
+      <i></i>
+      <b></b>
+    </div>
+    <p class="readonly-preview-error">${message}</p>
+  `;
+}
+
 function openPlanPreviewModal(plan, selectedProductSystem) {
   closePlanPreviewModal();
   const modal = document.createElement("div");
@@ -975,7 +1484,7 @@ function openPlanPreviewModal(plan, selectedProductSystem) {
         </div>
         <div class="plan-preview-caption">
           <strong>${selectedProductSystem?.name || "产品系统"}</strong>
-          <span>${plan.planName} / ${formatPlanPrice(plan.planPrice)}</span>
+          <span>${getPlanDisplayName(plan)} / ${formatPlanPrice(plan.planPrice)}</span>
           <small>只读预览 · 可旋转查看 · 可缩放</small>
         </div>
       </div>
@@ -991,7 +1500,7 @@ function openPlanPreviewModal(plan, selectedProductSystem) {
   modal.querySelector("[data-select-preview-plan]").addEventListener("click", () => {
     closePlanPreviewModal();
     state.selectedPlan = plan;
-    renderLeadForm(plan);
+    renderPersonalizedUpgrades(plan);
   });
   document.body.appendChild(modal);
   document.body.classList.add("has-plan-preview-modal");
@@ -1008,7 +1517,7 @@ function closePlanPreviewModal() {
 async function loadReadOnlyPlanPreview(container, plan, selectedProductSystem) {
   if (!container) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=wall-mounted-placement-rules-20260621-05");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
     const cleanup = await mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem });
     if (!container.isConnected) {
       cleanup?.();
@@ -1034,11 +1543,110 @@ function formatPlanPrice(value) {
   return `¥${Number(value || 0).toLocaleString("zh-CN")}`;
 }
 
+function getPlanDisplayName(plan = {}) {
+  return planDisplayNames[plan.planType] || plan.planName || plan.name || "方案";
+}
+
+function getPlanDemandCoverage(planType) {
+  return planDemandCoverage[planType] || "满足约 85%";
+}
+
+function getPlanFeatureSummary(planType) {
+  return planFeatureSummaries[planType] || "根据当前需求配置";
+}
+
+function renderPersonalizedUpgrades(plan) {
+  clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
+  state.selectedPlan = plan;
+  const selectedProductSystem = state.selectedProductSystem || state.answers.selectedProductSystem || null;
+  const upgrades = getRelevantUpgradeItems(state.answers, selectedProductSystem);
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.add("is-lead");
+  currentProgress.textContent = "升级";
+  progressLine.style.transform = "scaleX(1)";
+  backButton.disabled = false;
+  title.textContent = "个性化升级";
+  note.textContent = "基于已选方案，只展示与您需求相关的微调项。";
+  answerContent.innerHTML = `
+    <div class="personal-upgrade-panel">
+      <section class="personal-upgrade-summary">
+        <small>已选择</small>
+        <h2>${getPlanDisplayName(plan)}</h2>
+        <p>${plan.planPrice ? formatPlanPrice(plan.planPrice) : "价格待确认"} · ${getPlanDemandCoverage(plan.planType)} · ${getPlanFeatureSummary(plan.planType)}</p>
+        <button class="analysis-back" type="button" data-back-to-plans>返回三套方案</button>
+      </section>
+      <aside class="personal-upgrade-list">
+        <h3>可选升级</h3>
+        ${upgrades.length ? upgrades.map(renderUpgradeItem).join("") : "<p class=\"personal-upgrade-empty\">当前需求暂无额外相关升级项，可直接进入最终方案。</p>"}
+      </aside>
+      <div class="personal-upgrade-actions">
+        <button class="dimension-next" type="button" data-finalize-plan>进入最终方案 <i>→</i></button>
+      </div>
+    </div>
+  `;
+  answerContent.querySelector("[data-back-to-plans]")?.addEventListener("click", renderAiRecommendedPlans);
+  answerContent.querySelector("[data-finalize-plan]")?.addEventListener("click", () => renderLeadForm(plan));
+}
+
+function renderUpgradeItem(item) {
+  const priceText = Number.isFinite(Number(item.price)) ? `+${Number(item.price).toLocaleString("zh-CN")}` : "按方案确认";
+  return `
+    <article class="personal-upgrade-item">
+      <div>
+        <strong>${item.name}</strong>
+        <span>${priceText}</span>
+      </div>
+      <p>${item.solves}</p>
+    </article>
+  `;
+}
+
+function getRelevantUpgradeItems(answers = {}, selectedProductSystem = null) {
+  const demandText = getDemandText(answers);
+  const supported = getSupportedUpgradeKeys(selectedProductSystem);
+  return upgradeCatalog.filter((item) => (
+    supported.has(item.key)
+    && item.keywords.some((keyword) => demandText.includes(keyword))
+  ));
+}
+
+function getDemandText(answers = {}) {
+  const values = [
+    answers.needs,
+    answers.entryNeeds,
+    answers.displayNeeds,
+    answers.studyNeeds,
+    answers.demands,
+    answers.demandsWeights
+  ];
+  return values.map((value) => {
+    if (Array.isArray(value)) return value.join(" ");
+    if (value && typeof value === "object") return Object.keys(value).filter((key) => Number(value[key]) > 0).join(" ");
+    return String(value || "");
+  }).join(" ");
+}
+
+function getSupportedUpgradeKeys(selectedProductSystem) {
+  const id = selectedProductSystem?.id || "";
+  const common = new Set(["trouserRack", "jewelryBox", "cabinet", "lighting", "glassShelf", "meshBasket"]);
+  if (id === "japanese-closet") {
+    return new Set(["trouserRack", "jewelryBox", "cabinet", "lighting"]);
+  }
+  if (id === "carbon-steel-post-wardrobe-v2") {
+    return new Set(["trouserRack", "cabinet", "meshBasket"]);
+  }
+  if (id === "wall-mounted-v2") {
+    return new Set(["cabinet", "lighting", "glassShelf"]);
+  }
+  return common;
+}
+
 function renderLeadForm(plan) {
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
   state.selectedPlan = plan;
-  const selectedPlanName = plan.planName || plan.name || "推荐方案";
+  const selectedPlanName = getPlanDisplayName(plan);
   const selectedPlanCode = plan.code ? `方案 ${plan.code} / ` : "";
   const selectedPlanPrice = plan.planPrice ? formatPlanPrice(plan.planPrice) : (plan.price ? `¥${plan.price.toLocaleString("zh-CN")}` : "");
   shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-submitted");
@@ -1046,7 +1654,7 @@ function renderLeadForm(plan) {
   currentProgress.textContent = "确认";
   progressLine.style.transform = "scaleX(1)";
   backButton.disabled = false;
-  title.textContent = "已为您生成初步方案";
+  title.textContent = "最终方案确认";
   note.textContent = "留下联系方式后，璞舍顾问会根据您的空间尺寸和收纳需求，为您进一步确认尺寸、预算和落地细节。";
   answerContent.innerHTML = `
     <form class="lead-form">
@@ -1105,6 +1713,32 @@ function renderReportSection(titleText, content) {
       <h2>${titleText}</h2>
       ${content}
     </section>
+  `;
+}
+
+function renderDemandFocusList(demands = []) {
+  const demandNames = demands.length ? demands : Object.keys(state.answers.demands || {}).filter((key) => Number(state.answers.demands[key]) > 0);
+  const items = demandNames.length ? demandNames : ["综合收纳"];
+  return `
+    <ul class="analysis-check-list">
+      ${items.map((item) => `<li>✓ ${item}</li>`).join("")}
+    </ul>
+  `;
+}
+
+function renderLayoutLogicList(demands = [], persona = {}) {
+  const demandText = `${demands.join(" ")} ${persona?.focus || ""} ${persona?.secondary || ""}`;
+  const logicItems = [];
+  if (demandText.includes("长衣")) logicItems.push("优先保留独立长衣区");
+  if (demandText.includes("鞋")) logicItems.push("优先集中鞋履层板区");
+  if (demandText.includes("裤") || demandText.includes("首饰")) logicItems.push("优先增加功能配件区");
+  if (demandText.includes("行李箱") || demandText.includes("被褥")) logicItems.push("保留大件与换季收纳空间");
+  if (demandText.includes("展示") || demandText.includes("包")) logicItems.push("增强展示与开放取放区域");
+  const items = logicItems.length ? logicItems : ["先保证基础挂衣和层板收纳，再按预算增加功能模块"];
+  return `
+    <ul class="analysis-check-list">
+      ${items.map((item) => `<li>${item}</li>`).join("")}
+    </ul>
   `;
 }
 
@@ -1280,7 +1914,12 @@ backButton.addEventListener("click", () => {
 });
 
 loadClosetRules()
-  .then(() => renderProductSystemSelection())
+  .then(() => {
+    renderProductSystemSelection();
+    loadCaseMatchingRules().catch((error) => {
+      console.warn("[ai-planner] optional case matching rules unavailable", error);
+    });
+  })
   .catch((error) => {
     console.error("[ai-planner] closet rules load failed", error);
     title.textContent = "规则数据暂时无法加载";
