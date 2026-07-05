@@ -9,7 +9,7 @@ import {
   selectPreferredAccessoryBay
 } from "../rules/placementStrategy.js?v=fixed-accessory-placement-20260627-01";
 import { getClearanceValue } from "../rules/storageRules.js?v=storage-rules-20260625-01";
-import { getCuttingRules } from "../series/index.js?v=cache-20260621-02";
+import { getCuttingRules } from "../series/index.js?v=japanese-drawer-merchandising-20260703-01";
 import {
   PLANNER_COMPONENT_MAP,
   WALL_MOUNTED_PLACEMENT_RULES,
@@ -51,6 +51,8 @@ const COMPONENT_HEIGHTS = {
   cabinet: 600,
   jewelryBox: 180,
   trouserRack: 180,
+  drawerSingle: 180,
+  drawerDouble: 360,
   mixedStorage: 500
 };
 const JAPANESE_CLOSET_AI_PRICES = {
@@ -62,15 +64,46 @@ const JAPANESE_CLOSET_AI_PRICES = {
   woodShelf: 160,
   cabinet: 800,
   jewelryBoxWithShelf: 700,
-  trouserRackWithShelf: 660
+  trouserRackWithShelf: 660,
+  drawerSingle: 720,
+  drawerDouble: 1380
 };
 const JAPANESE_VISIBLE_UPGRADE_COMPONENTS = new Set([
-  "cabinet", "trouserRack", "jewelryBox", "glassShelf"
+  "cabinet", "trouserRack", "jewelryBox", "drawerSingle", "drawerDouble", "glassShelf"
 ]);
 const JAPANESE_FUNCTIONAL_COMPONENTS = new Set([
-  "singleRail", "doubleRail", "woodShelf", "cabinet", "jewelryBox", "trouserRack"
+  "singleRail", "doubleRail", "woodShelf", "cabinet", "jewelryBox", "trouserRack", "drawerSingle", "drawerDouble"
 ]);
 const JAPANESE_FIXED_MODULE_ALLOWED_WIDTHS = Object.freeze([900, 800, 700, 600, 500]);
+const JAPANESE_BACK_WALL_PREFERRED_BAY_WIDTHS = Object.freeze([900, 850, 800, 750, 700, 600]);
+const JAPANESE_DRAWER_DOUBLE_SKU = "JP-drawerDouble";
+const JAPANESE_SINGLE_DRAWER_SKUS = Object.freeze([
+  "JP-drawer-leather-storage",
+  "JP-drawer-multi-storage",
+  "JP-drawer-underwear-a",
+  "JP-drawer-jewelry",
+  "JP-drawer-underwear-b",
+  "JP-drawer-wire-basket",
+  "JP-drawer-wire-basket-short"
+]);
+const JAPANESE_VALUE_DRAWER_SKU_PRIORITY = Object.freeze([
+  "JP-drawer-wire-basket",
+  "JP-drawer-jewelry",
+  "JP-drawer-multi-storage",
+  "JP-drawer-underwear-a",
+  "JP-drawer-leather-storage",
+  "JP-drawer-underwear-b",
+  "JP-drawer-wire-basket-short"
+]);
+const JAPANESE_PREMIUM_DRAWER_SKU_PRIORITY = Object.freeze([
+  "JP-drawer-leather-storage",
+  "JP-drawer-jewelry",
+  "JP-drawer-multi-storage",
+  "JP-drawer-underwear-a",
+  "JP-drawer-underwear-b",
+  "JP-drawer-wire-basket",
+  "JP-drawer-wire-basket-short"
+]);
 const JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW = getClearanceValue("trouserRack", "below", 600);
 const JAPANESE_LONG_HANG_MIN_CLEARANCE_BELOW = getClearanceValue("longClothes", "below", 1350);
 const JAPANESE_SHORT_HANG_MIN_CLEARANCE_BELOW = getClearanceValue("shortHang", "below", 700);
@@ -897,12 +930,106 @@ function buildJapaneseLayoutSkeleton(answers, bayCount) {
   const templateRoles = caseTemplate.length === bayCount
     ? caseTemplate.map((entry) => entry.role || entry.zone)
     : getJapaneseRuleTemplateRoles(bayCount);
+  const wallSlots = getJapaneseBackFirstWallSlots(answers, bayCount);
   return templateRoles.map((sourceRole, bayIndex) => ({
     bayIndex,
+    wallId: wallSlots[bayIndex]?.wallId || "back",
+    wallBayIndex: Number(wallSlots[bayIndex]?.bayIndex) || 0,
     sourceRole,
     role: resolveJapaneseConditionalRole(sourceRole, answers.needs || {}),
     zone: resolveJapaneseConditionalRole(sourceRole, answers.needs || {})
   }));
+}
+
+function getJapaneseBackFirstWallSlots(answers = {}, totalBayCount = 1) {
+  const layout = getJapaneseOptimizedWallLayout(answers, totalBayCount);
+  return [
+    ...Array.from({ length: layout.back.bayCount }, (_, bayIndex) => ({ wallId: "back", bayIndex })),
+    ...Array.from({ length: layout.left.bayCount }, (_, bayIndex) => ({ wallId: "left", bayIndex })),
+    ...Array.from({ length: layout.right.bayCount }, (_, bayIndex) => ({ wallId: "right", bayIndex }))
+  ].slice(0, Math.max(1, Number(totalBayCount) || 1));
+}
+
+function getJapaneseOptimizedWallLayout(answers = {}, totalBayCount = 1) {
+  const roomWidth = Math.max(1, Number(answers.roomWidth || answers.dimensions?.width) || 3600);
+  const roomDepth = Math.max(1, Number(answers.roomDepth || answers.dimensions?.depth) || 2800);
+  const layoutType = answers.layoutType || answers.dimensions?.layoutType || "I型";
+  const bayTotal = Math.max(1, Math.round(Number(totalBayCount) || 1));
+  if (layoutType !== "L型" && layoutType !== "U型") {
+    return {
+      mode: "singleWall",
+      back: createJapaneseWallLayoutSegment(roomWidth, bayTotal),
+      left: createJapaneseWallLayoutSegment(roomDepth, 0),
+      right: createJapaneseWallLayoutSegment(roomDepth, 0)
+    };
+  }
+
+  const sideWallCount = layoutType === "U型" ? 2 : 1;
+  const backBayCount = getJapanesePreferredBackWallBayCount(roomWidth, bayTotal);
+  const remainingBayCount = Math.max(0, bayTotal - backBayCount);
+  const leftBayCount = layoutType === "U型"
+    ? Math.ceil(remainingBayCount / 2)
+    : remainingBayCount;
+  const rightBayCount = layoutType === "U型"
+    ? Math.floor(remainingBayCount / 2)
+    : 0;
+  const minimumSideCount = remainingBayCount > 0 ? 1 : 0;
+
+  return {
+    mode: "backFirst",
+    back: createJapaneseWallLayoutSegment(roomWidth, backBayCount),
+    left: createJapaneseWallLayoutSegment(roomDepth, Math.max(minimumSideCount, leftBayCount)),
+    right: createJapaneseWallLayoutSegment(roomDepth, sideWallCount === 2 ? Math.max(minimumSideCount, rightBayCount) : 0)
+  };
+}
+
+function getJapanesePreferredBackWallBayCount(roomWidth, totalBayCount) {
+  const width = Math.max(1, Number(roomWidth) || 1);
+  const maxCount = Math.max(1, Math.min(Number(totalBayCount) || 1, Math.ceil(width / 600)));
+  const candidates = Array.from({ length: maxCount }, (_, index) => index + 1)
+    .map((bayCount) => ({
+      bayCount,
+      bayWidth: width / bayCount,
+      score: getJapaneseBackWallBayWidthScore(width / bayCount, bayCount)
+    }))
+    .filter((candidate) => candidate.bayWidth <= 1000);
+  return (candidates.length ? candidates : [{ bayCount: 1 }])
+    .sort((left, right) => (
+      left.score.band - right.score.band
+      || right.bayCount - left.bayCount
+      || left.score.preference - right.score.preference
+    ))[0].bayCount;
+}
+
+function getJapaneseBackWallBayWidthScore(bayWidth, bayCount) {
+  const width = Number(bayWidth) || 0;
+  const inPreferredRange = width >= 750 && width <= 900;
+  const band = inPreferredRange
+    ? 0
+    : width >= 700 && width < 750
+      ? 1
+      : width >= 600 && width < 700
+        ? 2
+        : width > 900
+          ? 3
+          : 4;
+  const preference = Math.min(
+    ...JAPANESE_BACK_WALL_PREFERRED_BAY_WIDTHS.map((preferred, index) => (
+      Math.abs(width - preferred) + index * 0.01
+    ))
+  );
+  return { band, preference, bayCount };
+}
+
+function createJapaneseWallLayoutSegment(length, bayCount) {
+  const normalizedBayCount = Math.max(0, Math.round(Number(bayCount) || 0));
+  const wallLength = Math.max(1, Number(length) || 1);
+  return {
+    bayCount: normalizedBayCount,
+    bayWidths: normalizedBayCount > 0
+      ? Array.from({ length: normalizedBayCount }, () => wallLength / normalizedBayCount)
+      : []
+  };
 }
 
 function getJapaneseRuleTemplateRoles(bayCount) {
@@ -946,9 +1073,12 @@ function buildJapaneseSkeletonTierCandidate(source, answers, skeleton, planType,
 
 function initializeJapaneseSkeletonBay(placements, entry, answers, planType) {
   const { bayIndex, role, sourceRole } = entry;
+  const wallId = entry.wallId || "back";
+  const wallBayIndex = Number(entry.wallBayIndex) || 0;
   const add = (zoneType, componentType, heightFromFloor, extra = {}) => {
     placements.push({
-      ...placement(zoneType, componentType, bayIndex, heightFromFloor),
+      ...placement(zoneType, componentType, bayIndex, heightFromFloor, wallId),
+      wallBayIndex,
       templateRole: role,
       templateZone: role,
       ...extra
@@ -1003,8 +1133,9 @@ function initializeJapaneseSkeletonBay(placements, entry, answers, planType) {
     placements.push({
       zoneType: "luggageZone",
       componentType: "",
-      wallId: "back",
+      wallId,
       bayIndex,
+      wallBayIndex,
       heightFromFloor: 0,
       reservedHeight: 800,
       templateRole: role,
@@ -1128,6 +1259,157 @@ function isLowBudgetJapaneseBasic(answers = {}, targets = {}) {
   return label.includes("3,000以下") || (budgetMax > 0 && budgetMax <= 3000);
 }
 
+function addJapaneseDrawerMerchandisingUpgrades(
+  candidate,
+  answers,
+  skeleton,
+  usedBays,
+  upgradeList,
+  targets = {},
+  planType = "value"
+) {
+  const sequence = planType === "premium"
+    ? [
+      { componentType: "drawerDouble", skus: [JAPANESE_PREMIUM_DRAWER_SKU_PRIORITY[0], JAPANESE_PREMIUM_DRAWER_SKU_PRIORITY[1]] },
+      ...JAPANESE_PREMIUM_DRAWER_SKU_PRIORITY.map((sku) => ({ componentType: "drawerSingle", sku }))
+    ]
+    : JAPANESE_VALUE_DRAWER_SKU_PRIORITY.map((sku) => ({ componentType: "drawerSingle", sku }));
+  const targetCount = planType === "premium" ? 2 : 1;
+  let added = 0;
+  for (const request of sequence) {
+    if (added >= targetCount) break;
+    const price = getJapaneseDrawerMerchandisingPrice(request);
+    if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) + price > Number(targets.budgetMax || Infinity)) continue;
+    if (addJapaneseDrawerMerchandisingPlacement(candidate, answers, skeleton, usedBays, request)) {
+      upgradeList.push({
+        ...japaneseUpgradeDebug(request.componentType, price),
+        productSku: request.componentType === "drawerDouble" ? JAPANESE_DRAWER_DOUBLE_SKU : request.sku,
+        ...(request.componentType === "drawerDouble"
+          ? {
+            topDrawerSku: request.skus[0],
+            bottomDrawerSku: request.skus[1]
+          }
+          : {})
+      });
+      added += 1;
+    }
+  }
+  return added;
+}
+
+function getJapaneseDrawerMerchandisingPrice(request) {
+  return request.componentType === "drawerDouble"
+    ? JAPANESE_CLOSET_AI_PRICES.drawerDouble
+    : JAPANESE_CLOSET_AI_PRICES.drawerSingle;
+}
+
+function addJapaneseDrawerMerchandisingPlacement(candidate, answers, skeleton, usedBays, request) {
+  const candidates = skeleton
+    .filter((entry) => isJapaneseDrawerMerchandisingRole(entry.role))
+    .sort((left, right) => (
+      Number(usedBays.has(left.bayIndex)) - Number(usedBays.has(right.bayIndex))
+      || getJapaneseDrawerMerchandisingRoleRank(left.role) - getJapaneseDrawerMerchandisingRoleRank(right.role)
+      || left.bayIndex - right.bayIndex
+    ));
+  for (const entry of candidates) {
+    const bayIndex = Number(entry.bayIndex);
+    if (usedBays.has(bayIndex)) continue;
+    const bayPlacements = candidate.placements.filter((item) => Number(item.bayIndex) === bayIndex && item.componentType);
+    if (!isJapaneseDrawerBayStructurallyEligible(request.componentType, bayPlacements, entry.role)) continue;
+    const drawerPlacement = createJapaneseDrawerMerchandisingPlacement(entry, request, answers, skeleton.length);
+    if (bayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(drawerPlacement)))) continue;
+    if (getJapanesePlacementValidationDiagnostics([...bayPlacements, drawerPlacement])
+      .some((item) => !item.isValidPlacement)) continue;
+    candidate.placements = candidate.placements.filter((item) => !(
+      Number(item.bayIndex) === bayIndex
+      && ["singleRail", "doubleRail"].includes(item.componentType)
+      && Number(item.heightFromFloor || 0) >= 900
+      && Number(item.heightFromFloor || 0) <= 1200
+    ));
+    candidate.placements.push(drawerPlacement);
+    usedBays.add(bayIndex);
+    return true;
+  }
+  return false;
+}
+
+function isJapaneseDrawerMerchandisingRole(role = "") {
+  return [
+    "storageAccessoryZone",
+    "jewelryZone",
+    "trouserZone",
+    "shortHangZone"
+  ].includes(role);
+}
+
+function getJapaneseDrawerMerchandisingRoleRank(role = "") {
+  return {
+    storageAccessoryZone: 0,
+    jewelryZone: 1,
+    trouserZone: 2,
+    shortHangZone: 3
+  }[role] ?? 9;
+}
+
+function isJapaneseDrawerBayStructurallyEligible(componentType, bayPlacements = [], role = "") {
+  if (!isJapaneseDrawerMerchandisingRole(role)) return false;
+  if (bayPlacements.some((item) => ["drawerSingle", "drawerDouble", "cabinet", "trouserRack", "jewelryBox"].includes(item.componentType))) {
+    return false;
+  }
+  if (role === "shortHangZone") {
+    return bayPlacements.some((item) => (
+      ["singleRail", "doubleRail"].includes(item.componentType)
+      && Number(item.heightFromFloor || 0) >= JAPANESE_PRESERVED_HIGH_RAIL_MIN_HEIGHT
+      && Number(item.heightFromFloor || 0) <= JAPANESE_PRESERVED_HIGH_RAIL_MAX_HEIGHT
+    ));
+  }
+  return componentType === "drawerSingle" || componentType === "drawerDouble";
+}
+
+function createJapaneseDrawerMerchandisingPlacement(entry, request, answers = {}, totalBayCount = 1) {
+  const componentType = request.componentType;
+  const drawerPlacement = placement(
+    "storageZone",
+    componentType,
+    Number(entry.bayIndex) || 0,
+    0,
+    entry.wallId || "back"
+  );
+  drawerPlacement.wallBayIndex = Number(entry.wallBayIndex) || 0;
+  drawerPlacement.templateRole = entry.role;
+  drawerPlacement.templateZone = entry.role;
+  drawerPlacement.sourceRole = entry.sourceRole;
+  drawerPlacement.source = "japaneseDrawerMerchandising";
+  drawerPlacement.productSku = componentType === "drawerDouble" ? JAPANESE_DRAWER_DOUBLE_SKU : request.sku;
+  if (componentType === "drawerDouble") {
+    drawerPlacement.topDrawerSku = request.skus[0];
+    drawerPlacement.bottomDrawerSku = request.skus[1];
+  }
+  const cuttingRules = getCuttingRules("japanese-closet");
+  const wallLayout = getJapaneseOptimizedWallLayout(answers, totalBayCount);
+  const wallSegment = wallLayout[drawerPlacement.wallId] || wallLayout.back;
+  const bayWidth = Number(wallSegment?.bayWidths?.[drawerPlacement.wallBayIndex]) || 0;
+  drawerPlacement.preferredWidth = bayWidth || getPreferredJapaneseFixedModuleWidth(answers.roomWidth, totalBayCount);
+  drawerPlacement.allowedWidths = [drawerPlacement.preferredWidth].filter((width) => Number(width) > 0);
+  if (cuttingRules) {
+    const componentCutLength = cuttingRules.getCutLength?.(componentType, drawerPlacement.preferredWidth);
+    const visualScaleWidth = cuttingRules.getVisualScaleWidth?.(
+      componentType,
+      drawerPlacement.preferredWidth,
+      componentCutLength,
+      drawerPlacement.preferredWidth
+    );
+    if (Number.isFinite(Number(componentCutLength))) {
+      drawerPlacement.componentCutLength = Number(componentCutLength);
+      drawerPlacement.cutLength = Number(componentCutLength);
+    }
+    if (Number.isFinite(Number(visualScaleWidth))) {
+      drawerPlacement.visualScaleWidth = Number(visualScaleWidth);
+    }
+  }
+  return drawerPlacement;
+}
+
 function applyJapaneseValueUpgrades(
   candidate,
   answers,
@@ -1143,6 +1425,7 @@ function applyJapaneseValueUpgrades(
     supportedTypes,
     usedBays
   });
+  addJapaneseDrawerMerchandisingUpgrades(candidate, answers, skeleton, usedBays, upgradeList, targets, "value");
   const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
   if (shouldAddStorageCabinetByDemand(answers)
     && supportedTypes.has("cabinet")
@@ -1198,6 +1481,7 @@ function applyJapanesePremiumUpgrades(
     supportedTypes,
     usedBays
   });
+  addJapaneseDrawerMerchandisingUpgrades(candidate, answers, skeleton, usedBays, upgradeList, targets, "premium");
   const requirements = answers.japaneseHardRequirements || getJapaneseHardRequirements(answers);
   const requiredComponents = [
     ...(requirements.requiresTrouserRack ? ["trouserRack"] : []),
@@ -1846,7 +2130,7 @@ function getJapaneseDoubleRailTargetReason(role = "") {
 function countJapaneseUpgradePoints(upgradeList = []) {
   const shelfCount = upgradeList.filter((item) => item.componentType === "woodShelf").length;
   return upgradeList.filter((item) => [
-    "cabinet", "trouserRack", "jewelryBox", "doubleRailReplacement"
+    "cabinet", "trouserRack", "jewelryBox", "drawerSingle", "drawerDouble", "doubleRailReplacement"
   ].includes(item.componentType)).length + Math.floor(shelfCount / 2);
 }
 
@@ -2094,9 +2378,12 @@ function applyJapanesePlacementDimensions(candidate, answers = {}) {
 function getJapaneseCandidateWallMetrics(candidate, answers, cuttingRules) {
   const roomWidth = Number(candidate?.configPreset?.roomWidth ?? answers.roomWidth) || 0;
   const roomDepth = Number(candidate?.configPreset?.roomDepth ?? answers.roomDepth) || 0;
-  const backBayCount = Math.max(1, Number(candidate?.parameters?.bayCount
-    || candidate?.configPreset?.bayCount) || 1);
-  const sideBayCount = Math.max(1, Math.ceil(roomDepth / Math.max(1, cuttingRules.maxPostSpanMm || roomDepth || 1)));
+  const wallLayout = candidate?.configPreset?.japaneseWallLayout
+    || getJapaneseOptimizedWallLayout(answers, candidate?.parameters?.bayCount || candidate?.configPreset?.bayCount || 1);
+  const backBayCount = Math.max(1, Number(wallLayout.back?.bayCount
+    || candidate?.parameters?.bayCount || candidate?.configPreset?.bayCount) || 1);
+  const sideBayCount = Math.max(1, Number(wallLayout.left?.bayCount)
+    || Math.ceil(roomDepth / Math.max(1, cuttingRules.maxPostSpanMm || roomDepth || 1)));
   const createMetrics = (length, bayCount) => {
     const postProfileWidth = Number(cuttingRules.postProfileWidthMm) || 0;
     const rawBayWidth = Number(length) / Math.max(1, Number(bayCount) || 1);
@@ -4819,6 +5106,9 @@ function buildCandidateConfigPreset(answers, planType, planOutput, parameters, p
       ? { primaryCaseId: answers.primaryJapaneseCase.caseId }
       : {})
   };
+  if (getSelectedSeriesId(answers) === "japanese-closet") {
+    preset.japaneseWallLayout = getJapaneseOptimizedWallLayout(answers, parameters.bayCount);
+  }
   if (getSelectedSeriesId(answers) === "wall-mounted-v2") {
     preset.wallMountedRailDependencies = placements
       .filter((item) => item.componentType === "singleRail" && item.shelfDependency)
@@ -4836,6 +5126,10 @@ function syncJapaneseCandidatePreset(candidate) {
   const explicitPlacements = buildCandidateExplicitPlacements(candidate.placements);
   candidate.configPreset.explicitPlacements = explicitPlacements;
   candidate.configPreset.componentQuantities = countBy(explicitPlacements, (item) => item.componentType);
+  candidate.configPreset.japaneseWallLayout = getJapaneseOptimizedWallLayout(
+    candidate.configPreset,
+    candidate.parameters?.bayCount || candidate.configPreset?.bayCount || explicitPlacements.length || 1
+  );
 }
 
 function buildCandidateExplicitPlacements(placements = []) {
@@ -4846,6 +5140,8 @@ function buildCandidateExplicitPlacements(placements = []) {
     "cabinet",
     "jewelryBox",
     "trouserRack",
+    "drawerSingle",
+    "drawerDouble",
     "glassShelf"
   ]);
   return placements
@@ -4853,12 +5149,18 @@ function buildCandidateExplicitPlacements(placements = []) {
     .map((item) => ({
       componentType: item.componentType,
       wallId: item.wallId || "back",
-      bayIndex: Number(item.bayIndex) || 0,
+      bayIndex: Number.isInteger(Number(item.wallBayIndex))
+        ? Number(item.wallBayIndex)
+        : Number(item.bayIndex) || 0,
+      logicalBayIndex: Number(item.bayIndex) || 0,
       heightFromFloor: Number(item.heightFromFloor) || 0,
       zoneType: item.zoneType || "",
       ...(item.isAutoSupplementalShortRail
         ? { isAutoSupplementalShortRail: true }
         : {}),
+      ...(item.productSku ? { productSku: item.productSku } : {}),
+      ...(item.topDrawerSku ? { topDrawerSku: item.topDrawerSku } : {}),
+      ...(item.bottomDrawerSku ? { bottomDrawerSku: item.bottomDrawerSku } : {}),
       ...getJapanesePlacementDimensionFields(item),
       source: "candidate"
     }));
@@ -4917,6 +5219,10 @@ function calculateJapaneseClosetPrice(placements = [], bayCount = 0, planType = 
     * JAPANESE_CLOSET_AI_PRICES.trouserRackWithShelf;
   const jewelryBoxPrice = Number(counts.jewelryBox || 0)
     * JAPANESE_CLOSET_AI_PRICES.jewelryBoxWithShelf;
+  const drawerSinglePrice = Number(counts.drawerSingle || 0)
+    * JAPANESE_CLOSET_AI_PRICES.drawerSingle;
+  const drawerDoublePrice = Number(counts.drawerDouble || 0)
+    * JAPANESE_CLOSET_AI_PRICES.drawerDouble;
   const doubleRailUpgradePrice = Number(counts.doubleRail || 0)
     * (JAPANESE_CLOSET_AI_PRICES.doubleRail - JAPANESE_CLOSET_AI_PRICES.singleRail);
   const includedRailSlots = normalizedBayCount * 2;
@@ -4933,6 +5239,8 @@ function calculateJapaneseClosetPrice(placements = [], bayCount = 0, planType = 
     + cabinetPrice
     + trouserRackPrice
     + jewelryBoxPrice
+    + drawerSinglePrice
+    + drawerDoublePrice
     + doubleRailUpgradePrice
     + additionalSingleRailPrice;
   const servicePriceFactor = 1;
@@ -4945,6 +5253,8 @@ function calculateJapaneseClosetPrice(placements = [], bayCount = 0, planType = 
     cabinetPrice,
     trouserRackPrice,
     jewelryBoxPrice,
+    drawerSinglePrice,
+    drawerDoublePrice,
     doubleRailUpgradePrice,
     supplementalRailCount,
     additionalSingleRailCount,

@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { calculateDesign, createConfigFromPlannerPreset, createInitialConfig } from "../configurator.js?v=placement-strategy-bay-selection-20260629-04";
+import { calculateDesign, createConfigFromPlannerPreset, createInitialConfig } from "../configurator.js?v=japanese-drawer-merchandising-20260703-01";
 import { loadWorkbookData } from "../dataSource.js?v=ai-planner-preview-20260617-06";
 import { getSeries } from "../config/productSeries.js?v=ai-planner-preview-20260617-06";
 import { WardrobeScene } from "../scene.js?v=trouser-visual-width-20260629-01";
@@ -58,7 +58,13 @@ const VISUAL_TIER_LIMITS = Object.freeze({
   premium: { shortHangRatio: 0.65, longHang: Infinity, shoe: 3, bagShelf: 2, luggage: 2, bedding: 3 }
 });
 
-export async function mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem, mode = "modal", renderInfo = null }) {
+export async function mountReadOnlyWardrobePreview(container, {
+  plan,
+  selectedProductSystem,
+  mode = "modal",
+  renderInfo = null,
+  showPlannerVisualAssets = true
+}) {
   if (!container) return () => {};
   const seriesId = plan?.configPreset?.productSystemId || selectedProductSystem?.id;
   const series = getSeries(seriesId);
@@ -83,7 +89,10 @@ export async function mountReadOnlyWardrobePreview(container, { plan, selectedPr
   const config = createConfigFromPlannerPreset(preset, createInitialConfig(), data);
   const design = calculateDesign(config, data);
   const plannerVisualAssets = buildPlannerVisualAssets(config, preset.configPreset, plan, design);
-  config.visualAssets = plannerVisualAssets.visualAssets;
+  config.visualAssets = filterPlannerVisualAssetsForToggle(
+    plannerVisualAssets.visualAssets,
+    showPlannerVisualAssets
+  );
   config.visualAssetDebug = plannerVisualAssets.debug;
 
   console.log("[ai-planner] readonly-preview", {
@@ -104,6 +113,7 @@ export async function mountReadOnlyWardrobePreview(container, { plan, selectedPr
       shelfDependency: placement.shelfDependency || null,
       linkedRailDependencyId: placement.linkedRailDependencyId || null
     })),
+    showPlannerVisualAssets,
     visualAssets: config.visualAssets,
     visualAssetDebug: config.visualAssetDebug,
     bomCount: design.bom.length,
@@ -130,6 +140,11 @@ export async function mountReadOnlyWardrobePreview(container, { plan, selectedPr
   return () => {
     root.unmount();
   };
+}
+
+function filterPlannerVisualAssetsForToggle(visualAssets = [], showPlannerVisualAssets = true) {
+  if (showPlannerVisualAssets) return visualAssets;
+  return [];
 }
 
 function renderReadOnlyPreviewStamp(container, renderInfo) {

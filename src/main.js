@@ -58,6 +58,7 @@ const woodColor = "Wood Brown";
 const defaultProductColor = "Default Material";
 const plannerPresetStorageKey = "purenest-ai-planner-preset";
 const plannerPresetMaxAgeMs = 10 * 60 * 1000;
+const clientSavedPlansStorageKey = "purenestClientSavedPlans";
 const employeeBrandFallback = {
   brandNameCn: "奥美斯五金",
   brandNameEn: "OMAX Hardware",
@@ -187,6 +188,28 @@ function readPlannerPreset(seriesId) {
   return preset;
 }
 
+function readClientSavedPlans() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(clientSavedPlansStorageKey) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((plan) => plan && typeof plan === "object") : [];
+  } catch (error) {
+    console.warn("[client saved plans] invalid payload", error);
+    return [];
+  }
+}
+
+function writeClientSavedPlans(plans) {
+  localStorage.setItem(clientSavedPlansStorageKey, JSON.stringify(plans));
+}
+
+function createClientPlanId() {
+  return `client-plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getDefaultClientPlanName(plans) {
+  return `方案 ${plans.length + 1}`;
+}
+
 function App() {
   const routeInfo = useMemo(() => resolveRoute(), []);
   const isClientMode = location.pathname.startsWith("/client");
@@ -221,14 +244,17 @@ function App() {
 }
 
 function ClientApp({ data, isClientMode = false }) {
-  const authStorageKey = isClientMode ? "omax-client-auth" : "omax-auth";
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    () => localStorage.getItem(authStorageKey) === "true"
-  );
   const [config, setConfig] = useState(createInitialConfig);
   const [quoteNote, setQuoteNote] = useState("");
   const [brandInfo, setBrandInfo] = useState(null);
   const [isExportingQuote, setIsExportingQuote] = useState(false);
+  const [savedPlans, setSavedPlans] = useState(() => (
+    isClientMode ? readClientSavedPlans() : []
+  ));
+  const [selectedSavedPlanId, setSelectedSavedPlanId] = useState("");
+  const [planName, setPlanName] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const cuttingRules = useMemo(
     () => getCuttingRules(data.series.seriesId, data) || getCuttingRules("japanese-closet"),
     [data]
@@ -247,6 +273,13 @@ function ClientApp({ data, isClientMode = false }) {
     [design.bom, displayRules]
   );
   const selectedPlacement = design.placements.find((placement) => placement.id === config.selectedPlacementId);
+  const currentSeriesSavedPlans = useMemo(
+    () => savedPlans
+      .filter((plan) => plan.series === data.series.seriesId)
+      .sort((a, b) => String(b.updatedAt || b.updated || "").localeCompare(String(a.updatedAt || a.updated || ""))),
+    [savedPlans, data.series.seriesId]
+  );
+  const selectedSavedPlan = currentSeriesSavedPlans.find((plan) => plan.id === selectedSavedPlanId) || null;
   const shelfDepthOptions = data.settings?.shelfDepthOptions || [300, 450, 500];
   const postHeightOptions = data.settings?.postHeightOptions || [2000, 2400];
   const connectionModeOptions = data.settings?.connectionModeOptions || [];
@@ -364,6 +397,14 @@ function ClientApp({ data, isClientMode = false }) {
       .catch(() => setBrandInfo(null));
   }, [data.series.brandPath, data.series.clientBrandPath, isClientMode]);
 
+  useEffect(() => {
+    if (!isClientMode) return;
+    if (!selectedSavedPlan) return;
+    setPlanName(selectedSavedPlan.name || "");
+    setCustomerName(selectedSavedPlan.customerName || "");
+    setCustomerPhone(selectedSavedPlan.customerPhone || "");
+  }, [isClientMode, selectedSavedPlan]);
+
   const updateConfig = (patch) => setConfig((current) => ({ ...current, ...patch }));
   const setRoom = (key, value) => {
     const nextValue = parseIntegerInput(value);
@@ -433,6 +474,63 @@ function ClientApp({ data, isClientMode = false }) {
     } finally {
       setIsExportingQuote(false);
     }
+  };
+  const persistClientPlans = (nextPlans) => {
+    setSavedPlans(nextPlans);
+    writeClientSavedPlans(nextPlans);
+  };
+  const saveClientPlan = ({ forceNew = false } = {}) => {
+    if (!isClientMode) return;
+    const now = new Date().toISOString();
+    const name = planName.trim() || getDefaultClientPlanName(currentSeriesSavedPlans);
+    const existingPlan = !forceNew
+      ? savedPlans.find((plan) => plan.id === selectedSavedPlanId)
+      : null;
+    const plan = {
+      id: existingPlan?.id || createClientPlanId(),
+      name,
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      series: data.series.seriesId,
+      createdAt: existingPlan?.createdAt || now,
+      updatedAt: now,
+      updated: now,
+      config
+    };
+    const nextPlans = existingPlan
+      ? savedPlans.map((item) => item.id === existingPlan.id ? plan : item)
+      : [...savedPlans, plan];
+    persistClientPlans(nextPlans);
+    setSelectedSavedPlanId(plan.id);
+    setPlanName(plan.name);
+  };
+  const openClientPlan = () => {
+    if (!selectedSavedPlan?.config) return;
+    setConfig(selectedSavedPlan.config);
+  };
+  const renameClientPlan = () => {
+    if (!selectedSavedPlan) return;
+    const now = new Date().toISOString();
+    const nextPlans = savedPlans.map((plan) => plan.id === selectedSavedPlan.id
+      ? {
+        ...plan,
+        name: planName.trim() || plan.name,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        updatedAt: now,
+        updated: now
+      }
+      : plan);
+    persistClientPlans(nextPlans);
+  };
+  const deleteClientPlan = () => {
+    if (!selectedSavedPlan) return;
+    if (!window.confirm(`删除方案「${selectedSavedPlan.name || "未命名方案"}」？`)) return;
+    persistClientPlans(savedPlans.filter((plan) => plan.id !== selectedSavedPlan.id));
+    setSelectedSavedPlanId("");
+    setPlanName("");
+    setCustomerName("");
+    setCustomerPhone("");
   };
   const setWallBayCount = (wallId, bayCount) => setConfig((current) => ({
     ...current,
@@ -541,24 +639,6 @@ function ClientApp({ data, isClientMode = false }) {
         placements: current.placements.filter((placement) => placement.id !== id)
       }
   ));
-
-  if (!isAuthenticated) {
-    return h(LoginScreen, {
-      title: isClientMode ? "Client Access" : "OMAX Wardrobe Configurator",
-      subtitle: isClientMode ? "Product Configuration List" : "Internal Access",
-      logoSrc: isClientMode ? resolveRootAssetPath(data.series.clientLogoPath) : "",
-      expectedPassword: isClientMode ? "PURENEST2026！" : "Omax2026!",
-      onLogin: () => {
-        localStorage.setItem(authStorageKey, "true");
-        setIsAuthenticated(true);
-      }
-    });
-  }
-
-  const logout = () => {
-    localStorage.removeItem(authStorageKey);
-    setIsAuthenticated(false);
-  };
 
   return h("main", { className: `app-shell${isClientMode ? " client-mode" : ""}` },
     h("section", { className: "workspace upgraded-workspace" },
@@ -819,8 +899,7 @@ function ClientApp({ data, isClientMode = false }) {
               h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
               h(Metric, { icon: ClipboardList, label: isClientMode ? "产品 SKU" : "销售 SKU", value: `${design.bom.length} 项` }),
               !isClientMode && h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
-            ),
-            h("button", { className: "logout-button", type: "button", onClick: logout }, "退出登录")
+            )
           )
         ),
         h("div", { className: "scene-frame enhanced-scene" },
@@ -852,6 +931,22 @@ function ClientApp({ data, isClientMode = false }) {
             onClick: exportQuote
           }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : (isClientMode ? "导出产品清单" : "导出Excel"))
         ),
+        isClientMode && h(ClientSavedPlansPanel, {
+          plans: currentSeriesSavedPlans,
+          selectedPlanId: selectedSavedPlanId,
+          setSelectedPlanId: setSelectedSavedPlanId,
+          planName,
+          setPlanName,
+          customerName,
+          setCustomerName,
+          customerPhone,
+          setCustomerPhone,
+          onSave: () => saveClientPlan(),
+          onSaveAs: () => saveClientPlan({ forceNew: true }),
+          onOpen: openClientPlan,
+          onRename: renameClientPlan,
+          onDelete: deleteClientPlan
+        }),
         design.warnings.map((message) => h("p", { className: "warning-text", key: message }, message)),
         h("div", { className: "placement-list quote-placement-list" },
           design.placements.length === 0 && h("p", { className: "empty-placement" }, "从左侧拖入组合件后，这里会显示配置明细。"),
@@ -888,56 +983,72 @@ function ClientApp({ data, isClientMode = false }) {
   );
 }
 
-function LoginScreen({
-  onLogin,
-  title = "OMAX Wardrobe Configurator",
-  subtitle = "Internal Access",
-  logoSrc = "",
-  expectedPassword = "Omax2026!"
+function ClientSavedPlansPanel({
+  plans,
+  selectedPlanId,
+  setSelectedPlanId,
+  planName,
+  setPlanName,
+  customerName,
+  setCustomerName,
+  customerPhone,
+  setCustomerPhone,
+  onSave,
+  onSaveAs,
+  onOpen,
+  onRename,
+  onDelete
 }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (username === "admin" && password === expectedPassword) {
-      setError("");
-      onLogin();
-      return;
-    }
-    setError("账号或密码错误");
-  };
-
-  return h("main", { className: "login-screen" },
-    h("form", { className: "login-panel", onSubmit: submit },
-      logoSrc
-        ? h("img", { className: "login-brand-logo", src: logoSrc, alt: "" })
-        : h("div", { className: "login-brand-mark", "aria-hidden": "true" }, "OM"),
-      h("h1", null, title),
-      h("p", null, subtitle),
-      h("label", { className: "login-field" },
-        h("span", null, "Username"),
+  const hasSelectedPlan = Boolean(selectedPlanId);
+  return h("section", { className: "client-plan-panel", "aria-label": "本地方案保存" },
+    h("div", { className: "client-plan-heading" },
+      h("strong", null, "本地方案"),
+      h("span", null, `${plans.length} 个`)
+    ),
+    h("label", { className: "field client-plan-field" },
+      h("span", null, "已保存方案"),
+      h("select", {
+        value: selectedPlanId,
+        onChange: (event) => setSelectedPlanId(event.target.value)
+      },
+        h("option", { value: "" }, "新建方案"),
+        plans.map((plan) => h("option", { key: plan.id, value: plan.id },
+          `${plan.name || "未命名方案"}${plan.customerName ? ` / ${plan.customerName}` : ""}`
+        ))
+      )
+    ),
+    h("label", { className: "field client-plan-field" },
+      h("span", null, "方案名称"),
+      h("input", {
+        value: planName,
+        placeholder: "例如：张先生主卧方案",
+        onChange: (event) => setPlanName(event.target.value)
+      })
+    ),
+    h("div", { className: "client-plan-customer-grid" },
+      h("label", { className: "field client-plan-field" },
+        h("span", null, "客户姓名"),
         h("input", {
-          type: "text",
-          value: username,
-          autoComplete: "username",
-          autoFocus: true,
-          onChange: (event) => setUsername(event.target.value)
+          value: customerName,
+          placeholder: "客户姓名",
+          onChange: (event) => setCustomerName(event.target.value)
         })
       ),
-      h("label", { className: "login-field" },
-        h("span", null, "Password"),
+      h("label", { className: "field client-plan-field" },
+        h("span", null, "客户电话"),
         h("input", {
-          type: "password",
-          value: password,
-          autoComplete: "current-password",
-          onChange: (event) => setPassword(event.target.value)
+          value: customerPhone,
+          placeholder: "客户电话",
+          onChange: (event) => setCustomerPhone(event.target.value)
         })
-      ),
-      error && h("p", { className: "login-error", role: "alert" }, error),
-      h("button", { className: "login-button", type: "submit" }, "Login"),
-      h("small", null, "Temporary frontend access control")
+      )
+    ),
+    h("div", { className: "client-plan-actions" },
+      h("button", { type: "button", onClick: onSave }, hasSelectedPlan ? "保存" : "保存新方案"),
+      h("button", { type: "button", onClick: onSaveAs }, "另存"),
+      h("button", { type: "button", onClick: onOpen, disabled: !hasSelectedPlan }, "打开"),
+      h("button", { type: "button", onClick: onRename, disabled: !hasSelectedPlan }, "重命名"),
+      h("button", { type: "button", onClick: onDelete, disabled: !hasSelectedPlan }, "删除")
     )
   );
 }

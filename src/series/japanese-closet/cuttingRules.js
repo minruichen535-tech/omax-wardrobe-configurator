@@ -26,7 +26,9 @@ export const japaneseClosetCuttingRules = {
     doubleRail: 1500,
     cabinet: 300,
     jewelryBox: 900,
-    trouserRack: 900
+    trouserRack: 900,
+    drawerSingle: 900,
+    drawerDouble: 900
   },
   componentFallbackNames: {
     woodTop: "木顶板",
@@ -35,7 +37,9 @@ export const japaneseClosetCuttingRules = {
     doubleRail: "挂衣杆",
     cabinet: "柜子",
     jewelryBox: "首饰盒",
-    trouserRack: "裤架"
+    trouserRack: "裤架",
+    drawerSingle: "抽屉",
+    drawerDouble: "双抽屉"
   },
   defaultIconsByType: {
     woodTop: "images/icons/wood-top.svg",
@@ -44,7 +48,9 @@ export const japaneseClosetCuttingRules = {
     doubleRail: "images/icons/double-rail.svg",
     cabinet: "images/icons/cabinet-single.svg",
     jewelryBox: "images/icons/jewelry-box.svg",
-    trouserRack: "images/icons/trouser-rack.svg"
+    trouserRack: "images/icons/trouser-rack.svg",
+    drawerSingle: "images/icons/cabinet-single.svg",
+    drawerDouble: "images/icons/cabinet-single.svg"
   },
   getInnerBayWidth(totalLength, bayCount) {
     const length = Number(totalLength);
@@ -60,6 +66,7 @@ export const japaneseClosetCuttingRules = {
       return Math.floor(usableBayWidth - 15);
     }
     if (componentType === "cabinet") return Math.round(usableBayWidth);
+    if (componentType === "drawerSingle" || componentType === "drawerDouble") return Math.round(usableBayWidth);
     return null;
   },
   getVisualScaleWidth(componentType, innerBayWidth, componentCutLength, moduleWidth) {
@@ -75,6 +82,7 @@ export const japaneseClosetCuttingRules = {
       return innerBayWidth + extraRailVisualWidth;
     }
     if (componentType === "cabinet") return innerBayWidth;
+    if (componentType === "drawerSingle" || componentType === "drawerDouble") return innerBayWidth;
     return innerBayWidth;
   }
 };

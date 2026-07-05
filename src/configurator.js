@@ -3,7 +3,7 @@ import {
   WALL_MOUNTED_PLACEMENT_RULES,
   createWallMountedRailWithShelfPlacement
 } from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=cache-20260621-02";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=japanese-drawer-merchandising-20260703-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);
@@ -105,34 +105,53 @@ function mapPlannerLayout(layoutType) {
 }
 
 function createPlannerWalls(baseConfig, room, layout, cuttingRules, configPreset = {}) {
+  const japaneseWallLayout = configPreset.productSystemId === "japanese-closet"
+    ? configPreset.japaneseWallLayout || null
+    : null;
   const requestedBayCount = Number(configPreset.bayCount);
-  const backBayCount = Number.isInteger(requestedBayCount) && requestedBayCount > 0
+  const backBayCount = Number(japaneseWallLayout?.back?.bayCount) > 0
+    ? Number(japaneseWallLayout.back.bayCount)
+    : Number.isInteger(requestedBayCount) && requestedBayCount > 0
     ? requestedBayCount
     : recommendBayCount(room.width, cuttingRules);
   const sideBayCount = recommendBayCount(room.depth, cuttingRules);
+  const leftBayCount = Number(japaneseWallLayout?.left?.bayCount) > 0
+    ? Number(japaneseWallLayout.left.bayCount)
+    : sideBayCount;
+  const rightBayCount = Number(japaneseWallLayout?.right?.bayCount) > 0
+    ? Number(japaneseWallLayout.right.bayCount)
+    : sideBayCount;
   return {
     back: {
       ...(baseConfig.walls?.back || {}),
       enabled: true,
       length: room.width,
       bayCount: backBayCount,
-      bayWidths: []
+      bayWidths: normalizePlannerWallBayWidths(japaneseWallLayout?.back?.bayWidths, backBayCount)
     },
     left: {
       ...(baseConfig.walls?.left || {}),
       enabled: layout === "L-left" || layout === "U",
       length: room.depth,
-      bayCount: sideBayCount,
-      bayWidths: []
+      bayCount: leftBayCount,
+      bayWidths: normalizePlannerWallBayWidths(japaneseWallLayout?.left?.bayWidths, leftBayCount)
     },
     right: {
       ...(baseConfig.walls?.right || {}),
       enabled: layout === "U",
       length: room.depth,
-      bayCount: sideBayCount,
-      bayWidths: []
+      bayCount: rightBayCount,
+      bayWidths: normalizePlannerWallBayWidths(japaneseWallLayout?.right?.bayWidths, rightBayCount)
     }
   };
+}
+
+function normalizePlannerWallBayWidths(widths, bayCount) {
+  if (!Array.isArray(widths) || widths.length !== Number(bayCount)) return [];
+  const normalized = widths.map(Number);
+  return normalized.every((width) => Number.isFinite(width) && width > 0)
+    ? normalized
+    : [];
 }
 
 function createPlannerPlacements({ configPreset, seriesId, cuttingRules, productByType, componentTypes, walls }) {
@@ -226,9 +245,14 @@ function createJapaneseExplicitPlannerPlacements(explicitPlacements, walls, comp
     const wall = walls?.[wallId];
     const bayIndex = Number(placement?.bayIndex);
     const heightFromFloor = Number(placement?.heightFromFloor);
+    const isJapanesePlannerDrawerPlacement = isCanonicalJapanesePlannerDrawerPlacement(placement);
+    const componentAllowed = componentTypes.has(componentType) || isJapanesePlannerDrawerPlacement;
+    const hasPlacementProduct = isJapanesePlannerDrawerPlacement
+      || Boolean(productByType[componentType])
+      || (componentType === "drawerDouble" && (placement?.topDrawerSku || placement?.bottomDrawerSku));
     if (!componentType
-      || !componentTypes.has(componentType)
-      || !productByType[componentType]
+      || !componentAllowed
+      || !hasPlacementProduct
       || !wall?.enabled
       || !Number.isInteger(bayIndex)
       || bayIndex < 0
@@ -253,9 +277,21 @@ function createJapaneseExplicitPlannerPlacements(explicitPlacements, walls, comp
       heightFromFloor,
       quantity: 1,
       zoneType: placement.zoneType || "",
+      ...(placement.productSku ? { productSku: placement.productSku } : {}),
+      ...(placement.topDrawerSku ? { topDrawerSku: placement.topDrawerSku } : {}),
+      ...(placement.bottomDrawerSku ? { bottomDrawerSku: placement.bottomDrawerSku } : {}),
       source: placement.source || "candidate"
     }];
   });
+}
+
+function isCanonicalJapanesePlannerDrawerPlacement(placement) {
+  const componentType = placement?.componentType;
+  if (componentType === "drawerSingle") return Boolean(placement.productSku);
+  if (componentType === "drawerDouble") {
+    return Boolean(placement.productSku && (placement.topDrawerSku || placement.bottomDrawerSku));
+  }
+  return false;
 }
 
 function addPremiumUpgradeCabinets(context) {

@@ -26,110 +26,6 @@ button {
   min-height: 100vh;
 }
 
-.login-screen {
-  display: grid;
-  place-items: center;
-  min-height: 100vh;
-  padding: 24px;
-  background: #f7f2e9;
-}
-
-.login-panel {
-  display: grid;
-  gap: 18px;
-  width: min(100%, 390px);
-  padding: 32px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 16px 42px rgba(68, 45, 29, 0.12);
-}
-
-.login-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  color: #fff;
-  background: #6f3f1f;
-  border-radius: 8px;
-  font-weight: 800;
-}
-
-.login-brand-logo {
-  width: 56px;
-  height: 56px;
-  object-fit: contain;
-}
-
-.login-panel h1,
-.login-panel p {
-  margin: 0;
-}
-
-.login-panel h1 {
-  color: var(--ink);
-  font-size: 24px;
-  line-height: 1.25;
-}
-
-.login-panel > p {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.login-field {
-  display: grid;
-  gap: 7px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.login-field input {
-  width: 100%;
-  min-height: 44px;
-  padding: 0 12px;
-  color: var(--ink);
-  background: var(--input);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  outline: none;
-}
-
-.login-field input:focus {
-  border-color: #6f3f1f;
-  box-shadow: 0 0 0 3px rgba(111, 63, 31, 0.12);
-}
-
-.login-error {
-  margin: -4px 0 0;
-  color: var(--danger-text);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.login-button {
-  min-height: 44px;
-  color: #fff;
-  background: #6f3f1f;
-  border: 1px solid #6f3f1f;
-  border-radius: 8px;
-  font-weight: 800;
-}
-
-.login-button:hover {
-  background: #5b3218;
-  border-color: #5b3218;
-}
-
-.login-panel small {
-  color: var(--muted);
-  line-height: 1.45;
-}
-
 .workspace {
   display: grid;
   grid-template-columns: minmax(310px, 370px) minmax(520px, 1fr) minmax(360px, 440px);
@@ -899,6 +795,81 @@ button {
 .quote-export-button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.client-plan-panel {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.client-plan-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.client-plan-heading strong {
+  font-size: 15px;
+}
+
+.client-plan-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.client-plan-field {
+  gap: 6px;
+}
+
+.client-plan-field input,
+.client-plan-field select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--text);
+}
+
+.client-plan-customer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.client-plan-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.client-plan-actions button {
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.client-plan-actions button:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--panel);
+}
+
+.client-plan-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .notice,

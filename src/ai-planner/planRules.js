@@ -19,7 +19,7 @@ import {
   getShelfGapDiagnostics,
   matchJapaneseCasesByRules,
   selectRecommendedCandidates
-} from "./candidatePlanEngine.js?v=trouser-shelf-preserve-20260630-01";
+} from "./candidatePlanEngine.js?v=japanese-drawer-merchandising-20260703-01";
 
 const budgetOptions = ["3,000以下", "3,000 - 6,000", "6,000 - 9,000", "9,000 - 12,000", "12,000 - 18,000", "18,000以上"];
 
@@ -1014,7 +1014,13 @@ function applyLayoutConstraintsToCandidate(candidate) {
   candidate.placements = constrainedPlacements;
   candidate.configPreset = {
     ...(candidate.configPreset || {}),
-    explicitPlacements: constrainedPlacements.map((placement) => ({ ...placement })),
+    explicitPlacements: constrainedPlacements.map((placement) => ({
+      ...placement,
+      bayIndex: Number.isInteger(Number(placement.wallBayIndex))
+        ? Number(placement.wallBayIndex)
+        : Number(placement.bayIndex) || 0,
+      logicalBayIndex: Number(placement.bayIndex) || 0
+    })),
     componentQuantities: countDebugValues(
       constrainedPlacements.filter((placement) => placement.componentType),
       "componentType"

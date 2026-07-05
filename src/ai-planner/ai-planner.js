@@ -6,7 +6,7 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=trouser-shelf-preserve-20260630-01";
+} from "./planRules.js?v=japanese-drawer-merchandising-20260703-01";
 import {
   loadCaseMatchingRules,
   loadClosetRules
@@ -18,7 +18,8 @@ const state = {
   recommendation: null,
   selectedProductSystem: null,
   selectedPlan: null,
-  currentPlans: []
+  currentPlans: [],
+  showPlannerVisualAssets: true
 };
 
 const shell = document.querySelector(".planner-shell");
@@ -31,10 +32,12 @@ const totalProgress = document.querySelector(".planner-progress span:last-child"
 const backButton = document.querySelector(".back-button");
 const iconRoot = "/customer-home/icons/";
 const iconVersion = "20260617";
-const analysisLoadingMessages = [
-  { delay: 0, text: "正在识别空间类型..." },
-  { delay: 2000, text: "正在计算收纳需求..." },
-  { delay: 4000, text: "正在生成专属方案..." }
+const analysisLoadingStages = [
+  "正在识别空间类型",
+  "正在分析收纳需求",
+  "正在匹配预算区间",
+  "正在生成配置方向",
+  "已完成需求分析"
 ];
 const layoutOptions = [
   { value: "I型", title: "I型", subtitle: "单面布局", sketch: "│" },
@@ -571,26 +574,87 @@ function renderAnalysisLoading() {
   note.textContent = "我们会根据空间尺寸、使用人数、收纳物品和预算，为您生成更适合的配置方向。";
 
   answerContent.innerHTML = `
-    <div class="analysis-loading-card">
-      <span class="analysis-loading-spinner" aria-hidden="true"></span>
-      <p class="analysis-loading-text">${analysisLoadingMessages[0].text}</p>
+    <div class="analysis-loading-card ai-analysis-loading">
+      <div class="ai-analysis-orb" aria-hidden="true"><i></i></div>
+      <div class="ai-analysis-status">
+        <small>PURENEST AI ANALYSIS</small>
+        <p class="analysis-loading-text">${analysisLoadingStages[0]}</p>
+        <div class="ai-analysis-progress" aria-hidden="true"><i style="width:0%"></i></div>
+      </div>
+      <div class="ai-analysis-summary-card">
+        <span class="ai-analysis-card-kicker">已分析你的收纳需求</span>
+        <div class="ai-analysis-summary-rows">
+          ${renderAnalysisLoadingSummaryRows().map((row, index) => `
+            <p class="ai-analysis-summary-row" style="--row-index:${index}">
+              <small>${row.label}</small>
+              <strong>${row.value}</strong>
+            </p>
+          `).join("")}
+        </div>
+      </div>
+      <button class="dimension-next analysis-loading-next" type="button" disabled>查看三套方案 <i>→</i></button>
     </div>
   `;
 
   const loadingText = answerContent.querySelector(".analysis-loading-text");
-  analysisLoadingMessages.slice(1).forEach((message) => {
+  const progressBar = answerContent.querySelector(".ai-analysis-progress i");
+  const summaryRows = Array.from(answerContent.querySelectorAll(".ai-analysis-summary-row"));
+  const nextButton = answerContent.querySelector(".analysis-loading-next");
+  const stageDelayMs = 760;
+  analysisLoadingStages.forEach((stageText, index) => {
     analysisLoadingTimers.push(window.setTimeout(() => {
       loadingText.classList.add("is-switching");
       analysisLoadingTimers.push(window.setTimeout(() => {
-        loadingText.textContent = message.text;
+        loadingText.textContent = stageText;
         loadingText.classList.remove("is-switching");
       }, 220));
-    }, message.delay));
+      if (progressBar) {
+        progressBar.style.width = `${Math.round(((index + 1) / analysisLoadingStages.length) * 100)}%`;
+      }
+      if (summaryRows[index]) {
+        summaryRows[index].classList.add("is-visible");
+      }
+    }, index * stageDelayMs));
   });
   analysisLoadingTimers.push(window.setTimeout(() => {
     clearAnalysisLoadingTimers();
     renderAnalysis({ fadeIn: true });
-  }, 5000));
+  }, analysisLoadingStages.length * stageDelayMs + 260));
+}
+
+function renderAnalysisLoadingSummaryRows() {
+  const recommendation = state.recommendation || buildPlanRecommendation(state.answers);
+  const dimensions = recommendation?.dimensions || state.answers.dimensions || {};
+  const demands = Array.isArray(recommendation?.demands) ? recommendation.demands : [];
+  const demandPersona = recommendation?.demandPersona || {};
+  const selectedSystem = state.selectedProductSystem || state.answers.selectedProductSystem || {};
+  return [
+    {
+      label: "空间尺寸",
+      value: `${dimensions.layoutType || "I型"} / ${dimensions.width || "-"} × ${dimensions.depth || "-"} × ${dimensions.height || 2700}mm`
+    },
+    {
+      label: "使用人数",
+      value: state.answers.people || state.answers.style || "待确认"
+    },
+    {
+      label: "主要收纳需求",
+      value: demands.length ? demands.join(" / ") : "综合收纳"
+    },
+    {
+      label: "预算区间",
+      value: state.answers.budget || "待确认"
+    },
+    {
+      label: "推荐方向",
+      value: demandPersona?.focus
+        ? `${selectedSystem.name || "当前系列"} · ${demandPersona.focus}`
+        : `${selectedSystem.name || "当前系列"} · 均衡收纳`
+    }
+  ].map((row) => ({
+    label: escapeDebugValue(row.label),
+    value: escapeDebugValue(row.value)
+  }));
 }
 
 function renderAnalysis({ fadeIn = false } = {}) {
@@ -619,6 +683,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
 
   answerContent.innerHTML = `
     <div class="analysis-card${fadeIn ? " is-fade-in" : ""}">
+      ${renderCompletedAnalysisHeader()}
       ${renderReportSection("基础信息", `
         <div class="analysis-grid">
           <p><small>空间类型 / 尺寸</small><strong>${state.answers.spaceUse || "定制空间"} / ${dimensions.layoutType || "I型"} / ${dimensions.width} × ${dimensions.depth} × ${dimensions.height || 2700}mm</strong></p>
@@ -635,7 +700,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
       ${zoneCards.length ? renderReportSection("收纳物品估算", renderZoneCards(zoneCards)) : ""}
       <div class="analysis-actions">
         <button class="analysis-back" type="button">← 返回上一题</button>
-        <button class="dimension-next analysis-next" type="button">生成方案 <i>→</i></button>
+        <button class="dimension-next analysis-next" type="button">查看三套方案 <i>→</i></button>
       </div>
     </div>
   `;
@@ -644,9 +709,19 @@ function renderAnalysis({ fadeIn = false } = {}) {
     renderQuestion("back");
   });
   answerContent.querySelector(".analysis-next").addEventListener("click", renderAiRecommendedPlans);
-  if (fadeIn) {
-    analysisLoadingTimers.push(window.setTimeout(renderAiRecommendedPlans, 450));
-  }
+}
+
+function renderCompletedAnalysisHeader() {
+  return `
+    <div class="ai-analysis-header-block">
+      <div class="ai-analysis-orb" aria-hidden="true"><i></i></div>
+      <div class="ai-analysis-status">
+        <small>PURENEST AI ANALYSIS</small>
+        <p class="analysis-loading-text">已完成需求分析</p>
+        <div class="ai-analysis-progress" aria-hidden="true"><i style="width:100%"></i></div>
+      </div>
+    </div>
+  `;
 }
 
 function renderProductSystemSelection() {
@@ -787,6 +862,12 @@ function renderAiRecommendedPlans() {
       updateSingleModelPlanResult(selected, recommendedPlans, selectedProductSystem);
     });
   });
+  answerContent.querySelector("[data-toggle-planner-visual-assets]")?.addEventListener("change", (event) => {
+    state.showPlannerVisualAssets = event.target.checked;
+    const selectedType = answerContent.querySelector("[data-selected-plan-detail]")?.dataset.selectedPlanDetail || "basic";
+    const selected = recommendedPlans.find((plan) => plan.planType === selectedType) || recommendedPlans[0];
+    updateSingleModelPlanResult(selected, recommendedPlans, selectedProductSystem);
+  });
   answerContent.querySelector(".ai-plan-panel")?.addEventListener("click", (event) => {
     if (event.target.closest("[data-view-full-analysis]")) {
       renderAnalysis({ fadeIn: true });
@@ -816,6 +897,12 @@ function renderSingleModelPlanResult(plans) {
   return `
     <div class="ai-plan-result-layout">
       <section class="ai-plan-result-preview" aria-label="方案模型预览">
+        <div class="ai-plan-preview-toolbar">
+          <label class="ai-plan-visual-toggle">
+            <input type="checkbox" data-toggle-planner-visual-assets ${state.showPlannerVisualAssets ? "checked" : ""} />
+            <span>显示物品</span>
+          </label>
+        </div>
         <div class="result-plan-preview-root" data-result-plan-preview data-preview-state="loading">
           <div class="plan-preview-shell" aria-hidden="true">
             <span></span>
@@ -1286,7 +1373,7 @@ async function loadPlanCardPreviews(plans, selectedProductSystem) {
   const roots = Array.from(answerContent.querySelectorAll("[data-card-preview-plan]"));
   if (!roots.length) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
     await Promise.all(roots.map(async (root) => {
       const plan = plans.find((item) => item.planType === root.dataset.cardPreviewPlan);
       if (!plan || plan.isFallback) {
@@ -1297,7 +1384,8 @@ async function loadPlanCardPreviews(plans, selectedProductSystem) {
         const cleanup = await mountReadOnlyWardrobePreview(root, {
           plan,
           selectedProductSystem,
-          mode: "thumbnail"
+          mode: "thumbnail",
+          showPlannerVisualAssets: state.showPlannerVisualAssets
         });
         if (!root.isConnected) {
           cleanup?.();
@@ -1350,8 +1438,13 @@ async function loadResultPlanPreview(container, plan, selectedProductSystem) {
   renderAiPlannerPreviewStamp(container, renderInfo);
   publishAiPlannerActiveRender(renderInfo, { generatedCount: 0, skippedCount: 0, sceneJsImportUrl: "" });
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
-    const cleanup = await mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem, renderInfo });
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
+    const cleanup = await mountReadOnlyWardrobePreview(container, {
+      plan,
+      selectedProductSystem,
+      renderInfo,
+      showPlannerVisualAssets: state.showPlannerVisualAssets
+    });
     if (!container.isConnected) {
       cleanup?.();
       return;
@@ -1517,8 +1610,12 @@ function closePlanPreviewModal() {
 async function loadReadOnlyPlanPreview(container, plan, selectedProductSystem) {
   if (!container) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=hanging-visual-all-rails-20260630-01");
-    const cleanup = await mountReadOnlyWardrobePreview(container, { plan, selectedProductSystem });
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
+    const cleanup = await mountReadOnlyWardrobePreview(container, {
+      plan,
+      selectedProductSystem,
+      showPlannerVisualAssets: state.showPlannerVisualAssets
+    });
     if (!container.isConnected) {
       cleanup?.();
       return;
