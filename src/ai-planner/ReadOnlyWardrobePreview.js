@@ -221,7 +221,7 @@ function getPreviewData(series) {
   return dataCache.get(series.seriesId);
 }
 
-function buildPlannerVisualAssets(config, configPreset = {}, plan = {}, design = null) {
+export function buildPlannerVisualAssets(config, configPreset = {}, plan = {}, design = null) {
   const storageRulesDebug = getStorageRulesDebug();
   const planType = normalizeVisualPlanType(plan?.planType || configPreset.planType);
   const explicitZoneLookup = buildExplicitPlacementZoneLookup(configPreset.explicitPlacements);

@@ -42,7 +42,9 @@ import {
 } from "./dataSource.js?v=cache-20260621-02";
 import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260621-02";
 import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-client-route-20260703-01";
-import { WardrobeScene } from "./scene.js?v=drawer-material-sync-20260702-01";
+import { WardrobeScene } from "./scene.js?v=configurator-visual-items-20260706-01";
+import { buildPlannerVisualAssets } from "./ai-planner/ReadOnlyWardrobePreview.js?v=configurator-visual-items-20260706-01";
+import { loadStorageRules } from "./rules/storageRules.js?v=storage-rules-20260625-01";
 import { getCuttingRules, getDisplayRules } from "./series/index.js?v=drawer-material-sync-20260702-01";
 import {
   WALL_MOUNTED_PLACEMENT_RULES,
@@ -210,6 +212,39 @@ function getDefaultClientPlanName(plans) {
   return `方案 ${plans.length + 1}`;
 }
 
+function buildConfiguratorVisualConfigPreset(design) {
+  const placements = Array.isArray(design?.placements) ? design.placements : [];
+  const railPlacements = placements.filter((placement) => (
+    placement.componentType === "singleRail" || placement.componentType === "doubleRail"
+  ));
+  const shortRailCount = railPlacements.filter((placement) => (
+    placement.zoneType === "shortHangZone" || Number(placement.heightFromFloor) < 1450
+  )).length;
+  const longRailCount = Math.max(0, railPlacements.length - shortRailCount);
+  const shoeShelfCount = placements.filter((placement) => (
+    placement.zoneType === "shoeZone"
+    || ["shoeShelf", "shoesShelf"].includes(placement.componentType)
+  )).length;
+  const bagSurfaceCount = placements.filter((placement) => (
+    ["woodShelf", "glassShelf", "cabinet"].includes(placement.componentType)
+    && placement.zoneType !== "shoeZone"
+  )).length;
+  const openFloorCount = new Set(placements.map((placement) => (
+    `${placement.wallId || "back"}:${Number(placement.bayIndex) || 0}`
+  ))).size;
+  return {
+    planType: "premium",
+    demandQuantityProfile: {
+      短衣: { quantity: shortRailCount * 20 },
+      长衣: { quantity: longRailCount * 20 },
+      鞋子: { quantity: shoeShelfCount * 15 },
+      包包: { quantity: bagSurfaceCount * 5 },
+      行李箱: { quantity: openFloorCount > 0 ? 1 : 0 },
+      被褥: { quantity: 0 }
+    }
+  };
+}
+
 function App() {
   const routeInfo = useMemo(() => resolveRoute(), []);
   const isClientMode = location.pathname.startsWith("/client");
@@ -248,6 +283,8 @@ function ClientApp({ data, isClientMode = false }) {
   const [quoteNote, setQuoteNote] = useState("");
   const [brandInfo, setBrandInfo] = useState(null);
   const [isExportingQuote, setIsExportingQuote] = useState(false);
+  const [showVisualItems, setShowVisualItems] = useState(false);
+  const [visualRulesReady, setVisualRulesReady] = useState(false);
   const [savedPlans, setSavedPlans] = useState(() => (
     isClientMode ? readClientSavedPlans() : []
   ));
@@ -272,6 +309,25 @@ function ClientApp({ data, isClientMode = false }) {
     () => design.bom.reduce((sum, item) => sum + displayRules.getWebDisplayLineTotal(item), 0),
     [design.bom, displayRules]
   );
+  const configuratorVisualAssets = useMemo(() => {
+    if (!showVisualItems || !visualRulesReady) {
+      return { visualAssets: [], debug: null };
+    }
+    return buildPlannerVisualAssets(
+      config,
+      buildConfiguratorVisualConfigPreset(design),
+      { planType: "premium" },
+      design
+    );
+  }, [config, design, showVisualItems, visualRulesReady]);
+  const sceneConfig = useMemo(() => {
+    if (!showVisualItems) return config;
+    return {
+      ...config,
+      visualAssets: configuratorVisualAssets.visualAssets,
+      visualAssetDebug: configuratorVisualAssets.debug
+    };
+  }, [config, configuratorVisualAssets, showVisualItems]);
   const selectedPlacement = design.placements.find((placement) => placement.id === config.selectedPlacementId);
   const currentSeriesSavedPlans = useMemo(
     () => savedPlans
@@ -396,6 +452,21 @@ function ClientApp({ data, isClientMode = false }) {
       .then(setBrandInfo)
       .catch(() => setBrandInfo(null));
   }, [data.series.brandPath, data.series.clientBrandPath, isClientMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadStorageRules()
+      .then(() => {
+        if (!cancelled) setVisualRulesReady(true);
+      })
+      .catch((error) => {
+        console.warn("[configurator visual items] storage rules unavailable", error);
+        if (!cancelled) setVisualRulesReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isClientMode) return;
@@ -695,6 +766,15 @@ function ClientApp({ data, isClientMode = false }) {
               { value: "true", label: "LED System" }
             ],
             onChange: (led) => updateConfig({ led: led === "true" })
+          }),
+          h(Segmented, {
+            label: "显示物品",
+            value: showVisualItems ? "true" : "false",
+            options: [
+              { value: "false", label: "关闭" },
+              { value: "true", label: "开启" }
+            ],
+            onChange: (value) => setShowVisualItems(value === "true")
           })
         ),
         h(StepBlock, { icon: MapPinned, title: "位置选择" },
@@ -910,12 +990,15 @@ function ClientApp({ data, isClientMode = false }) {
           }),
           h(WardrobeScene, {
             key: `scene-side-post-depth-inset-20260603-01-${config.layout}`,
-            config,
+            config: sceneConfig,
             design,
             series: data.series,
             selectedId: config.selectedPlacementId,
             onDropComponent: addPlacement,
-            onSelectPlacement: (id) => updateConfig({ selectedPlacementId: id })
+            onSelectPlacement: (id) => updateConfig({ selectedPlacementId: id }),
+            previewMode: showVisualItems
+              ? isClientMode ? "client-visual-items" : "employee-visual-items"
+              : ""
           }),
           null
         )

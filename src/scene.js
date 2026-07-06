@@ -1360,7 +1360,7 @@ async function addWallRun(
     await Promise.all(wallPlacements.map(addWallPlacement));
   }
 
-  if (previewMode === "ai-planner" && Array.isArray(config.visualAssets) && config.visualAssets.length) {
+  if (isVisualAssetPreviewMode(previewMode) && Array.isArray(config.visualAssets) && config.visualAssets.length) {
     await addPlannerVisualAssetsForWall(
       group,
       wall,
@@ -1373,6 +1373,12 @@ async function addWallRun(
   }
 
   group.updateMatrixWorld(true);
+}
+
+function isVisualAssetPreviewMode(previewMode = "") {
+  return previewMode === "ai-planner"
+    || previewMode === "employee-visual-items"
+    || previewMode === "client-visual-items";
 }
 
 async function addPlannerVisualAssetsForWall(
