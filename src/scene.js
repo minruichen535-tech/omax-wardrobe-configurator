@@ -24,11 +24,14 @@ const clientDrawerDoublePreviewProduct = {
   modelPath: "products/japanese-closet/models/glb/JP-drawerDouble.glb",
   glbAssetPath: "products/japanese-closet/models/glb/JP-drawerDouble.glb"
 };
-const drawerDoubleInsertModelPathsBySku = new Map([
-  ["JP-drawer-leather-storage", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-leather-storage.glb"],
-  ["JP-drawer-wire-basket", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-wire-basket.glb"],
-  ["JP-drawer-wire-basket-short", "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-wire-basket-short.glb"]
+const drawerDoubleSharedLeatherInsertSkus = new Set([
+  "JP-drawer-leather-storage",
+  "JP-drawer-jewelry",
+  "JP-drawer-multi-storage",
+  "JP-drawer-underwear-a",
+  "JP-drawer-underwear-b"
 ]);
+const drawerDoubleLeatherInsertModelPath = "products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-leather-storage.glb";
 const wireBasketDrawerSkus = new Set([
   "JP-drawer-wire-basket",
   "JP-drawer-wire-basket-short"
@@ -3477,15 +3480,6 @@ async function addPlacement(
   if (placement.componentType === "drawerDouble") {
     applyDrawerDoubleTopPanelWoodMaterial(model);
   }
-  model = await createDrawerDoubleCompositeModel({
-    baseModel: model,
-    placement,
-    series,
-    report,
-    targetSize,
-    transform,
-    modelTransforms
-  });
   group.add(model);
   group.updateMatrixWorld(true);
   const hasWallMountedDistance = series?.seriesId === "wall-mounted-v2"
@@ -4473,146 +4467,28 @@ function getAluminumPostModelPath(config) {
   return aluminumPostModelPaths[`${postStyle}:${connectionMode}`];
 }
 
-function getDrawerDoubleInsertRequests(placement) {
-  if (placement.componentType !== "drawerDouble") return [];
-  return [
-    { layer: "top", sku: placement.topDrawerSku },
-    { layer: "bottom", sku: placement.bottomDrawerSku }
-  ].map((request) => ({
-    ...request,
-    modelPath: drawerDoubleInsertModelPathsBySku.get(request.sku)
-  })).filter((request) => request.modelPath);
-}
-
-async function createDrawerDoubleCompositeModel({
-  baseModel,
-  placement,
-  series,
-  report,
-  targetSize,
-  transform,
-  modelTransforms
-}) {
-  const insertRequests = getDrawerDoubleInsertRequests(placement);
-  if (!insertRequests.length || baseModel.name === "Missing Model") return baseModel;
-  const defaultTrayLayers = getDrawerDoubleDefaultTrayLayers(baseModel);
-
-  const composite = new THREE.Group();
-  composite.name = baseModel.name || "Drawer Double";
-  composite.userData = {
-    ...baseModel.userData,
-    drawerDoubleBaseModel: true,
-    drawerDoubleInsertModelPaths: insertRequests.map((request) => request.modelPath)
-  };
-  composite.add(baseModel);
-
-  for (const request of insertRequests) {
-    const targetLayer = defaultTrayLayers[request.layer];
-    if (!targetLayer) continue;
-    targetLayer.mesh.parent?.remove(targetLayer.mesh);
-    const insertModel = await createModelOrMissing(
-      {
-        sku: `drawerDoubleInsert:${request.sku}`,
-        nameCn: "Drawer Double Insert",
-        modelPath: request.modelPath,
-        glbAssetPath: request.modelPath
-      },
-      series,
-      report,
-      targetSize,
-      "Drawer Double Insert",
-      transform,
-      placement.componentType,
-      modelTransforms
-    );
-    pruneDrawerDoubleInsertModel(insertModel, request.modelPath);
-    if (isWireBasketDrawerSku(request.sku)) {
-      applyWireBasketWhiteMaterial(insertModel);
-    }
-    alignDrawerDoubleInsertToTray(insertModel, targetLayer.box);
-    insertModel.userData = {
-      ...insertModel.userData,
-      isDrawerDoubleInsert: true,
-      drawerDoubleInsertLayer: request.layer,
-      drawerDoubleInsertSku: request.sku,
-      drawerDoubleInsertModelPath: request.modelPath
-    };
-    composite.add(insertModel);
+function resolveDrawerDoubleInsertModelPath(sku) {
+  if (!sku || !String(sku).startsWith("JP-drawer-")) return "";
+  if (drawerDoubleSharedLeatherInsertSkus.has(sku)) {
+    return drawerDoubleLeatherInsertModelPath;
   }
-  return composite;
+  const suffix = String(sku).slice("JP-drawer-".length);
+  return `products/japanese-closet/models/glb/JP-drawer-double-insert-drawer-${suffix}.glb`;
 }
 
-function getDrawerDoubleDefaultTrayLayers(baseModel) {
-  baseModel.updateMatrixWorld(true);
-  const trayMeshes = [];
-  baseModel.traverse((child) => {
-    if (!child.isMesh) return;
-    const materialNames = getMaterialNames(child);
-    if (!materialNames.some((name) => name === "[Color M05]")) return;
-    const box = new THREE.Box3().setFromObject(child);
-    if (box.isEmpty()) return;
-    const size = box.getSize(new THREE.Vector3());
-    if (size.x < 0.45 || size.x > 0.8 || size.z < 0.35 || size.z > 0.55) return;
-    trayMeshes.push({
-      mesh: child,
-      box,
-      center: box.getCenter(new THREE.Vector3()),
-      size
-    });
-  });
-  trayMeshes.sort((a, b) => a.center.y - b.center.y);
-  return {
-    bottom: trayMeshes[0] || null,
-    top: trayMeshes[trayMeshes.length - 1] || null
-  };
-}
-
-function pruneDrawerDoubleInsertModel(insertModel, insertModelPath) {
-  insertModel.updateMatrixWorld(true);
-  const removable = [];
-  insertModel.traverse((child) => {
-    if (!child.isMesh) return;
-    if (!isDrawerDoubleInsertMesh(child, insertModelPath)) {
-      removable.push(child);
-    }
-  });
-  removable.forEach((child) => child.parent?.remove(child));
-}
-
-function isDrawerDoubleInsertMesh(mesh, insertModelPath) {
-  const path = getObjectNamePath(mesh).join("/");
-  const materialNames = getMaterialNames(mesh);
-  if (/wire-basket/i.test(insertModelPath)) {
-    return /组件#/.test(path)
-      || materialNames.some((name) => /Translucent Glass Safety/i.test(name));
+function resolveDrawerDoubleReplacementModelPath(placement) {
+  if (placement.componentType !== "drawerDouble") return "";
+  const skus = [placement.topDrawerSku, placement.bottomDrawerSku].filter(Boolean);
+  if (skus.includes("JP-drawer-wire-basket-short")) {
+    return resolveDrawerDoubleInsertModelPath("JP-drawer-wire-basket-short");
   }
-  if (/leather-storage/i.test(insertModelPath)) {
-    const box = new THREE.Box3().setFromObject(mesh);
-    return !box.isEmpty() && box.min.y < -0.001;
+  if (skus.includes("JP-drawer-wire-basket")) {
+    return resolveDrawerDoubleInsertModelPath("JP-drawer-wire-basket");
   }
-  return false;
-}
-
-function getObjectNamePath(object) {
-  const names = [];
-  let current = object;
-  while (current) {
-    names.unshift(current.name || "");
-    current = current.parent;
+  if (skus.some((sku) => drawerDoubleSharedLeatherInsertSkus.has(sku))) {
+    return drawerDoubleLeatherInsertModelPath;
   }
-  return names.filter(Boolean);
-}
-
-function alignDrawerDoubleInsertToTray(insertModel, trayBox) {
-  insertModel.updateMatrixWorld(true);
-  const insertBox = new THREE.Box3().setFromObject(insertModel);
-  if (insertBox.isEmpty() || trayBox.isEmpty()) return;
-  const insertCenter = insertBox.getCenter(new THREE.Vector3());
-  const trayCenter = trayBox.getCenter(new THREE.Vector3());
-  insertModel.position.x += trayCenter.x - insertCenter.x;
-  insertModel.position.y += trayCenter.y - insertCenter.y;
-  insertModel.position.z += trayCenter.z - insertCenter.z;
-  insertModel.updateMatrixWorld(true);
+  return "";
 }
 
 function resolvePlacementSceneProduct(placement, design) {
@@ -4620,7 +4496,13 @@ function resolvePlacementSceneProduct(placement, design) {
     placement.componentType === "drawerDouble"
     && (placement.topDrawerSku || placement.bottomDrawerSku)
   ) {
-    return clientDrawerDoublePreviewProduct;
+    const replacementModelPath = resolveDrawerDoubleReplacementModelPath(placement);
+    if (!replacementModelPath) return clientDrawerDoublePreviewProduct;
+    return {
+      ...clientDrawerDoublePreviewProduct,
+      modelPath: replacementModelPath,
+      glbAssetPath: replacementModelPath
+    };
   }
   if (placement.componentType === "drawerSingle") {
     return design.productBySku[placement.productSku];
@@ -5559,7 +5441,7 @@ function findDrawerDoubleTopPanelMesh(model) {
   model.updateMatrixWorld(true);
   const candidates = [];
   model.traverse((child) => {
-    if (!child.isMesh || child.userData?.isDrawerDoubleInsert) return;
+    if (!child.isMesh) return;
     const box = new THREE.Box3().setFromObject(child);
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());

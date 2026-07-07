@@ -1283,6 +1283,211 @@ body {
   padding-top: 4px;
 }
 
+.planner-inline-editor {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+.planner-inline-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(41, 41, 37, 0.08);
+}
+
+.planner-inline-editor-header small,
+.planner-inline-editor-header p,
+.planner-inline-editor-controls small,
+.planner-inline-editor-controls span {
+  color: #77756f;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.planner-inline-editor-header h2 {
+  margin: 4px 0;
+  font-family: "Songti SC", "STSong", Georgia, serif;
+  font-size: 28px;
+  font-weight: 400;
+}
+
+.planner-inline-editor-header p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.planner-inline-price {
+  display: grid;
+  gap: 4px;
+  min-width: 120px;
+  text-align: right;
+}
+
+.planner-inline-price span {
+  color: #77756f;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.planner-inline-price strong {
+  color: #34332e;
+  font-family: Georgia, serif;
+  font-size: 24px;
+  font-weight: 400;
+}
+
+.planner-inline-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.planner-inline-editor-actions .analysis-back,
+.planner-inline-editor-actions .dimension-next {
+  margin: 0;
+  min-height: 0;
+  padding: 11px 16px;
+  font-size: 12px;
+}
+
+.planner-inline-editor-body {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  gap: 16px;
+  min-width: 0;
+}
+
+.planner-inline-add-panel,
+.planner-inline-editor-controls {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(41, 41, 37, 0.08);
+}
+
+.planner-inline-toggle-row {
+  display: grid;
+  gap: 10px;
+}
+
+.planner-inline-toggle-row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5f5d57;
+  font-size: 12px;
+}
+
+.planner-inline-library {
+  display: grid;
+  gap: 8px;
+  max-height: clamp(420px, 58vh, 640px);
+  overflow: auto;
+}
+
+.planner-inline-library-tile {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 10px;
+  color: #34332e;
+  background: rgba(250, 249, 245, 0.82);
+  border: 1px solid rgba(41, 41, 37, 0.1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.planner-inline-library-tile img,
+.planner-inline-library-tile i {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.planner-inline-library-tile span {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-inline-editor-scene {
+  min-width: 0;
+  height: clamp(560px, 68vh, 760px);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(41, 41, 37, 0.08);
+}
+
+.planner-inline-editor-scene .three-mount {
+  width: 100%;
+  height: 100%;
+}
+
+.planner-inline-placement-controls,
+.planner-inline-placement-controls label {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.planner-inline-placement-controls input[type="number"] {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid rgba(41, 41, 37, 0.14);
+  background: rgba(250, 249, 245, 0.8);
+}
+
+.planner-inline-placement-controls select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid rgba(41, 41, 37, 0.14);
+  background: rgba(250, 249, 245, 0.8);
+}
+
+.planner-inline-placement-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.planner-inline-placement-actions button {
+  min-height: 34px;
+  border: 1px solid rgba(41, 41, 37, 0.14);
+  background: rgba(250, 249, 245, 0.8);
+  cursor: pointer;
+}
+
+.planner-inline-placement-actions button:last-child {
+  grid-column: 1 / -1;
+}
+
+.planner-inline-placement-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.planner-inline-save-status {
+  padding-top: 10px;
+  border-top: 1px solid rgba(41, 41, 37, 0.08);
+}
+
 .result-back-link {
   margin-top: 8px;
   padding: 14px 0 0;
@@ -2160,6 +2365,7 @@ body {
 .is-analysis .planner-stage,
 .is-product-system .planner-stage,
 .is-ai-plans .planner-stage,
+.is-inline-edit .planner-stage,
 .is-lead .planner-stage,
 .is-submitted .planner-stage {
   width: min(1050px, 100%);
@@ -2169,7 +2375,8 @@ body {
 .is-analysis-loading .planner-footer,
 .is-analysis .planner-footer,
 .is-product-system .planner-footer,
-.is-ai-plans .planner-footer {
+.is-ai-plans .planner-footer,
+.is-inline-edit .planner-footer {
   display: none;
 }
 
@@ -2213,12 +2420,14 @@ body {
 }
 
 .is-ai-plans .planner-stage,
+.is-inline-edit .planner-stage,
 .is-lead .planner-stage {
   width: min(1500px, 100%);
   min-height: max(820px, calc(100vh - 96px));
 }
 
 .is-ai-plans .question-paper,
+.is-inline-edit .question-paper,
 .is-lead .question-paper {
   top: 0;
   left: 50%;
@@ -2229,6 +2438,7 @@ body {
 }
 
 .is-ai-plans .answer-paper,
+.is-inline-edit .answer-paper,
 .is-lead .answer-paper {
   top: 160px;
   left: 50%;
@@ -2240,12 +2450,15 @@ body {
 
 .is-ai-plans .question-paper::after,
 .is-ai-plans .answer-paper::after,
+.is-inline-edit .question-paper::after,
+.is-inline-edit .answer-paper::after,
 .is-lead .question-paper::after,
 .is-lead .answer-paper::after {
   display: none;
 }
 
 .is-ai-plans .dimension-next,
+.is-inline-edit .dimension-next,
 .is-results .dimension-next,
 .is-lead .dimension-next,
 .is-submitted .dimension-next {
@@ -2545,6 +2758,23 @@ body {
   .dimension-next {
     grid-column: auto;
     margin-top: 3px;
+  }
+
+  .planner-inline-editor-body {
+    grid-template-columns: 1fr;
+  }
+
+  .planner-inline-editor-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planner-inline-editor-actions {
+    justify-content: stretch;
+  }
+
+  .planner-inline-editor-actions button {
+    flex: 1 1 150px;
   }
 
   .planner-footer p {

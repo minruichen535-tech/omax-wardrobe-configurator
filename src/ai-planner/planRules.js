@@ -13,6 +13,7 @@ import {
 } from "../rules/demandRules.js?v=component-upgrade-rules-20260627-01";
 import { getZoneInstallationHeight } from "../rules/storageStandards.js?v=case-matching-optional-20260627-01";
 import { applyLayoutConstraints } from "../rules/layoutConstraints.js?v=longhang-shoe-preserved-20260630-01";
+import { calculatePlannerCustomerPrice } from "./customerPricing.js?v=ai-planner-customer-pricing-20260706-01";
 import {
   generateCandidatePlans,
   getLastCandidateEngineStats,
@@ -888,10 +889,12 @@ export function generateRecommendedPlans(answers = {}) {
     );
     const pricePreviewMismatch = JSON.stringify(pricedComponentCountByType)
       !== JSON.stringify(previewComponentCountByType);
+    const customerPlanPrice = calculatePlannerCustomerPrice(candidate.configPreset);
     return {
       planType: candidate.planType,
       planName: tier.planName,
-      planPrice: candidate.estimatedPrice,
+      planPrice: customerPlanPrice,
+      estimatedPrice: candidate.estimatedPrice,
       planPreview: null,
       planCapacityCoverage: `可满足约 ${Math.round(tier.coverage * 100)}%${candidate.planType === "premium" ? "+" : ""} 收纳需求`,
       planCapacity: buildPlanCapacityFromDemandProfile(answers, candidate.estimatedCapacity),

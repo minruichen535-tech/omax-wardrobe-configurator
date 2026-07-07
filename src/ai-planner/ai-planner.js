@@ -6,7 +6,7 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=japanese-drawer-merchandising-20260703-01";
+} from "./planRules.js?v=ai-planner-customer-pricing-20260706-01";
 import {
   loadCaseMatchingRules,
   loadClosetRules
@@ -19,6 +19,7 @@ const state = {
   selectedProductSystem: null,
   selectedPlan: null,
   currentPlans: [],
+  aiPlanRenderContext: null,
   showPlannerVisualAssets: true
 };
 
@@ -66,8 +67,8 @@ const recommendedPlanFallbacks = {
   premium: { planName: "高配理想款", planCapacityCoverage: "高配方案候选暂未生成" }
 };
 const upgradeCatalog = [
-  { key: "trouserRack", name: "裤架", price: 660, solves: "解决裤装收纳问题", keywords: ["裤"] },
-  { key: "jewelryBox", name: "首饰盒", price: 700, solves: "解决首饰分类问题", keywords: ["首饰"] },
+  { key: "trouserRack", name: "裤架", price: 500, solves: "解决裤装收纳问题", keywords: ["裤"] },
+  { key: "jewelryBox", name: "首饰盒", price: 880, solves: "解决首饰分类问题", keywords: ["首饰"] },
   { key: "cabinet", name: "柜体", price: 800, solves: "提升封闭收纳与杂物整理能力", keywords: ["被褥", "行李箱", "综合收纳", "文件", "电子设备"] },
   { key: "lighting", name: "灯光", price: null, solves: "提升展示与夜间取放体验", keywords: ["展示", "收藏", "包包", "摆件"] },
   { key: "glassShelf", name: "玻璃层板", price: null, solves: "增强包包与展示区通透感", keywords: ["包包", "展示", "收藏"] },
@@ -123,6 +124,7 @@ const demandCapacityLevels = {
 let analysisLoadingTimers = [];
 let activePlanPreviewCleanup = null;
 let activeResultPreviewCleanup = null;
+let activeInlineEditorCleanup = null;
 let planCardPreviewCleanups = [];
 const optionIconMap = {
   "1人": "one-people.png",
@@ -208,6 +210,8 @@ function clearPlanCardPreviews() {
   planCardPreviewCleanups = [];
   activeResultPreviewCleanup?.();
   activeResultPreviewCleanup = null;
+  activeInlineEditorCleanup?.();
+  activeInlineEditorCleanup = null;
 }
 
 function renderQuestion(direction = "forward") {
@@ -216,7 +220,7 @@ function renderQuestion(direction = "forward") {
   const questions = getCurrentQuestions();
   const question = questions[state.step];
   shell.dataset.direction = direction;
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   void shell.offsetWidth;
   shell.classList.add("is-changing");
 
@@ -565,7 +569,7 @@ function renderAnalysisLoading() {
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
   state.recommendation = buildPlanRecommendation(state.answers);
-  shell.classList.remove("is-changing", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-analysis-loading", "is-changing");
   currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
@@ -673,7 +677,7 @@ function renderAnalysis({ fadeIn = false } = {}) {
     demandPersona
   } = state.recommendation;
   const labels = getRatioLabels(state.answers.spaceUse);
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-analysis");
   currentProgress.textContent = "分析";
   progressLine.style.transform = "scaleX(1)";
@@ -728,7 +732,7 @@ function renderProductSystemSelection() {
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
   const selectedId = state.selectedProductSystem?.id || state.answers.selectedProductSystem?.id || "";
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-ai-plans", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-product-system");
   currentProgress.textContent = "1";
   totalProgress.textContent = String(getCurrentQuestions().length + 1);
@@ -824,8 +828,29 @@ function renderAiRecommendedPlans() {
     value: recommendedPlans.find((plan) => plan.planType === "value")?.configPreset,
     premium: recommendedPlans.find((plan) => plan.planType === "premium")?.configPreset
   });
+  state.aiPlanRenderContext = {
+    generatedPlans,
+    candidateDebugStats,
+    payload,
+    dimensions,
+    selectedProductSystem
+  };
 
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-results", "is-lead", "is-submitted");
+  renderCurrentAiPlanSelection("basic");
+}
+
+function renderCurrentAiPlanSelection(selectedPlanType = "basic") {
+  clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
+  const recommendedPlans = state.currentPlans || [];
+  const context = state.aiPlanRenderContext || {};
+  const generatedPlans = context.generatedPlans || recommendedPlans;
+  const candidateDebugStats = context.candidateDebugStats || getCandidatePlanDebugStats();
+  const payload = context.payload || {};
+  const dimensions = context.dimensions || {};
+  const selectedProductSystem = context.selectedProductSystem || state.selectedProductSystem || state.answers.selectedProductSystem || null;
+
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-ai-plans");
   shell.classList.toggle("is-ai-plan-debug", isDevelopmentEnvironment());
   currentProgress.textContent = "方案";
@@ -873,6 +898,14 @@ function renderAiRecommendedPlans() {
       renderAnalysis({ fadeIn: true });
       return;
     }
+    if (event.target.closest("[data-continue-inline-edit]")) {
+      const selectedType = answerContent.querySelector("[data-selected-plan-detail]")?.dataset.selectedPlanDetail || "basic";
+      const selected = recommendedPlans.find((plan) => plan.planType === selectedType) || recommendedPlans[0];
+      if (!selected || selected.isFallback) return;
+      state.selectedPlan = selected;
+      renderPlannerInlineEditor(selected);
+      return;
+    }
     if (event.target.closest("[data-submit-selected-plan]")) {
       const selectedType = answerContent.querySelector("[data-selected-plan-detail]")?.dataset.selectedPlanDetail || "basic";
       const selected = recommendedPlans.find((plan) => plan.planType === selectedType) || recommendedPlans[0];
@@ -887,7 +920,7 @@ function renderAiRecommendedPlans() {
     }
   });
   updateSingleModelPlanResult(
-    recommendedPlans.find((plan) => plan.planType === "basic") || recommendedPlans[0],
+    recommendedPlans.find((plan) => plan.planType === selectedPlanType) || recommendedPlans[0],
     recommendedPlans,
     selectedProductSystem
   );
@@ -973,6 +1006,7 @@ function renderSelectedPlanDetail(plan, plans) {
     </div>
     <div class="selected-plan-actions">
       <button class="analysis-back" type="button" data-view-full-analysis>查看完整分析</button>
+      <button class="analysis-back" type="button" data-continue-inline-edit ${plan.isFallback ? "disabled" : ""}>继续调整</button>
       <button class="dimension-next" type="button" data-submit-selected-plan ${plan.isFallback ? "disabled" : ""}>提交方案 <i>→</i></button>
       <button class="result-back-link" type="button" data-result-back>← 返回重新调整需求</button>
     </div>
@@ -1636,6 +1670,69 @@ async function loadReadOnlyPlanPreview(container, plan, selectedProductSystem) {
   }
 }
 
+async function renderPlannerInlineEditor(plan) {
+  clearAnalysisLoadingTimers();
+  clearPlanCardPreviews();
+  closePlanPreviewModal();
+  const selectedProductSystem = state.selectedProductSystem || state.answers.selectedProductSystem || null;
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.add("is-inline-edit");
+  currentProgress.textContent = "调整";
+  progressLine.style.transform = "scaleX(1)";
+  backButton.disabled = false;
+  title.textContent = "继续调整方案";
+  note.textContent = "在 AI Planner 内调整已选方案，不进入完整客户端配置器。";
+  answerContent.innerHTML = `
+    <div class="planner-inline-editor-root" data-planner-inline-editor>
+      <div class="plan-preview-shell" aria-hidden="true">
+        <span></span>
+        <i></i>
+        <b></b>
+      </div>
+    </div>
+  `;
+  const root = answerContent.querySelector("[data-planner-inline-editor]");
+  try {
+    const { mountPlannerInlineEditor } = await import("./PlannerInlineEditor.js?v=drawer-double-whole-model-20260707-01");
+    const cleanup = await mountPlannerInlineEditor(root, {
+      plan,
+      selectedProductSystem,
+      onBack: () => renderCurrentAiPlanSelection(plan.planType),
+      onSave: (editedPlan) => {
+        replaceCurrentPlan(editedPlan);
+        state.selectedPlan = editedPlan;
+      },
+      onComplete: (editedPlan) => {
+        replaceCurrentPlan(editedPlan);
+        state.selectedPlan = editedPlan;
+        renderCurrentAiPlanSelection(editedPlan.planType);
+      }
+    });
+    if (!root.isConnected) {
+      cleanup?.();
+      return;
+    }
+    activeInlineEditorCleanup = cleanup;
+  } catch (error) {
+    console.warn("[ai-planner inline editor] mount failed", error);
+    root.innerHTML = "<p class=\"readonly-preview-error\">内嵌调整暂时无法加载，请返回方案页。</p>";
+  }
+}
+
+function replaceCurrentPlan(editedPlan) {
+  if (!editedPlan) return;
+  const planKey = getPlanIdentity(editedPlan);
+  state.currentPlans = state.currentPlans.map((plan) => (
+    getPlanIdentity(plan) === planKey || plan.planType === editedPlan.planType
+      ? editedPlan
+      : plan
+  ));
+}
+
+function getPlanIdentity(plan = {}) {
+  return plan.candidatePlanId || plan.planId || plan.id || plan.planType || "";
+}
+
 function formatPlanPrice(value) {
   return `¥${Number(value || 0).toLocaleString("zh-CN")}`;
 }
@@ -1658,7 +1755,7 @@ function renderPersonalizedUpgrades(plan) {
   state.selectedPlan = plan;
   const selectedProductSystem = state.selectedProductSystem || state.answers.selectedProductSystem || null;
   const upgrades = getRelevantUpgradeItems(state.answers, selectedProductSystem);
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-lead", "is-submitted");
   shell.classList.add("is-lead");
   currentProgress.textContent = "升级";
   progressLine.style.transform = "scaleX(1)";
@@ -1746,7 +1843,7 @@ function renderLeadForm(plan) {
   const selectedPlanName = getPlanDisplayName(plan);
   const selectedPlanCode = plan.code ? `方案 ${plan.code} / ` : "";
   const selectedPlanPrice = plan.planPrice ? formatPlanPrice(plan.planPrice) : (plan.price ? `¥${plan.price.toLocaleString("zh-CN")}` : "");
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-submitted");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-submitted");
   shell.classList.add("is-lead");
   currentProgress.textContent = "确认";
   progressLine.style.transform = "scaleX(1)";
@@ -1787,7 +1884,7 @@ function renderLeadForm(plan) {
 function renderSubmitted() {
   clearAnalysisLoadingTimers();
   clearPlanCardPreviews();
-  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-results", "is-lead");
+  shell.classList.remove("is-changing", "is-analysis-loading", "is-analysis", "is-product-system", "is-ai-plans", "is-inline-edit", "is-results", "is-lead");
   shell.classList.add("is-submitted");
   currentProgress.textContent = "完成";
   title.textContent = "已收到您的方案需求";

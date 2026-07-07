@@ -1025,6 +1025,25 @@ export function calculateDesign(config, data) {
       placement.componentType === "drawerDouble"
       && (placement.topDrawerSku || placement.bottomDrawerSku)
     ) {
+      const drawerDoubleProduct = productBySku[placement.productSku] || productByType.drawerDouble;
+      if (drawerDoubleProduct?.sellable) {
+        addBom(
+          bomMap,
+          drawerDoubleProduct,
+          placement.quantity,
+          bomCalculator.chooseColor(drawerDoubleProduct, config)
+        );
+      }
+      [placement.topDrawerSku, placement.bottomDrawerSku].filter(Boolean).forEach((drawerSku) => {
+        const drawerInsert = productBySku[drawerSku];
+        if (!drawerInsert?.sellable) return;
+        addBom(
+          bomMap,
+          drawerInsert,
+          placement.quantity,
+          bomCalculator.chooseColor(drawerInsert, config)
+        );
+      });
       return;
     }
     const component = productBySku[placement.productSku] || productByType[placement.componentType];
