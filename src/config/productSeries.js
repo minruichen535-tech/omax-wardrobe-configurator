@@ -87,7 +87,7 @@ export function resolveRoute(pathname = window.location.pathname) {
   const segments = pathname.split("/").filter(Boolean);
   const route = segments[0] === "admin" ? "admin" : "configurator";
   const requestedSeriesId = segments[1] || defaultSeriesId;
-  const seriesId = segments[0] === "client" && requestedSeriesId === "wall-mounted"
+  const seriesId = (segments[0] === "client" || segments[0] === "dealer") && requestedSeriesId === "wall-mounted"
     ? "wall-mounted-v2"
     : requestedSeriesId;
   return { route, seriesId, series: getSeries(seriesId) };

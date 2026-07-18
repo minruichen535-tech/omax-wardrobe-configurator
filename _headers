@@ -16,6 +16,12 @@
 /admin/*
   Cache-Control: no-cache
 
+/dealer/*
+  Cache-Control: no-cache
+
+/api/*
+  Cache-Control: no-store
+
 /ai-planner/*
   Cache-Control: no-cache
 

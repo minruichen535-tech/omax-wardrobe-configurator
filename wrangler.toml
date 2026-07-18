@@ -1,0 +1,9 @@
+name = "omax-wardrobe-configurator-v2"
+compatibility_date = "2026-07-18"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "omax-wardrobe-production"
+database_id = "9bd163d3-6bc8-4c16-92bd-b86cf19c062d"
+preview_database_id = "DB"

@@ -1,0 +1,2 @@
+ALTER TABLE dealer_orders ADD COLUMN adminNotes TEXT NOT NULL DEFAULT '';
+ALTER TABLE dealer_orders ADD COLUMN pickingJson TEXT NOT NULL DEFAULT '{}';

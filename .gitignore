@@ -5,3 +5,4 @@ Thumbs.db
 .~*.xlsx
 ~$*.xlsx
 .wrangler/
+.dev.vars
