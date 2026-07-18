@@ -22,6 +22,14 @@ import {
   getJapaneseCaseDistributionTarget,
   japaneseCaseLibrary
 } from "./japaneseCaseLibrary.js?v=case-matching-layout-20260627-01";
+import {
+  canPlaceJapaneseDrawerInBay,
+  getJapaneseDrawerPlacementHeight,
+  selectJapaneseDrawerFunctionalZone
+} from "./japaneseFunctionalZonePolicy.js?v=drawer-functional-zone-phase1-20260707-01";
+import {
+  rankJapaneseUpgradeBays
+} from "./japaneseBayPriorityPolicy.js?v=bay-priority-policy-phase1-20260707-01";
 import { JAPANESE_UPGRADE_POLICY } from "./japaneseUpgradePolicy.js?v=japanese-upgrade-policy-20260630-01";
 
 const PLAN_TYPES = ["basic", "value", "premium"];
@@ -103,6 +111,29 @@ const JAPANESE_PREMIUM_DRAWER_SKU_PRIORITY = Object.freeze([
   "JP-drawer-underwear-b",
   "JP-drawer-wire-basket",
   "JP-drawer-wire-basket-short"
+]);
+const JAPANESE_UPGRADE_PRIORITY_BY_TIER = Object.freeze({
+  value: Object.freeze([
+    "woodShelf",
+    "cabinet",
+    "drawerSingle",
+    "trouserRack",
+    "jewelryBox",
+    "drawerDouble"
+  ]),
+  premium: Object.freeze([
+    "drawerDouble",
+    "premiumInserts",
+    "premiumAccessories"
+  ])
+});
+const JAPANESE_COMPONENT_UPGRADE_PATHS = Object.freeze([
+  Object.freeze({
+    planType: "premium",
+    fromComponentType: "drawerSingle",
+    toComponentType: "drawerDouble",
+    functionalZone: "drawerErgonomicStorage"
+  })
 ]);
 const JAPANESE_TROUSER_RACK_MIN_CLEARANCE_BELOW = getClearanceValue("trouserRack", "below", 600);
 const JAPANESE_LONG_HANG_MIN_CLEARANCE_BELOW = getClearanceValue("longClothes", "below", 1350);
@@ -1163,6 +1194,7 @@ function buildJapaneseUpgradedTierCandidate(
   }
   candidate.planId = `${planType}:case-skeleton:${answers.primaryJapaneseCase?.caseId || "auto"}`;
   candidate.skeleton = skeleton.map((item) => ({ ...item }));
+  prepareJapaneseUpgradeReservations(candidate, answers, skeleton, supportedTypes, planType);
   const usedBays = new Set();
   const needs = answers.needs || {};
   const upgradeList = [];
@@ -1275,13 +1307,27 @@ function addJapaneseDrawerMerchandisingUpgrades(
     ]
     : JAPANESE_VALUE_DRAWER_SKU_PRIORITY.map((sku) => ({ componentType: "drawerSingle", sku }));
   const targetCount = planType === "premium" ? 2 : 1;
-  let added = 0;
-  for (const request of sequence) {
-    if (added >= targetCount) break;
-    const price = getJapaneseDrawerMerchandisingPrice(request);
-    if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) + price > Number(targets.budgetMax || Infinity)) continue;
-    if (addJapaneseDrawerMerchandisingPlacement(candidate, answers, skeleton, usedBays, request)) {
-      upgradeList.push({
+	  let added = 0;
+	  for (const request of sequence) {
+	    if (added >= targetCount) break;
+	    const price = getJapaneseDrawerMerchandisingBudgetImpact(candidate, request, planType);
+	    if (getJapaneseUnroundedPlanPrice(candidate, skeleton.length) + price > Number(targets.budgetMax || Infinity)) continue;
+	    const upgradePathStatus = applyJapaneseComponentUpgradePath(candidate, answers, skeleton, request, planType);
+	    if (upgradePathStatus.applied) {
+	      upgradeList.push({
+	        ...japaneseUpgradeDebug(request.componentType, price),
+	        productSku: JAPANESE_DRAWER_DOUBLE_SKU,
+	        topDrawerSku: request.skus[0],
+	        bottomDrawerSku: request.skus[1],
+	        sourceComponentType: upgradePathStatus.fromComponentType,
+	        bayIndex: upgradePathStatus.bayIndex
+	      });
+	      added += 1;
+	      continue;
+	    }
+	    if (upgradePathStatus.hasSource) continue;
+	    if (addJapaneseDrawerMerchandisingPlacement(candidate, answers, skeleton, usedBays, request)) {
+	      upgradeList.push({
         ...japaneseUpgradeDebug(request.componentType, price),
         productSku: request.componentType === "drawerDouble" ? JAPANESE_DRAWER_DOUBLE_SKU : request.sku,
         ...(request.componentType === "drawerDouble"
@@ -1303,29 +1349,156 @@ function getJapaneseDrawerMerchandisingPrice(request) {
     : JAPANESE_CLOSET_AI_PRICES.drawerSingle;
 }
 
+function getJapaneseDrawerMerchandisingBudgetImpact(candidate, request, planType = "value") {
+  const price = getJapaneseDrawerMerchandisingPrice(request);
+  const path = getJapaneseComponentUpgradePath(planType, request.componentType);
+  if (!path) return price;
+  const hasSource = (candidate.placements || []).some((item) => item.componentType === path.fromComponentType);
+  if (!hasSource) return price;
+  return Math.max(0, price - (JAPANESE_CLOSET_AI_PRICES[path.fromComponentType] || 0));
+}
+
+function applyJapaneseComponentUpgradePath(candidate, answers, skeleton, request, planType = "value") {
+  const path = getJapaneseComponentUpgradePath(planType, request.componentType);
+  if (!path) return { applied: false, hasSource: false, reason: "noUpgradePath" };
+  const sourcePlacements = (candidate.placements || []).filter((item) => (
+    item.componentType === path.fromComponentType
+    && (!path.functionalZone || item.functionalZone === path.functionalZone || item.zoneType === path.functionalZone)
+  ));
+  if (!sourcePlacements.length) return { applied: false, hasSource: false, reason: "noSourceComponent" };
+  for (const sourcePlacement of sourcePlacements) {
+    const upgradedPlacement = createJapaneseComponentUpgradePathPlacement(sourcePlacement, request, answers, skeleton.length);
+    const sameBayPlacements = candidate.placements.filter((item) => (
+      item !== sourcePlacement
+      && Number(item.bayIndex) === Number(sourcePlacement.bayIndex)
+      && (item.wallId || "back") === (sourcePlacement.wallId || "back")
+      && item.componentType
+    ));
+    if (sameBayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(upgradedPlacement)))) {
+      continue;
+    }
+    const validatedBayPlacements = [...sameBayPlacements, upgradedPlacement];
+    if (getJapanesePlacementValidationDiagnostics(validatedBayPlacements)
+      .some((item) => !item.isValidPlacement)) {
+      continue;
+    }
+    candidate.placements = candidate.placements.map((item) => (
+      item === sourcePlacement ? upgradedPlacement : item
+    ));
+    return {
+      applied: true,
+      hasSource: true,
+      fromComponentType: path.fromComponentType,
+      toComponentType: path.toComponentType,
+      bayIndex: Number(sourcePlacement.bayIndex)
+    };
+  }
+  return {
+    applied: false,
+    hasSource: true,
+    reason: "sourceUpgradeBlocked"
+  };
+}
+
+function getJapaneseComponentUpgradePath(planType, toComponentType) {
+  return JAPANESE_COMPONENT_UPGRADE_PATHS.find((path) => (
+    path.planType === planType
+    && path.toComponentType === toComponentType
+  )) || null;
+}
+
+function createJapaneseComponentUpgradePathPlacement(sourcePlacement, request, answers = {}, totalBayCount = 1) {
+  const centerHeight = Number(sourcePlacement.drawerCenterHeight)
+    || Number(sourcePlacement.heightFromFloor || 0) + (COMPONENT_HEIGHTS[sourcePlacement.componentType] || 0) / 2;
+  const upgradedPlacement = {
+    ...sourcePlacement,
+    componentType: request.componentType,
+    zoneType: sourcePlacement.zoneType || "drawerErgonomicStorage",
+    functionalZone: sourcePlacement.functionalZone || "drawerErgonomicStorage",
+    heightFromFloor: getJapaneseDrawerPlacementHeight(request.componentType, centerHeight),
+    drawerCenterHeight: centerHeight,
+    drawerErgonomicReason: sourcePlacement.drawerErgonomicReason || "upgradePathPreservedErgonomicCenter",
+    source: "japaneseComponentUpgradePath",
+    upgradedFromComponentType: sourcePlacement.componentType,
+    productSku: request.componentType === "drawerDouble" ? JAPANESE_DRAWER_DOUBLE_SKU : request.sku
+  };
+  if (request.componentType === "drawerDouble") {
+    upgradedPlacement.topDrawerSku = request.skus[0];
+    upgradedPlacement.bottomDrawerSku = request.skus[1];
+  }
+  const cuttingRules = getCuttingRules("japanese-closet");
+  const width = Number(sourcePlacement.preferredWidth || sourcePlacement.visualScaleWidth || sourcePlacement.innerBayWidth || 0);
+  if (width > 0) {
+    upgradedPlacement.preferredWidth = width;
+    upgradedPlacement.allowedWidths = [width];
+  }
+  if (cuttingRules && width > 0) {
+    const componentCutLength = cuttingRules.getCutLength?.(request.componentType, width);
+    const visualScaleWidth = cuttingRules.getVisualScaleWidth?.(
+      request.componentType,
+      width,
+      componentCutLength,
+      width
+    );
+    if (Number.isFinite(Number(componentCutLength))) {
+      upgradedPlacement.componentCutLength = Number(componentCutLength);
+      upgradedPlacement.cutLength = Number(componentCutLength);
+    }
+    if (Number.isFinite(Number(visualScaleWidth))) {
+      upgradedPlacement.visualScaleWidth = Number(visualScaleWidth);
+    }
+  } else if (!width) {
+    const wallLayout = getJapaneseOptimizedWallLayout(answers, totalBayCount);
+    const wallSegment = wallLayout[upgradedPlacement.wallId] || wallLayout.back;
+    const bayWidth = Number(wallSegment?.bayWidths?.[upgradedPlacement.wallBayIndex]) || 0;
+    if (bayWidth > 0) {
+      upgradedPlacement.preferredWidth = bayWidth;
+      upgradedPlacement.allowedWidths = [bayWidth];
+    }
+  }
+  return upgradedPlacement;
+}
+
 function addJapaneseDrawerMerchandisingPlacement(candidate, answers, skeleton, usedBays, request) {
-  const candidates = skeleton
+  const candidates = rankJapaneseUpgradeBays({
+    bays: skeleton
     .filter((entry) => isJapaneseDrawerMerchandisingRole(entry.role))
+    .filter((entry) => !isJapaneseBayReservedForHigherPriority(
+      candidate,
+      entry.bayIndex,
+      request.componentType,
+      candidate.planType
+    ))
     .sort((left, right) => (
       Number(usedBays.has(left.bayIndex)) - Number(usedBays.has(right.bayIndex))
       || getJapaneseDrawerMerchandisingRoleRank(left.role) - getJapaneseDrawerMerchandisingRoleRank(right.role)
       || left.bayIndex - right.bayIndex
-    ));
+    )),
+    skeleton,
+    placements: candidate.placements,
+    componentType: request.componentType
+  });
   for (const entry of candidates) {
     const bayIndex = Number(entry.bayIndex);
     if (usedBays.has(bayIndex)) continue;
     const bayPlacements = candidate.placements.filter((item) => Number(item.bayIndex) === bayIndex && item.componentType);
     if (!isJapaneseDrawerBayStructurallyEligible(request.componentType, bayPlacements, entry.role)) continue;
-    const drawerPlacement = createJapaneseDrawerMerchandisingPlacement(entry, request, answers, skeleton.length);
-    if (bayPlacements.some((item) => intervalsOverlap(intervalFor(item), intervalFor(drawerPlacement)))) continue;
-    if (getJapanesePlacementValidationDiagnostics([...bayPlacements, drawerPlacement])
+    const drawerZone = selectJapaneseDrawerFunctionalZone({
+      componentType: request.componentType,
+      bayPlacements,
+      templateRole: entry.role
+    });
+    if (!drawerZone.accepted) continue;
+    const drawerPlacement = createJapaneseDrawerMerchandisingPlacement(entry, request, answers, skeleton.length, drawerZone);
+    const replacementPlacements = new Set(drawerZone.replacementPlacements || []);
+    if (bayPlacements.some((item) => !replacementPlacements.has(item) && intervalsOverlap(intervalFor(item), intervalFor(drawerPlacement)))) continue;
+    const validatedBayPlacements = [
+      ...bayPlacements.filter((item) => !replacementPlacements.has(item)),
+      drawerPlacement
+    ];
+    if (getJapanesePlacementValidationDiagnostics(validatedBayPlacements)
       .some((item) => !item.isValidPlacement)) continue;
-    candidate.placements = candidate.placements.filter((item) => !(
-      Number(item.bayIndex) === bayIndex
-      && ["singleRail", "doubleRail"].includes(item.componentType)
-      && Number(item.heightFromFloor || 0) >= 900
-      && Number(item.heightFromFloor || 0) <= 1200
-    ));
+    candidate.placements = candidate.placements.filter((item) => !replacementPlacements.has(item));
     candidate.placements.push(drawerPlacement);
     usedBays.add(bayIndex);
     return true;
@@ -1353,6 +1526,7 @@ function getJapaneseDrawerMerchandisingRoleRank(role = "") {
 
 function isJapaneseDrawerBayStructurallyEligible(componentType, bayPlacements = [], role = "") {
   if (!isJapaneseDrawerMerchandisingRole(role)) return false;
+  if (!canPlaceJapaneseDrawerInBay({ bayPlacements, templateRole: role })) return false;
   if (bayPlacements.some((item) => ["drawerSingle", "drawerDouble", "cabinet", "trouserRack", "jewelryBox"].includes(item.componentType))) {
     return false;
   }
@@ -1366,13 +1540,13 @@ function isJapaneseDrawerBayStructurallyEligible(componentType, bayPlacements = 
   return componentType === "drawerSingle" || componentType === "drawerDouble";
 }
 
-function createJapaneseDrawerMerchandisingPlacement(entry, request, answers = {}, totalBayCount = 1) {
+function createJapaneseDrawerMerchandisingPlacement(entry, request, answers = {}, totalBayCount = 1, drawerZone = {}) {
   const componentType = request.componentType;
   const drawerPlacement = placement(
-    "storageZone",
+    "drawerErgonomicStorage",
     componentType,
     Number(entry.bayIndex) || 0,
-    0,
+    Number(drawerZone.heightFromFloor),
     entry.wallId || "back"
   );
   drawerPlacement.wallBayIndex = Number(entry.wallBayIndex) || 0;
@@ -1380,6 +1554,9 @@ function createJapaneseDrawerMerchandisingPlacement(entry, request, answers = {}
   drawerPlacement.templateZone = entry.role;
   drawerPlacement.sourceRole = entry.sourceRole;
   drawerPlacement.source = "japaneseDrawerMerchandising";
+  drawerPlacement.functionalZone = "drawerErgonomicStorage";
+  drawerPlacement.drawerCenterHeight = Number(drawerZone.centerHeight);
+  drawerPlacement.drawerErgonomicReason = drawerZone.reason || "";
   drawerPlacement.productSku = componentType === "drawerDouble" ? JAPANESE_DRAWER_DOUBLE_SKU : request.sku;
   if (componentType === "drawerDouble") {
     drawerPlacement.topDrawerSku = request.skus[0];
@@ -1636,6 +1813,156 @@ function shouldAddStorageCabinetByDemand(answers = {}) {
   return Number(needs.包包 || 0) > 0
     || Number(needs.被褥 || 0) > 0
     || Number(needs.行李箱 || 0) > 0;
+}
+
+function prepareJapaneseUpgradeReservations(candidate, answers, skeleton, supportedTypes, planType = "value") {
+  candidate.upgradeReservations = normalizeJapaneseUpgradeReservations(candidate.upgradeReservations);
+  candidate.upgradeReservations.planType = planType;
+  candidate.upgradeReservations.valuePriority = [...JAPANESE_UPGRADE_PRIORITY_BY_TIER.value];
+  candidate.upgradeReservations.premiumPriority = [...JAPANESE_UPGRADE_PRIORITY_BY_TIER.premium];
+  if (planType === "value") {
+    reserveJapaneseUpgradeBay(candidate, {
+      planType,
+      componentType: "cabinet",
+      functionalZone: "cabinetLowStorage",
+      reason: "recommendedCabinetBeforeDrawer",
+      enabled: shouldAddStorageCabinetByDemand(answers) && supportedTypes.has("cabinet"),
+      bayIndex: findJapaneseUpgradeReservationBay(candidate, answers, skeleton, "cabinet")
+    });
+  }
+}
+
+function reserveJapaneseUpgradeBay(candidate, reservation = {}) {
+  if (!reservation.enabled || reservation.bayIndex == null) return false;
+  const entries = candidate.upgradeReservations.entries;
+  const bayIndex = Number(reservation.bayIndex);
+  const exists = entries.some((entry) => (
+    Number(entry.bayIndex) === bayIndex
+    && entry.componentType === reservation.componentType
+    && entry.planType === reservation.planType
+  ));
+  if (exists) return false;
+  entries.push({
+    planType: reservation.planType,
+    componentType: reservation.componentType,
+    functionalZone: reservation.functionalZone,
+    bayIndex,
+    reason: reservation.reason
+  });
+  return true;
+}
+
+function findJapaneseUpgradeReservationBay(candidate, answers, skeleton, componentType) {
+  if (!candidate || candidate.placements?.some((item) => item.componentType === componentType)) return null;
+  const functionalBays = skeleton.filter((item) => ![
+    "longHangZone", "shoeShelfZone", "luggageZone", "shelfZone"
+  ].includes(item.role));
+  const preferredRoles = componentType === "cabinet"
+    ? new Set(["storageAccessoryZone", "jewelryZone"])
+    : new Set(["storageAccessoryZone", "jewelryZone", "trouserZone", "shortHangZone"]);
+  const existingOrder = [...functionalBays].sort((left, right) => (
+    Number(!preferredRoles.has(left.role)) - Number(!preferredRoles.has(right.role))
+    || left.bayIndex - right.bayIndex
+  ));
+  const ordered = rankJapaneseUpgradeBays({
+    bays: existingOrder,
+    skeleton,
+    placements: candidate.placements,
+    componentType
+  });
+  for (const bay of ordered) {
+    const bayIndex = Number(bay.bayIndex);
+    if (isJapaneseBayReservedForHigherPriority(candidate, bayIndex, componentType, candidate.planType)) continue;
+    if (canReserveJapaneseUpgradeBay(candidate, answers, skeleton.length, bay, componentType)) return bayIndex;
+  }
+  return null;
+}
+
+function canReserveJapaneseUpgradeBay(candidate, answers, bayCount, bay, componentType) {
+  const bayIndex = Number(bay.bayIndex);
+  const simulatedPlacements = (candidate.placements || []).map((item) => ({ ...item }));
+  if (addJapaneseTemplateComponent(
+    simulatedPlacements,
+    componentType,
+    bay.role,
+    bayIndex,
+    0,
+    answers,
+    bayCount
+  )) {
+    return true;
+  }
+  const removableShelf = simulatedPlacements.findIndex((item) => (
+    item.bayIndex === bayIndex
+    && item.componentType === "woodShelf"
+    && item.zoneType !== "shoeZone"
+  ));
+  if (removableShelf < 0) return false;
+  simulatedPlacements.splice(removableShelf, 1);
+  return addJapaneseTemplateComponent(
+    simulatedPlacements,
+    componentType,
+    bay.role,
+    bayIndex,
+    0,
+    answers,
+    bayCount
+  );
+}
+
+function normalizeJapaneseUpgradeReservations(reservations = {}) {
+  return {
+    enabled: true,
+    planType: reservations.planType || "",
+    valuePriority: [...(reservations.valuePriority || JAPANESE_UPGRADE_PRIORITY_BY_TIER.value)],
+    premiumPriority: [...(reservations.premiumPriority || JAPANESE_UPGRADE_PRIORITY_BY_TIER.premium)],
+    entries: (reservations.entries || []).map((entry) => ({ ...entry }))
+  };
+}
+
+function cloneJapaneseUpgradeReservations(reservations = {}) {
+  if (!reservations || !Array.isArray(reservations.entries)) return undefined;
+  return normalizeJapaneseUpgradeReservations(reservations);
+}
+
+function prioritizeJapaneseReservedBays(candidate, componentType, bays = []) {
+  const ownReservedBayIndexes = getJapaneseUpgradeReservationEntries(candidate)
+    .filter((entry) => entry.componentType === componentType)
+    .map((entry) => Number(entry.bayIndex));
+  if (!ownReservedBayIndexes.length) return bays;
+  return [...bays].sort((left, right) => {
+    const leftIndex = getJapaneseAccessoryCandidateBayIndex(left);
+    const rightIndex = getJapaneseAccessoryCandidateBayIndex(right);
+    const leftRank = ownReservedBayIndexes.indexOf(leftIndex);
+    const rightRank = ownReservedBayIndexes.indexOf(rightIndex);
+    return Number(leftRank < 0) - Number(rightRank < 0)
+      || Math.max(0, leftRank) - Math.max(0, rightRank);
+  });
+}
+
+function isJapaneseBayReservedForHigherPriority(candidate, bayIndex, componentType, planType = "value") {
+  return getJapaneseUpgradeReservationEntries(candidate).some((entry) => {
+    if (Number(entry.bayIndex) !== Number(bayIndex)) return false;
+    if (entry.componentType === componentType) return false;
+    if (entry.planType === "value" && planType === "premium") return true;
+    return getJapaneseUpgradePriorityRank(entry.componentType, entry.planType)
+      < getJapaneseUpgradePriorityRank(componentType, planType);
+  });
+}
+
+function getJapaneseUpgradeReservationEntries(candidate) {
+  return Array.isArray(candidate?.upgradeReservations?.entries)
+    ? candidate.upgradeReservations.entries
+    : [];
+}
+
+function getJapaneseUpgradePriorityRank(componentType, planType = "value") {
+  if (componentType === "drawerDouble" && planType === "premium") {
+    return JAPANESE_UPGRADE_PRIORITY_BY_TIER.value.length;
+  }
+  const priority = JAPANESE_UPGRADE_PRIORITY_BY_TIER.value;
+  const rank = priority.indexOf(componentType);
+  return rank >= 0 ? rank : priority.length + 10;
 }
 
 function isCoreHangingProtected(answers = {}, debug = {}) {
@@ -2167,10 +2494,16 @@ function addJapaneseSkeletonUpgrade(
     || Number(usedBays.has(left.bayIndex)) - Number(usedBays.has(right.bayIndex))
     || left.bayIndex - right.bayIndex
   ));
+  const prioritizedOrder = rankJapaneseUpgradeBays({
+    bays: existingOrder,
+    skeleton,
+    placements: candidate.placements,
+    componentType
+  });
   const beforeOrder = isFixedAccessory
-    ? withJapaneseAccessoryBayWidths(existingOrder, answers.roomWidth, skeleton.length, candidate.placements)
-    : existingOrder;
-  const ordered = isFixedAccessory
+    ? withJapaneseAccessoryBayWidths(prioritizedOrder, answers.roomWidth, skeleton.length, candidate.placements)
+    : prioritizedOrder;
+  let ordered = isFixedAccessory
     ? selectJapanesePreferredAccessoryBays(
       beforeOrder,
       componentType,
@@ -2179,7 +2512,8 @@ function addJapaneseSkeletonUpgrade(
       candidate.placements,
       "addJapaneseSkeletonUpgrade"
     )
-    : existingOrder;
+    : prioritizedOrder;
+  ordered = prioritizeJapaneseReservedBays(candidate, componentType, ordered);
   const afterOrder = isFixedAccessory
     ? withJapaneseAccessoryBayWidths(ordered, answers.roomWidth, skeleton.length, candidate.placements)
     : ordered;
@@ -2192,6 +2526,14 @@ function addJapaneseSkeletonUpgrade(
         bayIndex,
         role,
         reason: "occupied"
+      });
+      continue;
+    }
+    if (isJapaneseBayReservedForHigherPriority(candidate, bayIndex, componentType, candidate.planType)) {
+      skippedBays.push({
+        bayIndex,
+        role,
+        reason: "reservedForHigherPriorityUpgrade"
       });
       continue;
     }
@@ -2980,16 +3322,30 @@ function addRequiredJapaneseComponent(candidate, componentType, answers, require
     .map((item) => item.bayIndex));
   const candidateBays = [...preferredBays, ...Array.from({ length: bayCount }, (_, bayIndex) => bayIndex)]
     .filter((bayIndex, index, list) => list.indexOf(bayIndex) === index);
-  const orderedCandidateBays = isFixedWidthAccessory(componentType)
+  const prioritizedCandidateBays = rankJapaneseUpgradeBays({
+    bays: candidateBays,
+    skeleton: candidate.skeleton || [],
+    placements: candidate.placements,
+    componentType,
+    fallbackBayCount: bayCount
+  });
+  let orderedCandidateBays = isFixedWidthAccessory(componentType)
     ? selectJapanesePreferredAccessoryBays(
-      candidateBays,
+      prioritizedCandidateBays,
       componentType,
       answers.roomWidth,
       bayCount,
       candidate.placements,
       "addRequiredJapaneseComponent"
     )
-    : candidateBays;
+    : prioritizedCandidateBays;
+  orderedCandidateBays = prioritizeJapaneseReservedBays(candidate, componentType, orderedCandidateBays)
+    .filter((bay) => !isJapaneseBayReservedForHigherPriority(
+      candidate,
+      getJapaneseAccessoryCandidateBayIndex(bay),
+      componentType,
+      candidate.planType
+    ));
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const added = orderedCandidateBays.some((bay) => addJapaneseTemplateComponent(
       candidate.placements,
@@ -3888,6 +4244,7 @@ function cloneCandidateForTier(candidate, planType) {
     fallbackSourcePlanType: candidate.planType,
     placements: (candidate.placements || []).map((item) => ({ ...item })),
     parameters: { ...(candidate.parameters || {}) },
+    upgradeReservations: cloneJapaneseUpgradeReservations(candidate.upgradeReservations),
     configPreset: {
       ...(candidate.configPreset || {}),
       planType,
@@ -4013,16 +4370,30 @@ function tryAddTierUpgrade(candidate, zoneType, componentType, heights, allowExi
   if (!allowExisting && candidate.placements.some((item) => item.componentType === componentType)) return 0;
   const bayCount = Math.max(1, Number(candidate.parameters?.bayCount || candidate.configPreset?.bayCount || 1));
   const existingOrder = Array.from({ length: bayCount }, (_, index) => bayCount - index - 1);
-  const orderedBays = isFixedWidthAccessory(componentType)
+  const prioritizedOrder = rankJapaneseUpgradeBays({
+    bays: existingOrder,
+    skeleton: candidate.skeleton || [],
+    placements: candidate.placements,
+    componentType,
+    fallbackBayCount: bayCount
+  });
+  let orderedBays = isFixedWidthAccessory(componentType)
     ? selectJapanesePreferredAccessoryBays(
-      existingOrder,
+      prioritizedOrder,
       componentType,
       candidate.configPreset?.roomWidth,
       bayCount,
       candidate.placements,
       "tryAddTierUpgrade"
     )
-    : existingOrder;
+    : prioritizedOrder;
+  orderedBays = prioritizeJapaneseReservedBays(candidate, componentType, orderedBays)
+    .filter((bay) => !isJapaneseBayReservedForHigherPriority(
+      candidate,
+      getJapaneseAccessoryCandidateBayIndex(bay),
+      componentType,
+      candidate.planType
+    ));
   for (const bay of orderedBays) {
     const bayIndex = getJapaneseAccessoryCandidateBayIndex(bay);
     const removedLowRails = componentType === "trouserRack"

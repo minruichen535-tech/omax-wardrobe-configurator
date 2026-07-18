@@ -12,6 +12,7 @@ import {
 
 const h = React.createElement;
 const loader = new GLTFLoader();
+const textureLoader = new THREE.TextureLoader();
 const modelCache = new Map();
 const visualAssetModelCache = new Map();
 const plannerVisualAssetVersions = {
@@ -36,6 +37,8 @@ const wireBasketDrawerSkus = new Set([
   "JP-drawer-wire-basket",
   "JP-drawer-wire-basket-short"
 ]);
+const aluminumBaseBackPanelTexturePath = "/products/Aluminum-Base-Supported/textures/back-panel-light-birch.png?v=back-panel-light-birch-seamless-20260718-03";
+let aluminumBaseBackPanelWoodTexture = null;
 const aluminumBaseSupportedUpdatedModelVersions = new Map([
   ["models/TD-007-3-600.glb", "aluminum-base-supported-td-007-3-20260612-01"],
   ["models/TD-007-3-700.glb", "aluminum-base-supported-td-007-3-20260612-01"],
@@ -5387,6 +5390,10 @@ function applyPlacementColor(object, componentType, frameColor, modelTransforms,
     return;
   }
   if (colorMode === "wood") {
+    if (seriesId === "aluminum-base-supported" && componentType === "backPanel") {
+      applyAluminumBaseBackPanelWoodTexture(object);
+      return;
+    }
     const materialFilter = seriesId === "carbon-steel-post-wardrobe-v2"
       ? (material) => /^P(?:ly|lay)wood_01_1k$/i.test(material.name || "")
       : seriesId === "aluminum-post-wardrobe"
@@ -5495,6 +5502,38 @@ function applyModelColor(object, color, materialPatch = {}, materialFilter = nul
       if (next.color) next.color.set(color);
       if ("metalness" in next && materialPatch.metalness !== undefined) next.metalness = materialPatch.metalness;
       if ("roughness" in next && materialPatch.roughness !== undefined) next.roughness = materialPatch.roughness;
+      return next;
+    });
+    child.material = Array.isArray(child.material) ? nextMaterials : nextMaterials[0];
+  });
+}
+
+function getAluminumBaseBackPanelWoodTexture() {
+  if (!aluminumBaseBackPanelWoodTexture) {
+    aluminumBaseBackPanelWoodTexture = textureLoader.load(aluminumBaseBackPanelTexturePath);
+    aluminumBaseBackPanelWoodTexture.colorSpace = THREE.SRGBColorSpace;
+    aluminumBaseBackPanelWoodTexture.wrapS = THREE.RepeatWrapping;
+    aluminumBaseBackPanelWoodTexture.wrapT = THREE.RepeatWrapping;
+    aluminumBaseBackPanelWoodTexture.repeat.set(1, 1);
+    aluminumBaseBackPanelWoodTexture.rotation = 0;
+    aluminumBaseBackPanelWoodTexture.flipY = false;
+  }
+  return aluminumBaseBackPanelWoodTexture;
+}
+
+function applyAluminumBaseBackPanelWoodTexture(object) {
+  const backPanelTexture = getAluminumBaseBackPanelWoodTexture();
+  object.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    const nextMaterials = materials.map((material) => {
+      if (!/^Plywood_01_1k$/i.test(material.name || "")) return material;
+      const next = material.clone();
+      next.map = backPanelTexture;
+      if (next.color) next.color.set(theme.colors.white);
+      if ("metalness" in next) next.metalness = 0;
+      if ("roughness" in next) next.roughness = 0.72;
+      next.needsUpdate = true;
       return next;
     });
     child.material = Array.isArray(child.material) ? nextMaterials : nextMaterials[0];

@@ -20,7 +20,7 @@ import {
   getShelfGapDiagnostics,
   matchJapaneseCasesByRules,
   selectRecommendedCandidates
-} from "./candidatePlanEngine.js?v=japanese-drawer-merchandising-20260703-01";
+} from "./candidatePlanEngine.js?v=component-upgrade-path-20260707-01";
 
 const budgetOptions = ["3,000以下", "3,000 - 6,000", "6,000 - 9,000", "9,000 - 12,000", "12,000 - 18,000", "18,000以上"];
 

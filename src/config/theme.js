@@ -19,6 +19,7 @@ export const theme = {
     danger: "#C55642",
     silverGrey: "#B8BEC2",
     woodBrown: "#8A6545",
+    backPanelWood: "#CDBEA5",
     black: "#151515",
     white: "#F2F0EA",
     glass: "#7E8B92",

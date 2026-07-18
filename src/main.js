@@ -42,7 +42,7 @@ import {
 } from "./dataSource.js?v=cache-20260621-02";
 import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260621-02";
 import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-client-route-20260703-01";
-import { WardrobeScene } from "./scene.js?v=drawer-double-whole-model-20260707-01";
+import { WardrobeScene } from "./scene.js?v=back-panel-light-birch-seamless-20260718-03";
 import { buildPlannerVisualAssets } from "./ai-planner/ReadOnlyWardrobePreview.js?v=configurator-visual-items-20260706-01";
 import { loadStorageRules } from "./rules/storageRules.js?v=storage-rules-20260625-01";
 import { getCuttingRules, getDisplayRules } from "./series/index.js?v=drawer-material-sync-20260702-01";

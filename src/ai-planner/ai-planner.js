@@ -6,7 +6,7 @@ import {
   getQuestionFlow,
   getRatioLabels,
   getZonePresentation
-} from "./planRules.js?v=ai-planner-customer-pricing-20260706-01";
+} from "./planRules.js?v=component-upgrade-path-20260707-01";
 import {
   loadCaseMatchingRules,
   loadClosetRules
