@@ -13,8 +13,8 @@ import {
 } from "../configurator.js?v=planner-inline-edit-full-20260706-01";
 import { loadWorkbookData } from "../dataSource.js?v=ai-planner-preview-20260617-06";
 import { getSeries, resolveSeriesAsset } from "../config/productSeries.js?v=ai-planner-preview-20260617-06";
-import { WardrobeScene } from "../scene.js?v=drawer-double-whole-model-20260707-01";
-import { buildPlannerVisualAssets } from "./ReadOnlyWardrobePreview.js?v=configurator-visual-items-20260706-01";
+import { WardrobeScene } from "../scene.js?v=global-side-wall-soften-20260718-01";
+import { buildPlannerVisualAssets } from "./ReadOnlyWardrobePreview.js?v=global-side-wall-soften-20260718-01";
 import { loadStorageRules } from "../rules/storageRules.js?v=storage-rules-20260625-01";
 import { getCuttingRules } from "../series/index.js?v=japanese-drawer-merchandising-20260703-01";
 import { calculatePlannerCustomerPrice } from "./customerPricing.js?v=ai-planner-customer-pricing-20260706-01";

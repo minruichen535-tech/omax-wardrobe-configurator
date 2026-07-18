@@ -1407,7 +1407,7 @@ async function loadPlanCardPreviews(plans, selectedProductSystem) {
   const roots = Array.from(answerContent.querySelectorAll("[data-card-preview-plan]"));
   if (!roots.length) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=global-side-wall-soften-20260718-01");
     await Promise.all(roots.map(async (root) => {
       const plan = plans.find((item) => item.planType === root.dataset.cardPreviewPlan);
       if (!plan || plan.isFallback) {
@@ -1472,7 +1472,7 @@ async function loadResultPlanPreview(container, plan, selectedProductSystem) {
   renderAiPlannerPreviewStamp(container, renderInfo);
   publishAiPlannerActiveRender(renderInfo, { generatedCount: 0, skippedCount: 0, sceneJsImportUrl: "" });
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=global-side-wall-soften-20260718-01");
     const cleanup = await mountReadOnlyWardrobePreview(container, {
       plan,
       selectedProductSystem,
@@ -1644,7 +1644,7 @@ function closePlanPreviewModal() {
 async function loadReadOnlyPlanPreview(container, plan, selectedProductSystem) {
   if (!container) return;
   try {
-    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=japanese-drawer-merchandising-20260703-01");
+    const { mountReadOnlyWardrobePreview } = await import("./ReadOnlyWardrobePreview.js?v=global-side-wall-soften-20260718-01");
     const cleanup = await mountReadOnlyWardrobePreview(container, {
       plan,
       selectedProductSystem,
@@ -1693,7 +1693,7 @@ async function renderPlannerInlineEditor(plan) {
   `;
   const root = answerContent.querySelector("[data-planner-inline-editor]");
   try {
-    const { mountPlannerInlineEditor } = await import("./PlannerInlineEditor.js?v=drawer-double-whole-model-20260707-01");
+    const { mountPlannerInlineEditor } = await import("./PlannerInlineEditor.js?v=global-side-wall-soften-20260718-01");
     const cleanup = await mountPlannerInlineEditor(root, {
       plan,
       selectedProductSystem,

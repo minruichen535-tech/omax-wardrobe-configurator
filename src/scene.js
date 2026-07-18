@@ -480,6 +480,13 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
     transparent: true,
     opacity: isAiPlannerPreview ? 0.32 : 0.82
   });
+  const sideWallMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.94,
+    transparent: true,
+    opacity: 0.1,
+    depthWrite: false
+  });
   const wallThickness = seriesId === "carbon-steel-post-wardrobe-v2" ? 0.06 : 0.04;
   const floorDepth = Math.max(depth, leftWallDepth, rightWallDepth);
   const floorCenterZ = (floorDepth - depth) / 2;
@@ -500,7 +507,7 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   backWall.position.set(0, height / 2, backWallCenterZ);
   root.add(backWall);
 
-  const leftWall = box(wallThickness, height, leftWallDepth, wallMat);
+  const leftWall = box(wallThickness, height, leftWallDepth, sideWallMat);
   leftWall.name = "Preview Room Left Wall";
   leftWall.position.set(
     -width / 2 - wallThickness / 2,
@@ -509,7 +516,7 @@ function addRoom(root, width, depth, height, seriesId, leftWallDepth = depth, ri
   );
   root.add(leftWall);
 
-  const rightWall = box(wallThickness, height, rightWallDepth, wallMat);
+  const rightWall = box(wallThickness, height, rightWallDepth, sideWallMat);
   rightWall.name = "Preview Room Right Wall";
   rightWall.position.set(
     width / 2 + wallThickness / 2,

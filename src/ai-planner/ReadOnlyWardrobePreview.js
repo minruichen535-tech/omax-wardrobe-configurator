@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { calculateDesign, createConfigFromPlannerPreset, createInitialConfig } from "../configurator.js?v=japanese-drawer-merchandising-20260703-01";
 import { loadWorkbookData } from "../dataSource.js?v=ai-planner-preview-20260617-06";
 import { getSeries } from "../config/productSeries.js?v=ai-planner-preview-20260617-06";
-import { WardrobeScene } from "../scene.js?v=drawer-double-whole-model-20260707-01";
+import { WardrobeScene } from "../scene.js?v=global-side-wall-soften-20260718-01";
 import {
   componentSupportsItem,
   getClearanceValue,

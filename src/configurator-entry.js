@@ -8,5 +8,5 @@ if (isConfiguratorIndex) {
   document.head.appendChild(stylesheet);
   import("./dashboard/dashboard-main.js?v=cache-20260621-02");
 } else {
-  import("./main.js?v=drawer-double-whole-model-20260707-01");
+  import("./main.js?v=global-side-wall-soften-20260718-01");
 }
