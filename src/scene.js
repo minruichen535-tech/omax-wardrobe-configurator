@@ -9,6 +9,8 @@ import { getCuttingRules, getModelTransforms } from "./series/index.js?v=drawer-
 import {
   getWallMountedRailOffsetPosition
 } from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
+import { DirectPlacementDragController } from "./interaction/DirectPlacementDragController.js?v=direct-placement-drag-20260722-01";
+import { pickNearestBayTarget as pickNearestDirectBayTarget } from "./interaction/PlacementBayResolver.js?v=direct-placement-drag-20260722-01";
 
 const h = React.createElement;
 const loader = new GLTFLoader();
@@ -89,15 +91,20 @@ const aluminumPostModelPaths = {
 
 console.log("[scene.js]", sceneTransformVersion);
 
-export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement, readOnly = false, previewMode = "", renderInfo = null }) {
+export function WardrobeScene({ config, design, series, debug = false, selectedId = "", onDropComponent, onSelectPlacement, onUpdatePlacement, readOnly = false, previewMode = "", renderInfo = null }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const renderIdRef = useRef(0);
-  const callbacksRef = useRef({ onDropComponent, onSelectPlacement });
+  const callbacksRef = useRef({ onDropComponent, onSelectPlacement, onUpdatePlacement });
+  const stateRef = useRef({ config, design, series, selectedId, readOnly });
 
   useEffect(() => {
-    callbacksRef.current = { onDropComponent, onSelectPlacement };
-  }, [onDropComponent, onSelectPlacement]);
+    callbacksRef.current = { onDropComponent, onSelectPlacement, onUpdatePlacement };
+  }, [onDropComponent, onSelectPlacement, onUpdatePlacement]);
+
+  useEffect(() => {
+    stateRef.current = { config, design, series, selectedId, readOnly };
+  }, [config, design, series, selectedId, readOnly]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -187,10 +194,29 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
       }
     };
 
+    let directDragController = null;
     if (!readOnly) {
       renderer.domElement.addEventListener("dragover", handleDragOver);
       renderer.domElement.addEventListener("drop", handleDrop);
       renderer.domElement.addEventListener("click", handleClick);
+      directDragController = new DirectPlacementDragController({
+        domElement: renderer.domElement,
+        controls,
+        getState: () => stateRef.current,
+        pickPlacement: (event) => pickSceneObject(event, (userData) => userData.placementId),
+        pickBayTarget: (event) => (
+          pickSceneObject(event, (userData) => userData.isBayDropTarget)
+          || pickNearestDirectBayTarget(
+            event,
+            scene.getObjectByName("design-root"),
+            camera,
+            renderer.domElement
+          )
+        ),
+        onSelectPlacement: (id) => callbacksRef.current.onSelectPlacement?.(id),
+        onUpdatePlacement: (id, patch) => callbacksRef.current.onUpdatePlacement?.(id, patch),
+        onCleanupHelpers: () => removeSelectionOutlineObjects(scene)
+      });
     }
 
     const resize = () => {
@@ -215,6 +241,7 @@ export function WardrobeScene({ config, design, series, debug = false, selectedI
         renderer.domElement.removeEventListener("dragover", handleDragOver);
         renderer.domElement.removeEventListener("drop", handleDrop);
         renderer.domElement.removeEventListener("click", handleClick);
+        directDragController?.dispose();
       }
       renderer.dispose();
       mount.removeChild(renderer.domElement);
@@ -271,7 +298,10 @@ function pickNearestBayTarget(event, scene, camera, domElement) {
 
 async function rebuildScene(scene, config, design, series, debug, selectedId, renderIdRef, previewMode, requestRender, renderInfo = null) {
   const old = scene.getObjectByName("design-root");
-  if (old) scene.remove(old);
+  if (old) {
+    removeSelectionOutlineObjects(old);
+    scene.remove(old);
+  }
 
   const root = new THREE.Group();
   root.name = "design-root";
@@ -3842,9 +3872,6 @@ async function addPlacement(
     offsetZ: transform.offsetZ || 0,
     bayCenter: toMm(x)
   });
-  if (debug && placement.id === selectedId) {
-    addSelectionOutline(model);
-  }
   if (placement.componentType === "woodTop" && modelTransforms.woodTop.enabled) {
     group.updateMatrixWorld(true);
     model.updateMatrixWorld(true);
@@ -4450,11 +4477,21 @@ function getObjectWidth(model) {
   return box3.getSize(new THREE.Vector3()).x;
 }
 
-function addSelectionOutline(model) {
-  const outline = new THREE.BoxHelper(model, new THREE.Color(theme.colors.primary));
-  outline.name = "Selection Outline";
-  outline.userData = { placementId: model.userData.placementId };
-  model.add(outline);
+function removeSelectionOutlineObjects(root) {
+  if (!root) return;
+  const outlines = [];
+  root.traverse((object) => {
+    if (object.name === "Selection Outline") outlines.push(object);
+  });
+  outlines.forEach((outline) => {
+    outline.parent?.remove(outline);
+    outline.geometry?.dispose?.();
+    if (Array.isArray(outline.material)) {
+      outline.material.forEach((material) => material?.dispose?.());
+    } else {
+      outline.material?.dispose?.();
+    }
+  });
 }
 
 function getComponentTransform(componentType, modelTransforms, report = null) {
