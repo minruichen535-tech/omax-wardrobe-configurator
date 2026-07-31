@@ -50,6 +50,14 @@ button {
   padding: 22px;
 }
 
+.japanese-client-quote-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .viewer-pane {
   display: grid;
   grid-template-rows: auto minmax(460px, 1fr) auto;
@@ -128,6 +136,92 @@ button {
 
 .client-bom-table .bom-group-title {
   grid-template-columns: minmax(150px, 1fr) 64px;
+}
+
+.japanese-client-retail-table {
+  display: grid;
+  gap: 12px;
+}
+
+.japanese-client-retail-table .retail-quote-head {
+  display: grid;
+  grid-template-columns: 80px minmax(120px, 1fr) 48px 48px 84px 92px;
+  gap: 16px;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.japanese-client-retail-table .retail-quote-head span:nth-child(2) {
+  text-align: left;
+}
+
+.japanese-client-retail-table .retail-quote-head span:last-child {
+  text-align: right;
+}
+
+.japanese-client-retail-table .retail-quote-row {
+  display: grid;
+  grid-template-columns: 80px minmax(120px, 1fr) 48px 48px 84px 92px;
+  gap: 16px;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 120px;
+  height: 120px;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.japanese-client-retail-table .retail-image-cell {
+  display: grid;
+  place-items: center;
+  width: 80px;
+  height: 80px;
+}
+
+.japanese-client-retail-table .quotation-product-image {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.japanese-client-retail-table .retail-row-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.japanese-client-retail-table .retail-name {
+  color: var(--ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.japanese-client-retail-table .retail-quantity {
+  color: var(--ink);
+}
+
+.japanese-client-retail-table .retail-price {
+  color: var(--ink);
+  white-space: nowrap;
+  text-align: right;
+  font-weight: 700;
+}
+
+.japanese-client-retail-table .retail-value {
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.japanese-client-retail-table .retail-subtotal {
+  color: var(--ink);
+  text-align: right;
+  font-weight: 700;
 }
 
 .client-mode .quote-pane {
@@ -790,6 +884,10 @@ button {
   margin-bottom: 18px;
 }
 
+.japanese-client-quote-pane .quote-heading {
+  flex-shrink: 0;
+}
+
 .quote-heading h2 {
   font-size: 18px;
 }
@@ -819,6 +917,80 @@ button {
 .quote-export-button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.quote-scroll-region {
+  display: contents;
+}
+
+.japanese-client-quote-scroll {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.japanese-client-quote-footer,
+.quote-footer {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.japanese-client-quote-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 16px 0;
+}
+
+.japanese-client-quote-footer .total-row,
+.quote-footer .total-row {
+  margin-top: 12px;
+}
+
+.japanese-client-quote-footer .total-row {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 4px 0;
+  line-height: 1.2;
+}
+
+.japanese-client-quote-footer .quote-note-field {
+  grid-column: 1 / -1;
+  gap: 4px;
+}
+
+.japanese-client-quote-footer .quote-note-field textarea {
+  height: 60px;
+  min-height: 60px;
+  max-height: 60px;
+  resize: none;
+}
+
+.japanese-client-quote-footer .quote-export-button {
+  grid-column: 1;
+  width: 100%;
+  margin: 0;
+  height: 40px;
+  min-height: 40px;
+}
+
+.japanese-client-quote-footer .quote-note {
+  display: none;
+}
+
+.japanese-client-quote-footer .inquiry-button {
+  grid-column: 2;
+  height: 44px;
+  min-height: 44px;
+}
+
+.japanese-client-quote-pane .japanese-client-retail-table .retail-quote-head,
+.japanese-client-quote-pane .japanese-client-retail-table .retail-quote-row {
+  grid-template-columns: 80px minmax(60px, 1fr) 28px 28px 58px 68px;
+  gap: 6px;
 }
 
 .client-plan-panel {
@@ -1184,8 +1356,14 @@ button {
   .quote-pane {
     grid-column: 1 / -1;
     max-height: none;
+    height: auto;
+    overflow: visible;
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .japanese-client-quote-pane {
+    display: block;
   }
 }
 
@@ -1198,6 +1376,7 @@ button {
   .control-rail,
   .quote-pane {
     max-height: none;
+    height: auto;
     border: 0;
   }
 

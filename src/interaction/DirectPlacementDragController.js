@@ -5,7 +5,7 @@ import {
   isDirectPlacementDraggable,
   resolveDirectDragHeight,
   validateDirectPlacementPatch
-} from "./PlacementSnapResolver.js?v=direct-placement-drag-20260722-01";
+} from "./PlacementSnapResolver.js?v=japanese-post-accessories-20260730-01";
 import {
   clearBayTargetHighlight,
   setBayTargetHighlight

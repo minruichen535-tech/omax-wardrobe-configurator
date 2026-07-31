@@ -1,0 +1,169 @@
+{
+  "schemaVersion": "1.0.0",
+  "ruleSetId": "aluminum-wall-mounted-linear-v1",
+  "name": "铝合金立柱靠墙式衣帽间（一字型）",
+  "excelImportColumns": [
+    "id",
+    "category",
+    "code",
+    "name",
+    "status",
+    "formula",
+    "constantA",
+    "constantB",
+    "pricingMode",
+    "unit",
+    "source",
+    "note"
+  ],
+  "supportedValues": {
+    "layoutTypes": ["一字型"],
+    "equalSplit": [true],
+    "postColors": ["黑色", "银色"],
+    "depthsMm": [300, 450, 500],
+    "boardTypes": ["普通木层板", "贵木层板", "玻璃层板"]
+  },
+  "rules": [
+    {
+      "id": "post_count",
+      "category": "立柱",
+      "code": "WM-POST",
+      "name": "立柱",
+      "status": "confirmed",
+      "formula": "bayCount + 1",
+      "unit": "支",
+      "source": "当前规则",
+      "note": "普通一字型立柱数量"
+    },
+    {
+      "id": "post_spec",
+      "category": "立柱",
+      "code": "WM-POST",
+      "name": "立柱",
+      "status": "confirmed",
+      "formula": "wallHeight 对应立柱规格",
+      "unit": "支",
+      "heightSpecMap": {
+        "2000": "2m"
+      },
+      "source": "当前规则",
+      "note": "第一版仅确认2000mm输入对应2m立柱"
+    },
+    {
+      "id": "horizontal_guide",
+      "category": "型材",
+      "code": "WM-U-GUIDE",
+      "name": "U型水平导轨",
+      "status": "confirmed",
+      "formula": "wallWidth - 55",
+      "constantA": 55,
+      "quantity": 1,
+      "unit": "条",
+      "pricingMode": "ceil_each_meter",
+      "pricingUnit": "米",
+      "source": "当前规则",
+      "note": "每条分别向上取整，不合并余料"
+    },
+    {
+      "id": "top_support",
+      "category": "配件",
+      "code": "WM-TOP-SUPPORT",
+      "name": "顶板托",
+      "status": "confirmed",
+      "formula": "bayCount",
+      "unit": "对",
+      "pricingMode": "piece",
+      "source": "当前规则",
+      "note": "规格等于空间深度，颜色等于立柱颜色"
+    },
+    {
+      "id": "top_board",
+      "category": "板材",
+      "code": "WM-BOARD",
+      "name": "板件",
+      "status": "confirmed",
+      "formula": "bayCount",
+      "unit": "块",
+      "pricingMode": "piece",
+      "source": "当前规则",
+      "note": "顶板数量等于跨数"
+    },
+    {
+      "id": "middle_board",
+      "category": "板材",
+      "code": "WM-BOARD",
+      "name": "板件",
+      "status": "confirmed",
+      "formula": "extraBoardCount",
+      "unit": "块",
+      "pricingMode": "piece",
+      "source": "当前规则",
+      "note": "额外中层板数量"
+    },
+    {
+      "id": "middle_support",
+      "category": "配件",
+      "code": "WM-MIDDLE-SUPPORT",
+      "name": "中层板托",
+      "status": "confirmed",
+      "formula": "extraBoardCount",
+      "unit": "对",
+      "pricingMode": "piece",
+      "source": "当前规则",
+      "note": "规格等于空间深度，颜色等于立柱颜色"
+    },
+    {
+      "id": "rod_cut",
+      "category": "型材",
+      "code": "WM-ROD",
+      "name": "挂衣杆",
+      "status": "confirmed",
+      "formula": "boardWidth - 10",
+      "constantA": 10,
+      "unit": "条",
+      "source": "当前规则",
+      "note": "数量等于跨数乘每跨衣杆数量"
+    },
+    {
+      "id": "bay_inner_width",
+      "category": "尺寸",
+      "code": "BAY-INNER-WIDTH",
+      "name": "理论每跨内宽",
+      "status": "pending",
+      "formula": "(wallWidth - (bayCount + 1) × 30) ÷ bayCount",
+      "constantA": 30,
+      "unit": "mm",
+      "source": "Excel旧规则",
+      "note": "与实际订单存在约1.3到2mm差异，必须待确认"
+    },
+    {
+      "id": "board_type_deduction",
+      "category": "尺寸",
+      "code": "BOARD-TYPE-DEDUCTION",
+      "name": "板件类型扣减",
+      "status": "pending",
+      "formula": "bayInnerWidth - deduction",
+      "deductionByBoardType": {
+        "普通木层板": 0,
+        "贵木层板": 28,
+        "玻璃层板": 18
+      },
+      "unit": "mm",
+      "source": "Excel旧规则",
+      "note": "普通木层板0、贵木层板28、玻璃层板18，均待确认"
+    },
+    {
+      "id": "rod_pricing",
+      "category": "计价",
+      "code": "WM-ROD-PRICING",
+      "name": "挂衣杆采购米数",
+      "status": "pending",
+      "formula": "每条向上取整到整米，且每条最低1米",
+      "minimumMetersPerPiece": 1,
+      "pricingMode": "ceil_each_meter_minimum",
+      "pricingUnit": "米",
+      "source": "第一版暂定规则",
+      "note": "不合并余料，可配置，待确认"
+    }
+  ]
+}

@@ -17,6 +17,8 @@ export const DIRECT_DRAGGABLE_COMPONENT_TYPES = new Set([
   "jewelryBox",
   "drawerSingle",
   "drawerDouble",
+  "mirror",
+  "clothBoard",
   "cabinet",
   "storageBasket",
   "basket",
@@ -182,6 +184,8 @@ function getDirectPlacementComponentHeight(placement, design) {
     trouserRack: 180,
     drawerSingle: 180,
     drawerDouble: 360,
+    mirror: 900,
+    clothBoard: 820,
     storageBasket: 180,
     basket: 180,
     mixedStorage: 500

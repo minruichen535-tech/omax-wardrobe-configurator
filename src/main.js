@@ -30,7 +30,7 @@ import {
   normalizeFixedModuleWidth,
   recommendBayCount,
   syncWallLengthsWithRoom
-} from "./configurator.js?v=cache-20260621-02";
+} from "./configurator.js?v=japanese-post-accessories-20260730-01";
 import {
   clearWorkbookOverride,
   exportProductsWorkbook,
@@ -39,13 +39,14 @@ import {
   parseProductFile,
   parseRulesFile,
   saveWorkbookOverride
-} from "./dataSource.js?v=cache-20260621-02";
+} from "./dataSource.js?v=japanese-client-price-20260731-01";
 import { applyTheme, swatchColors } from "./config/theme.js?v=cache-20260621-02";
 import { resolveRoute, resolveSeriesAsset } from "./config/productSeries.js?v=wall-mounted-client-route-20260703-01";
-import { WardrobeScene } from "./scene.js?v=direct-placement-drag-20260722-01";
+import { WardrobeScene } from "./scene.js?v=japanese-post-side-mount-20260730-02";
 import { buildPlannerVisualAssets } from "./ai-planner/ReadOnlyWardrobePreview.js?v=global-side-wall-soften-20260718-01";
 import { loadStorageRules } from "./rules/storageRules.js?v=storage-rules-20260625-01";
-import { getCuttingRules, getDisplayRules } from "./series/index.js?v=drawer-material-sync-20260702-01";
+import { getCuttingRules, getDisplayRules } from "./series/index.js?v=japanese-post-side-mount-20260730-02";
+import { calculateJapaneseClientRetailPrice } from "./series/japanese-closet/clientPricing.js?v=japanese-client-retail-excel-20260730-02";
 import { readDealerOrders, submitDealerOrder } from "./dealerOrderAdapter.js?v=dealer-portal-20260718-01";
 import { installDealerSessionGuard } from "./dealer/dealerSessionGuard.js?v=dealer-session-guard-20260718-01";
 import {
@@ -78,6 +79,26 @@ const employeeBrandFallback = {
   seriesName: "日式衣帽间",
   phone: "+86 18818717590"
 };
+const japaneseClientQuotationImages = {
+  baseGroup: "quotation/base-module.png",
+  woodShelf: "quotation/wood-shelf.png",
+  singleRail: "quotation/single-rail.png",
+  doubleRail: "quotation/double-rail.png",
+  cabinet: "quotation/cabinet.png",
+  trouserRack: "quotation/trouser-rack.png",
+  jewelryBox: "quotation/jewelry-box.png",
+  mirror: "quotation/mirror.png",
+  clothBoard: "quotation/ironing-board.png",
+  drawerDouble: "images/products/JP-drawerDouble.png",
+  "JP-drawer-wire-basket": "quotation/wire-basket.png",
+  "JP-drawer-wire-basket-short": "quotation/wire-basket.png",
+  "JP-drawer-multi-storage": "quotation/jewelry-box.png",
+  "JP-drawer-jewelry": "quotation/leather-jewelry-box.png",
+  "JP-drawer-underwear-a": "quotation/underwear-a.png",
+  "JP-drawer-underwear-b": "quotation/underwear-b.png",
+  "JP-drawer-leather-storage": "quotation/leather-storage.png"
+};
+const postMountedAccessoryTypes = new Set(["mirror", "clothBoard"]);
 applyTheme();
 installDealerSessionGuard();
 
@@ -96,6 +117,19 @@ function normalizeAluminumConnectionMode(value) {
     return "ceiling-mounted";
   }
   return "wall-mounted";
+}
+
+function getPostMountedAccessoryPostId(wallId, bayIndex) {
+  return `${wallId}:post:${Number(bayIndex)}`;
+}
+
+function syncPostMountedAccessoryPlacement(placement, patch = {}) {
+  const next = { ...placement, ...patch };
+  if (!postMountedAccessoryTypes.has(next.componentType)) return next;
+  return {
+    ...next,
+    postId: getPostMountedAccessoryPostId(next.wallId, next.bayIndex)
+  };
 }
 
 function getJapaneseDrawerProducts(data) {
@@ -144,11 +178,15 @@ function getLibraryEntries({ cuttingRules, data, design, isClientMode }) {
   return [...defaultEntries, ...japaneseDrawerEntries, ...japaneseDrawerDoubleEntry];
 }
 
-function getLibraryComponentLabel(entry, displayRules, design, cuttingRules) {
+function getLibraryComponentLabel(entry, displayRules, design, cuttingRules, isJapaneseClientMode = false) {
   if (entry.componentType === "drawerSingle") {
     return entry.product?.nameEn || entry.product?.nameCn || entry.product?.sku || "Drawer (Single)";
   }
-  if (entry.componentType === "drawerDouble") return "Drawer (Double)";
+  if (entry.componentType === "drawerDouble") {
+    return isJapaneseClientMode ? "收纳盒（双抽）" : "Drawer (Double)";
+  }
+  if (isJapaneseClientMode && entry.componentType === "woodShelf") return "木层板";
+  if (isJapaneseClientMode && entry.componentType === "cabinet") return "柜子";
   return displayRules.getLibraryComponentName(
     entry.componentType,
     design.productByType,
@@ -156,12 +194,13 @@ function getLibraryComponentLabel(entry, displayRules, design, cuttingRules) {
   );
 }
 
-function getPlacementComponentLabel(placement, design, cuttingRules) {
+function getPlacementComponentLabel(placement, design, cuttingRules, isJapaneseClientMode = false) {
   if (placement.componentType === "drawerSingle") {
     const product = design.productBySku[placement.productSku] || design.productByType[placement.componentType];
     return product?.nameEn || product?.nameCn || product?.sku || "Drawer (Single)";
   }
   if (placement.componentType === "drawerDouble") return "Drawer (Double)";
+  if (isJapaneseClientMode && placement.componentType === "woodShelf") return "木层板";
   return getComponentName(placement.componentType, design.productByType, cuttingRules);
 }
 
@@ -393,6 +432,13 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
   const webQuotationTotal = useMemo(
     () => design.bom.reduce((sum, item) => sum + displayRules.getWebDisplayLineTotal(item), 0),
     [design.bom, displayRules]
+  );
+  const isJapaneseClientMode = isClientMode && data.series.seriesId === "japanese-closet";
+  const japaneseClientRetail = useMemo(
+    () => isJapaneseClientMode
+      ? calculateJapaneseClientRetailPrice({ design, config, products: data.products })
+      : null,
+    [config, data.products, design, isJapaneseClientMode]
   );
   const configuratorVisualAssets = useMemo(() => {
     if (!showVisualItems || !visualRulesReady) {
@@ -641,17 +687,27 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
   const exportQuote = async () => {
     setIsExportingQuote(true);
     try {
-      const exportHandler = isDealerMode
-        ? exportDealerProductListExcel
-        : isClientMode
-          ? exportClientProductListExcel
-          : exportQuotationExcel;
-      await exportHandler({
-        bom: design.bom,
-        design,
-        config,
-        series: data.series
-      });
+      if (isJapaneseClientMode) {
+        await exportJapaneseClientQuotationExcel({
+          pricing: japaneseClientRetail,
+          config,
+          series: data.series,
+          planName,
+          customerName
+        });
+      } else {
+        const exportHandler = isDealerMode
+          ? exportDealerProductListExcel
+          : isClientMode
+            ? exportClientProductListExcel
+            : exportQuotationExcel;
+        await exportHandler({
+          bom: design.bom,
+          design,
+          config,
+          series: data.series
+        });
+      }
     } catch (error) {
       console.error("Quotation export failed.", error);
       window.alert("报价单导出失败，请稍后重试。");
@@ -793,6 +849,9 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
       componentType,
       ...(moduleWidth ? { moduleWidth, standardWidth: moduleWidth } : {}),
       heightFromFloor: getDefaultHeight(componentType, design.room.height, cuttingRules),
+      ...(postMountedAccessoryTypes.has(componentType)
+        ? { postId: getPostMountedAccessoryPostId(wallId, bayIndex) }
+        : {}),
       color,
       ...(options.productSku ? { productSku: options.productSku } : {}),
       ...(componentType === "drawerDouble" ? {
@@ -827,7 +886,7 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
       return {
         ...current,
         placements: current.placements.map((placement) => placement.id === id
-          ? { ...placement, ...patch }
+          ? syncPostMountedAccessoryPlacement(placement, patch)
           : placement)
       };
     }
@@ -1053,7 +1112,13 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
               const icon = entry.productSku
                 ? product?.image || getComponentIcon(product, type, cuttingRules)
                 : getComponentIcon(product, type, cuttingRules);
-              const label = getLibraryComponentLabel(entry, displayRules, design, cuttingRules);
+              const label = getLibraryComponentLabel(
+                entry,
+                displayRules,
+                design,
+                cuttingRules,
+                isClientMode && data.series.seriesId === "japanese-closet"
+              );
               const entrySupportsClick = supportsLibraryClick || Boolean(entry.productSku);
               const addEntryPlacement = () => {
                 const wall = design.activeWalls[0];
@@ -1129,7 +1194,15 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
           h("div", { className: "viewer-actions" },
             h("div", { className: "metrics" },
               h(Metric, { icon: Layers3, label: "墙面", value: `${design.activeWalls.length} 面` }),
-              h(Metric, { icon: ClipboardList, label: isDealerMode ? "产品项" : isClientMode ? "产品 SKU" : "销售 SKU", value: `${design.bom.length} 项` }),
+              isJapaneseClientMode
+                ? h(Metric, {
+                  icon: WalletCards,
+                  label: "总价",
+                  value: japaneseClientRetail?.warnings?.length
+                    ? "总价待确认"
+                    : formatCurrency(japaneseClientRetail?.total || 0)
+                })
+                : h(Metric, { icon: ClipboardList, label: isDealerMode ? "产品项" : isClientMode ? "产品 SKU" : "销售 SKU", value: `${design.bom.length} 项` }),
               !isCustomerFacingMode && h(Metric, { icon: WalletCards, label: "预估价", value: formatCurrency(webQuotationTotal) })
             )
           )
@@ -1156,74 +1229,103 @@ function ClientApp({ data, isClientMode = false, isDealerMode = false }) {
           null
         )
       ),
-      h("aside", { className: "quote-pane" },
+      h("aside", { className: `quote-pane${isJapaneseClientMode ? " japanese-client-quote-pane" : ""}` },
         h("div", { className: "quote-heading" },
           h(ClipboardList, { size: 20 }),
           h("h2", null, isDealerMode ? "经销商订单清单" : isClientMode ? "产品清单" : "配置与销售清单"),
-          h("button", {
+          !isJapaneseClientMode && h("button", {
             className: "quote-export-button",
             type: "button",
             disabled: isExportingQuote || !dealerCanExport,
             onClick: exportQuote
-          }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : (isDealerMode ? "导出方案清单" : isClientMode ? "导出产品清单" : "导出Excel"))
+          }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : (isJapaneseClientMode ? "导出报价单" : isDealerMode ? "导出方案清单" : isClientMode ? "导出产品清单" : "导出Excel"))
         ),
-        supportsSavedPlans && h(ClientSavedPlansPanel, {
-          plans: currentSeriesSavedPlans,
-          selectedPlanId: selectedSavedPlanId,
-          setSelectedPlanId: setSelectedSavedPlanId,
-          planName,
-          setPlanName,
-          customerName,
-          setCustomerName,
-          customerPhone,
-          setCustomerPhone,
-          onSave: () => saveClientPlan(),
-          onSaveAs: () => saveClientPlan({ forceNew: true }),
-          onOpen: openClientPlan,
-          onRename: renameClientPlan,
-          onDelete: deleteClientPlan,
-          isDealerMode
-        }),
-        design.warnings.map((message) => h("p", { className: "warning-text", key: message }, message)),
-        h("div", { className: "placement-list quote-placement-list" },
-          design.placements.length === 0 && h("p", { className: "empty-placement" }, "从左侧拖入组合件后，这里会显示配置明细。"),
-          design.placements.map((placement) => h("div", {
-            className: `placement-row ${placement.id === config.selectedPlacementId ? "selected" : ""}`,
-            key: placement.id,
-            onClick: () => updateConfig({ selectedPlacementId: placement.id })
-          },
-            h("span", null, `${labelWall(placement.wallId)} / 第 ${placement.bayIndex + 1} 跨 / ${getPlacementComponentLabel(placement, design, cuttingRules)} / 离地 ${placement.heightFromFloor}mm`),
-            placement.autoGenerated && h("small", { className: "cut-length" }, "自动生成"),
-            placement.cutLength && h("small", { className: "cut-length" }, `剪尺${placement.cutLength}mm`),
-            cuttingRules.fixedModuleTypes.includes(placement.componentType) && h("small", { className: "cut-length" }, `${getPlacementComponentLabel(placement, design, cuttingRules)} ${placement.moduleWidth || placement.standardWidth}mm`),
-            h("strong", null, `x${placement.quantity}`),
-            !placement.autoGenerated && h("button", { type: "button", title: "删除", onClick: (event) => { event.stopPropagation(); removePlacement(placement.id); } }, h(Trash2, { size: 15 }))
-          ))
+        h("div", { className: `quote-scroll-region${isJapaneseClientMode ? " japanese-client-quote-scroll" : ""}` },
+          supportsSavedPlans && h(ClientSavedPlansPanel, {
+            plans: currentSeriesSavedPlans,
+            selectedPlanId: selectedSavedPlanId,
+            setSelectedPlanId: setSelectedSavedPlanId,
+            planName,
+            setPlanName,
+            customerName,
+            setCustomerName,
+            customerPhone,
+            setCustomerPhone,
+            onSave: () => saveClientPlan(),
+            onSaveAs: () => saveClientPlan({ forceNew: true }),
+            onOpen: openClientPlan,
+            onRename: renameClientPlan,
+            onDelete: deleteClientPlan,
+            isDealerMode
+          }),
+          design.warnings.map((message) => h("p", { className: "warning-text", key: message }, message)),
+          h("div", { className: "placement-list quote-placement-list" },
+            design.placements.length === 0 && h("p", { className: "empty-placement" }, "从左侧拖入组合件后，这里会显示配置明细。"),
+            design.placements.map((placement) => h("div", {
+              className: `placement-row ${placement.id === config.selectedPlacementId ? "selected" : ""}`,
+              key: placement.id,
+              onClick: () => updateConfig({ selectedPlacementId: placement.id })
+            },
+              h("span", null, `${labelWall(placement.wallId)} / 第 ${placement.bayIndex + 1} 跨 / ${getPlacementComponentLabel(placement, design, cuttingRules, isJapaneseClientMode)} / 离地 ${placement.heightFromFloor}mm`),
+              placement.autoGenerated && h("small", { className: "cut-length" }, "自动生成"),
+              placement.cutLength && h("small", { className: "cut-length" }, `剪尺${placement.cutLength}mm`),
+              cuttingRules.fixedModuleTypes.includes(placement.componentType) && h("small", { className: "cut-length" }, `${getPlacementComponentLabel(placement, design, cuttingRules, isJapaneseClientMode)} ${placement.moduleWidth || placement.standardWidth}mm`),
+              h("strong", null, `x${placement.quantity}`),
+              !placement.autoGenerated && h("button", { type: "button", title: "删除", onClick: (event) => { event.stopPropagation(); removePlacement(placement.id); } }, h(Trash2, { size: 15 }))
+            ))
+          ),
+          isJapaneseClientMode
+            ? h(JapaneseClientRetailTable, { pricing: japaneseClientRetail, series: data.series })
+            : h(GroupedBomTable, { series: data.series, bom: design.bom, displayRules, hidePrices: isCustomerFacingMode, hideSkus: isDealerMode })
         ),
-        h(GroupedBomTable, { series: data.series, bom: design.bom, displayRules, hidePrices: isCustomerFacingMode, hideSkus: isDealerMode }),
-        !isCustomerFacingMode && h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(webQuotationTotal))),
-        h("label", { className: "field quote-note-field" },
-          h("span", null, isDealerMode ? "订单备注" : "备注信息"),
-          h("textarea", {
-            value: quoteNote,
-            rows: 4,
-            placeholder: isDealerMode ? "请输入订单备注或交付要求" : "请输入报价备注",
-            onChange: (event) => setQuoteNote(event.target.value)
-          })
-        ),
-        h("p", { className: "quote-note" }, isDealerMode
-          ? "本页面不显示价格和内部 SKU。提交订单后，内部 SKU BOM 会随方案发送给奥美斯审核。"
-          : isClientMode
-          ? "产品尺寸与数量以最终确认方案为准。"
-          : "以上价格为系统预估价格，最终报价需根据实际尺寸、颜色、包装方式、运输方式及订单数量确认。"),
-        h("button", {
-          className: "inquiry-button",
-          type: "button",
-          onClick: isDealerMode ? submitCurrentDealerOrder : undefined,
-          disabled: isDealerMode && (dealerSubmitStatus === "submitting" || !dealerCanSubmitOrder)
-        }, isDealerMode
-          ? dealerSubmitStatus === "submitting" ? "提交中..." : "提交订单"
-          : "提交询价")
+        isJapaneseClientMode
+          ? h("div", { className: "japanese-client-quote-footer" },
+            h("div", { className: "total-row" }, h("span", null, "方案价格"), h("strong", null, formatCurrency(japaneseClientRetail.total))),
+            h("label", { className: "field quote-note-field" },
+              h("span", null, "备注信息"),
+              h("textarea", {
+                value: quoteNote,
+                rows: 3,
+                placeholder: "请输入报价备注",
+                onChange: (event) => setQuoteNote(event.target.value)
+              })
+            ),
+            h("button", {
+              className: "quote-export-button japanese-client-quote-export-button",
+              type: "button",
+              disabled: isExportingQuote || !dealerCanExport,
+              onClick: exportQuote
+            }, h(Download, { size: 15 }), isExportingQuote ? "导出中..." : "导出报价单"),
+            h("p", { className: "quote-note" }, "产品尺寸与数量以最终确认方案为准。"),
+            h("button", {
+              className: "inquiry-button",
+              type: "button",
+              onClick: undefined
+            }, "提交询价")
+          )
+          : h("div", { className: "quote-footer" },
+            !isCustomerFacingMode && h("div", { className: "total-row" }, h("span", null, "预计合计"), h("strong", null, formatCurrency(webQuotationTotal))),
+            h("label", { className: "field quote-note-field" },
+              h("span", null, isDealerMode ? "订单备注" : "备注信息"),
+              h("textarea", {
+                value: quoteNote,
+                rows: 4,
+                placeholder: isDealerMode ? "请输入订单备注或交付要求" : "请输入报价备注",
+                onChange: (event) => setQuoteNote(event.target.value)
+              })
+            ),
+            h("p", { className: "quote-note" }, isDealerMode
+              ? "本页面不显示价格和内部 SKU。提交订单后，内部 SKU BOM 会随方案发送给奥美斯审核。"
+              : "以上价格为系统预估价格，最终报价需根据实际尺寸、颜色、包装方式、运输方式及订单数量确认。"),
+            h("button", {
+              className: "inquiry-button",
+              type: "button",
+              onClick: isDealerMode ? submitCurrentDealerOrder : undefined,
+              disabled: isDealerMode && (dealerSubmitStatus === "submitting" || !dealerCanSubmitOrder)
+            }, isDealerMode
+              ? dealerSubmitStatus === "submitting" ? "提交中..." : "提交订单"
+              : "提交询价")
+          )
       )
     )
   );
@@ -1611,6 +1713,51 @@ function GroupedBomTable({ series, bom, displayRules, hidePrices = false, hideSk
   );
 }
 
+function JapaneseClientRetailTable({ pricing, series }) {
+  if (!pricing) return null;
+  return h("div", { className: "japanese-client-retail-table" },
+    h("div", { className: "retail-quote-head", "aria-hidden": "true" },
+      h("span", null, "图片"),
+      h("span", null, "名称"),
+      h("span", null, "数量"),
+      h("span", null, "单位"),
+      h("span", null, "单价"),
+      h("span", null, "小计")
+    ),
+    pricing.lines.map((line) => h(JapaneseClientRetailRow, { key: line.key, line, series })),
+    pricing.warnings.length > 0 && h("details", { className: "fold-panel" },
+      h("summary", null, "价格提示"),
+      h("ul", null, pricing.warnings.map((warning) => h("li", { key: warning }, warning)))
+    )
+  );
+}
+
+function JapaneseClientRetailRow({ line, series }) {
+  return h("article", { className: "retail-quote-row", key: line.key },
+    h("div", { className: "retail-image-cell" },
+      h("img", {
+        className: "quotation-product-image",
+        src: resolveSeriesAsset(series, getJapaneseClientQuotationImage(line)),
+        alt: line.name
+      })
+    ),
+    h("div", { className: "retail-row-main" },
+      h("span", { className: "retail-name" }, line.name)
+    ),
+    h("span", { className: "retail-value retail-quantity" }, line.quantity ?? ""),
+    h("span", { className: "retail-value retail-unit" }, line.unit || ""),
+    h("span", { className: "retail-value retail-price" }, formatCurrency(line.clientPrice)),
+    h("span", { className: "retail-value retail-subtotal" }, formatCurrency(line.lineTotal))
+  );
+}
+
+function getJapaneseClientQuotationImage(line) {
+  return japaneseClientQuotationImages[line.productSku]
+    || japaneseClientQuotationImages[line.imageSku]
+    || japaneseClientQuotationImages[line.componentType]
+    || japaneseClientQuotationImages.baseGroup;
+}
+
 function groupBomItems(bom, displayRules) {
   const map = new Map();
   bom.forEach((item) => {
@@ -1666,6 +1813,106 @@ async function exportQuotationExcel({ bom, design, config, series }) {
     failedImages: imageReport.failed,
     emptyImageSkus: imageReport.empty
   });
+}
+
+async function exportJapaneseClientQuotationExcel({ pricing, config, series, planName, customerName }) {
+  const exportedAt = new Date();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "璞舍高定";
+  workbook.created = exportedAt;
+  const sheet = workbook.addWorksheet("客户报价单", {
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+  sheet.columns = [
+    { width: 12 }, { width: 28 }, { width: 10 }, { width: 10 }, { width: 14 }, { width: 14 }
+  ];
+
+  sheet.mergeCells("A1:F1");
+  sheet.getCell("A1").value = "璞舍高定";
+  sheet.mergeCells("A2:F2");
+  sheet.getCell("A2").value = "日式衣帽间方案报价单";
+  sheet.getCell("A4").value = "方案名称";
+  sheet.mergeCells("B4:C4");
+  sheet.getCell("B4").value = planName?.trim() || "未命名方案";
+  sheet.getCell("D4").value = "生成日期";
+  sheet.mergeCells("E4:F4");
+  sheet.getCell("E4").value = formatExportDate(exportedAt);
+  sheet.getCell("A5").value = "客户姓名";
+  sheet.mergeCells("B5:F5");
+  sheet.getCell("B5").value = customerName?.trim() || "";
+
+  const headerRow = sheet.addRow([]);
+  headerRow.values = ["图片", "名称", "数量", "单位", "单价", "小计"];
+  styleQuotationRow(sheet.getRow(1), "title", 6);
+  styleQuotationRow(sheet.getRow(2), "information", 6);
+  styleQuotationRow(headerRow, "header", 6);
+  headerRow.height = 24;
+
+  const imageRows = [];
+  (pricing?.lines || []).forEach((line) => {
+    const row = sheet.addRow(["", line.name, line.quantity, line.unit || "个", line.clientPrice, line.lineTotal]);
+    row.height = 60;
+    styleQuotationRow(row, "detail", 6);
+    [1, 3, 4, 5, 6].forEach((column) => {
+      row.getCell(column).alignment = excelCenteredAlignment();
+    });
+    row.getCell(5).numFmt = "¥#,##0";
+    row.getCell(6).numFmt = "¥#,##0";
+    imageRows.push({ line, rowNumber: row.number });
+  });
+
+  const totalRow = sheet.addRow(["总价", "", "", "", "", pricing?.total || 0]);
+  sheet.mergeCells(totalRow.number, 1, totalRow.number, 5);
+  styleQuotationRow(totalRow, "total", 6);
+  totalRow.getCell(6).numFmt = "¥#,##0";
+  totalRow.getCell(6).alignment = excelRightAlignment();
+  sheet.getRow(1).height = 30;
+  sheet.getRow(2).height = 28;
+  sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
+
+  const imageReport = await insertJapaneseClientQuotationImages(workbook, sheet, imageRows, series);
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadExcelBuffer(buffer, "璞舍日式衣帽间报价单.xlsx");
+  console.info("Japanese client quotation export complete.", {
+    insertedImages: imageReport.inserted,
+    failedImages: imageReport.failed,
+    total: pricing?.total || 0,
+    config
+  });
+}
+
+async function insertJapaneseClientQuotationImages(workbook, sheet, imageRows, series) {
+  const report = { inserted: 0, failed: [] };
+  const imageCache = new Map();
+  for (const { line, rowNumber } of imageRows) {
+    const imagePath = getJapaneseClientQuotationImage(line);
+    const url = resolveSeriesAsset(series, imagePath);
+    try {
+      let cached = imageCache.get(url);
+      if (!cached) {
+        const response = await fetch(url, { cache: "no-store" });
+        const contentType = response.headers.get("content-type") || "";
+        if (!response.ok || !contentType.toLowerCase().startsWith("image/")) {
+          throw new Error(`HTTP ${response.status}, content-type ${contentType || "missing"}`);
+        }
+        cached = {
+          buffer: new Uint8Array(await response.arrayBuffer()),
+          extension: contentType.toLowerCase().includes("jpeg") ? "jpeg" : "png"
+        };
+        imageCache.set(url, cached);
+      }
+      const imageId = workbook.addImage(cached);
+      sheet.addImage(imageId, {
+        tl: { col: 0.12, row: rowNumber - 0.9 },
+        ext: { width: 60, height: 60 }
+      });
+      report.inserted += 1;
+    } catch (error) {
+      report.failed.push({ name: line.name, url, error: String(error?.message || error) });
+    }
+  }
+  if (report.failed.length) console.warn("Japanese client quotation images failed to load.", report.failed);
+  return report;
 }
 
 async function exportClientProductListExcel({ bom, design, config, series }) {

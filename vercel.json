@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/cutting-check", "destination": "/cutting-check/index.html" },
+    { "source": "/cutting-check/", "destination": "/cutting-check/index.html" },
     { "source": "/carbon-steel-post-wardrobe", "destination": "/carbon-steel-post-wardrobe/index.html" },
     { "source": "/carbon-steel-post-wardrobe/:path*", "destination": "/carbon-steel-post-wardrobe/index.html" },
     { "source": "/configurator", "destination": "/configurator/index.html" },

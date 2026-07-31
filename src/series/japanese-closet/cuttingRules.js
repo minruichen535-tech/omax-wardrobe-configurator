@@ -15,7 +15,9 @@ export const japaneseClosetCuttingRules = {
     "doubleRail",
     "cabinet",
     "jewelryBox",
-    "trouserRack"
+    "trouserRack",
+    "mirror",
+    "clothBoard"
   ],
   fixedModuleTypes: ["jewelryBox", "trouserRack"],
   fixedModuleWidths: [500, 600, 700, 800, 900],
@@ -27,6 +29,8 @@ export const japaneseClosetCuttingRules = {
     cabinet: 300,
     jewelryBox: 900,
     trouserRack: 900,
+    mirror: 900,
+    clothBoard: 900,
     drawerSingle: 900,
     drawerDouble: 900
   },
@@ -38,6 +42,8 @@ export const japaneseClosetCuttingRules = {
     cabinet: "柜子",
     jewelryBox: "首饰盒",
     trouserRack: "裤架",
+    mirror: "镜子",
+    clothBoard: "烫衣板",
     drawerSingle: "抽屉",
     drawerDouble: "双抽屉"
   },
@@ -49,6 +55,8 @@ export const japaneseClosetCuttingRules = {
     cabinet: "images/icons/cabinet-single.svg",
     jewelryBox: "images/icons/jewelry-box.svg",
     trouserRack: "images/icons/trouser-rack.svg",
+    mirror: "images/products/JP-MIRROR.png",
+    clothBoard: "images/products/JP-CLOTH-BOARD.png",
     drawerSingle: "images/icons/cabinet-single.svg",
     drawerDouble: "images/icons/cabinet-single.svg"
   },

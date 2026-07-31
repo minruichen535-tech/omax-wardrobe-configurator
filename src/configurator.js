@@ -3,7 +3,7 @@ import {
   WALL_MOUNTED_PLACEMENT_RULES,
   createWallMountedRailWithShelfPlacement
 } from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
-import { getBomCalculator, getCuttingRules } from "./series/index.js?v=japanese-drawer-merchandising-20260703-01";
+import { getBomCalculator, getCuttingRules } from "./series/index.js?v=japanese-post-accessories-20260730-01";
 
 const DEFAULT_SERIES_ID = "japanese-closet";
 const defaultCuttingRules = getCuttingRules(DEFAULT_SERIES_ID);

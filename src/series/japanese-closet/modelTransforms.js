@@ -2,6 +2,17 @@ const woodShelfTransform = { rotation: [0, 0, 0], scaleAxis: "x", anchor: "botto
 
 const drawerAccessoryTransform = { ...woodShelfTransform, resizeMode: "stretchWidthOnly" };
 const drawerAccessoryTypes = new Set(["drawerSingle", "drawerDouble"]);
+const postMountedAccessoryTransform = {
+  rotation: [0, -Math.PI / 2, 0],
+  scaleAxis: "x",
+  anchor: "bottomCenter",
+  depthOffset: 0,
+  heightOffset: 0,
+  resizeMode: "keepOriginal",
+  alignMode: "bboxCenter",
+  offsetX: 0,
+  offsetZ: 0
+};
 
 export const japaneseClosetModelTransforms = {
   components: {
@@ -15,6 +26,8 @@ export const japaneseClosetModelTransforms = {
     cabinet: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchToBay", offsetX: 0.015 },
     jewelryBox: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "centerInBay", offsetX: 0.015 },
     trouserRack: { rotation: [0, 0, 0], scaleAxis: "x", anchor: "bottomCenter", depthOffset: 0, heightOffset: 0, resizeMode: "stretchWidthAndDepth", offsetX: 0 },
+    mirror: postMountedAccessoryTransform,
+    clothBoard: postMountedAccessoryTransform,
     drawerSingle: drawerAccessoryTransform,
     drawerDouble: drawerAccessoryTransform
   },

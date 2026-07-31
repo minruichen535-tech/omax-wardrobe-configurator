@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="衣帽间尺寸、剪尺、采购数量自动核对工具" />
+    <title>衣帽间剪尺核对系统</title>
+    <link rel="stylesheet" href="/src/cutting-check/cutting-check.css?v=cutting-check-v1" />
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "xlsx": "https://esm.sh/xlsx@0.18.5"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div class="app-loading">正在载入剪尺规则…</div>
+    </div>
+    <script type="module" src="/src/cutting-check/cutting-check-main.js?v=cutting-check-v1"></script>
+  </body>
+</html>

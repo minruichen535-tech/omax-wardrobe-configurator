@@ -5,11 +5,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { getFactoryInnerBayWidth, meters } from "./configurator.js?v=cache-20260621-02";
 import { resolveSeriesAsset } from "./config/productSeries.js?v=cache-20260621-02";
 import { theme } from "./config/theme.js?v=cache-20260621-02";
-import { getCuttingRules, getModelTransforms } from "./series/index.js?v=drawer-material-sync-20260702-01";
+import { getCuttingRules, getModelTransforms } from "./series/index.js?v=japanese-post-side-mount-20260730-02";
 import {
   getWallMountedRailOffsetPosition
 } from "./config/plannerPresetMap.js?v=wall-mounted-placement-rules-20260621-03";
-import { DirectPlacementDragController } from "./interaction/DirectPlacementDragController.js?v=direct-placement-drag-20260722-01";
+import { DirectPlacementDragController } from "./interaction/DirectPlacementDragController.js?v=japanese-post-accessories-20260730-01";
 import { pickNearestBayTarget as pickNearestDirectBayTarget } from "./interaction/PlacementBayResolver.js?v=direct-placement-drag-20260722-01";
 
 const h = React.createElement;
@@ -1146,7 +1146,8 @@ async function addWallRun(
       };
     }
     if (
-      series?.seriesId === "aluminum-post-wardrobe"
+      series?.seriesId === "japanese-closet"
+      || series?.seriesId === "aluminum-post-wardrobe"
       || series?.seriesId === "carbon-steel-post-wardrobe-v2"
       || series?.seriesId === "aluminum-base-supported"
     ) {
@@ -1157,7 +1158,10 @@ async function addWallRun(
         postLocalBoundsByIndex.set(postPosition.index, {
           minX: postLocalBox.min.x,
           maxX: postLocalBox.max.x,
-          centerX: (postLocalBox.min.x + postLocalBox.max.x) / 2
+          centerX: (postLocalBox.min.x + postLocalBox.max.x) / 2,
+          minZ: postLocalBox.min.z,
+          maxZ: postLocalBox.max.z,
+          centerZ: (postLocalBox.min.z + postLocalBox.max.z) / 2
         });
       }
     }
@@ -1302,6 +1306,10 @@ async function addWallRun(
       const carbonComponentPostEdges = series?.seriesId === "carbon-steel-post-wardrobe-v2"
         ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
         : null;
+      const postMountedAccessoryPostEdges = series?.seriesId === "japanese-closet"
+        && isPostMountedAccessoryType(placement.componentType)
+        ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
+        : null;
       const aluminumBaseBackPanelPostEdges = series?.seriesId === "aluminum-base-supported"
         && placement.componentType === "backPanel"
         ? getAluminumPostInnerEdges(postLocalBoundsByIndex, placement.bayIndex)
@@ -1397,7 +1405,8 @@ async function addWallRun(
         cuttingRules,
         aluminumComponentPostEdges,
         carbonComponentPostEdges,
-        aluminumBaseWoodShelfSupportRegistry
+        aluminumBaseWoodShelfSupportRegistry,
+        postMountedAccessoryPostEdges
       );
   };
   if (series?.seriesId === "aluminum-base-supported") {
@@ -3347,6 +3356,68 @@ function getBayGeometry(postPositions, bayIndex, factoryInnerBayWidth, postProfi
   };
 }
 
+function isPostMountedAccessoryType(componentType) {
+  return componentType === "mirror" || componentType === "clothBoard";
+}
+
+function getPlacementPostIndex(placement) {
+  const postId = String(placement?.postId || "").trim();
+  const postIdIndex = postId ? Number(postId.split(":").at(-1)) : Number.NaN;
+  return Number.isInteger(postIdIndex) ? postIdIndex : Number(placement?.bayIndex);
+}
+
+function alignPostMountedAccessoryToPost(model, placement, postEdges) {
+  const requestedPostIndex = getPlacementPostIndex(placement);
+  const selectedIsLeft = requestedPostIndex === postEdges.leftPostIndex;
+  const selectedIsRight = requestedPostIndex === postEdges.rightPostIndex;
+  const selectedPostIndex = selectedIsLeft || selectedIsRight
+    ? requestedPostIndex
+    : Number(placement.bayIndex);
+  const useLeftPost = selectedPostIndex === postEdges.leftPostIndex;
+  const selectedPost = useLeftPost
+    ? {
+      centerX: postEdges.leftPostCenterX,
+      minX: postEdges.leftPostMinX,
+      maxX: postEdges.leftPostMaxX,
+      centerZ: postEdges.leftPostCenterZ
+    }
+    : {
+      centerX: postEdges.rightPostCenterX,
+      minX: postEdges.rightPostMinX,
+      maxX: postEdges.rightPostMaxX,
+      centerZ: postEdges.rightPostCenterZ
+    };
+  const otherPostCenterX = useLeftPost
+    ? postEdges.rightPostCenterX
+    : postEdges.leftPostCenterX;
+  const bayDirection = otherPostCenterX >= selectedPost.centerX ? 1 : -1;
+  const modelBoxBefore = new THREE.Box3().setFromObject(model);
+  if (modelBoxBefore.isEmpty()) return null;
+
+  const targetPostFaceX = bayDirection > 0 ? selectedPost.maxX : selectedPost.minX;
+  const modelAttachFaceX = bayDirection > 0 ? modelBoxBefore.min.x : modelBoxBefore.max.x;
+  const targetPostCenterZ = Number.isFinite(selectedPost.centerZ) ? selectedPost.centerZ : 0;
+  const modelCenterZ = (modelBoxBefore.min.z + modelBoxBefore.max.z) / 2;
+  const deltaX = targetPostFaceX - modelAttachFaceX;
+  const deltaZ = targetPostCenterZ - modelCenterZ;
+  model.position.x += deltaX;
+  model.position.z += deltaZ;
+  model.updateMatrixWorld(true);
+
+  const modelBoxAfter = new THREE.Box3().setFromObject(model);
+  return {
+    postId: placement.postId || null,
+    postIndex: selectedPostIndex,
+    bayDirection,
+    postCenterX: toMm(selectedPost.centerX),
+    postCenterZ: toMm(targetPostCenterZ),
+    targetPostFaceX: toMm(targetPostFaceX),
+    deltaX: toMm(deltaX),
+    deltaZ: toMm(deltaZ),
+    finalBoundingBox: serializeBox(modelBoxAfter)
+  };
+}
+
 function getAluminumPostInnerEdges(postLocalBoundsByIndex, bayIndex) {
   const index = Number(bayIndex);
   const firstPost = postLocalBoundsByIndex.get(index);
@@ -3368,8 +3439,10 @@ function getAluminumPostInnerEdges(postLocalBoundsByIndex, bayIndex) {
     rightPostCenterX: rightPost.centerX,
     leftPostMinX: leftPost.minX,
     leftPostMaxX: leftPost.maxX,
+    leftPostCenterZ: leftPost.centerZ,
     rightPostMinX: rightPost.minX,
     rightPostMaxX: rightPost.maxX,
+    rightPostCenterZ: rightPost.centerZ,
     leftPostInnerEdge,
     rightPostInnerEdge
   };
@@ -3437,7 +3510,8 @@ async function addPlacement(
   cuttingRules,
   aluminumComponentPostEdges = null,
   carbonComponentPostEdges = null,
-  aluminumBaseWoodShelfSupportRegistry = null
+  aluminumBaseWoodShelfSupportRegistry = null,
+  postMountedAccessoryPostEdges = null
 ) {
   const y = meters(placement.heightFromFloor);
   const product = resolvePlacementSceneProduct(placement, design);
@@ -3526,6 +3600,9 @@ async function addPlacement(
       model.position.x -= fixedModuleLateralVisualOffset;
     }
   }
+  const postMountedAccessoryAdjustment = postMountedAccessoryPostEdges
+    ? alignPostMountedAccessoryToPost(model, placement, postMountedAccessoryPostEdges)
+    : null;
   if (placement.componentType === "drawerDouble") {
     applyDrawerDoubleTopPanelWoodMaterial(model);
   }
@@ -3771,6 +3848,8 @@ async function addPlacement(
     componentType: placement.componentType,
     wallId: placement.wallId,
     bayIndex: placement.bayIndex,
+    postId: placement.postId || null,
+    postMountedAccessoryAdjustment,
     bayCenterX: x,
     bayWidth,
     actualWidth,
@@ -3868,6 +3947,7 @@ async function addPlacement(
     },
     finalBoundingBox: serializeBox(finalBoundingBox),
     finalBoundingBoxCenter: serializeBox(finalBoundingBox)?.center,
+    postMountedAccessoryAdjustment,
     offsetX: transform.offsetX || 0,
     offsetZ: transform.offsetZ || 0,
     bayCenter: toMm(x)
@@ -5637,7 +5717,9 @@ function fitObjectToBox(object, targetSize, transform) {
   const resizeMode = transform.resizeMode || "centerInBay";
   const scaleAxis = transform.scaleAxis || "x";
 
-  if (resizeMode === "stretchXYZ") {
+  if (resizeMode === "keepOriginal") {
+    return;
+  } else if (resizeMode === "stretchXYZ") {
     object.scale.set(
       object.scale.x * (targetSize.x / size.x),
       object.scale.y * (targetSize.y / size.y),

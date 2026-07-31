@@ -1,7 +1,7 @@
 import { japaneseClosetSeriesConfig } from "./japanese-closet/series.config.js?v=cache-20260621-02";
 import { japaneseClosetBomCalculator } from "./japanese-closet/bomCalculator.js?v=cache-20260621-02";
-import { japaneseClosetCuttingRules } from "./japanese-closet/cuttingRules.js?v=japanese-drawer-merchandising-20260703-01";
-import { japaneseClosetModelTransforms } from "./japanese-closet/modelTransforms.js?v=drawer-x-only-transform-20260702-01";
+import { japaneseClosetCuttingRules } from "./japanese-closet/cuttingRules.js?v=japanese-post-accessories-20260730-01";
+import { japaneseClosetModelTransforms } from "./japanese-closet/modelTransforms.js?v=japanese-post-side-mount-20260730-02";
 import { japaneseClosetDisplayRules } from "./japanese-closet/displayRules.js?v=cache-20260621-02";
 import { baseSupportClosetSeriesConfig } from "./base-support-closet/series.config.js?v=cache-20260621-02";
 import { aluminumPostWardrobeSeriesConfig } from "./aluminum-post-wardrobe/series.config.js?v=cache-20260621-02";
